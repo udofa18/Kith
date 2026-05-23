@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Kith | Next-Gen Developer Network & UI Marketplace</title>
+    <meta name="description" content="Join Kith, the social network for developers. Discover, share, and collaborate on production-ready UI components and systems." />
+    <meta property="og:title" content="Kith | Next-Gen Developer Network" />
+    <meta property="og:description" content="The ultimate destination for developers to build, share, and scale together." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@livekit/components-styles/dist/index.css">
+  </head>
+  <body>
+    <script>
+      (function() {
+        try {
+          const savedTheme = localStorage.getItem('theme') || 'dark';
+          document.documentElement.classList.add(savedTheme);
+          document.documentElement.style.colorScheme = savedTheme;
+        } catch (e) {}
+      })();
+    </script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

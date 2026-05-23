@@ -1,0 +1,45 @@
+import {StrictMode} from 'react';
+import {createRoot} from 'react-dom/client';
+import App from './App.tsx';
+import './index.css';
+import ErrorBoundary from './components/ErrorBoundary.tsx';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
+
+import { toast, Toaster } from 'react-hot-toast';
+
+// Google Maps global error handler for billing/API key issues
+(window as any).gm_authFailure = () => {
+  console.error("Google Maps Authentication Failure: This usually indicates that billing is not enabled or the API key is invalid.");
+  toast.error("Map feature unavailable: Google Maps billing is not enabled for this project.", {
+    duration: 6000,
+    position: 'bottom-center'
+  });
+};
+
+import { HelmetProvider } from 'react-helmet-async';
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 1000 * 60 * 5, // 5 minutes
+      gcTime: 1000 * 60 * 30, // 30 minutes
+      retry: 1,
+      refetchOnWindowFocus: false,
+    },
+  },
+});
+
+createRoot(document.getElementById('root')!).render(
+  <StrictMode>
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <HelmetProvider>
+          <App />
+          <Toaster />
+          <ReactQueryDevtools initialIsOpen={false} />
+        </HelmetProvider>
+      </QueryClientProvider>
+    </ErrorBoundary>
+  </StrictMode>,
+);

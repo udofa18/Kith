@@ -1,0 +1,1047 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Platform user profile",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "username": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "bio": { "type": "string" },
+        "location": { "type": "string" },
+        "skills": { "type": "array", "items": { "type": "string" } },
+        "githubUrl": { "type": "string" },
+        "profileImage": { "type": "string" },
+        "experienceLevel": { "type": "string", "enum": ["Beginner", "Intermediate", "Advanced"] },
+        "userType": { "type": "string", "enum": ["Developer", "Buyer", "Both"] },
+        "intent": { "type": "array", "items": { "type": "string" } },
+        "interests": { "type": "array", "items": { "type": "string" } },
+        "onboardingStep": { "type": "number" },
+        "onboardingCompleted": { "type": "boolean" },
+        "totalSales": { "type": "number" },
+        "totalImpressions": { "type": "number" },
+        "xp": { "type": "number" },
+        "badges": { "type": "array", "items": { "type": "string" } },
+        "dailyGiftingRemaining": { "type": "number" },
+        "lastGiftingReset": { "type": "string", "format": "date-time" },
+        "settings": {
+          "type": "object",
+          "properties": {
+            "notifications": { "type": "boolean" },
+            "theme": { "type": "string", "enum": ["light", "dark", "system"] },
+            "layout": { "type": "string", "enum": ["compact", "comfortable"] },
+            "isPrivate": { "type": "boolean" },
+            "focusMode": { "type": "boolean" }
+          }
+        },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "username", "email"]
+    },
+    "Post": {
+      "title": "Post",
+      "description": "Developer social post",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "authorUid": { "type": "string" },
+        "authorName": { "type": "string" },
+        "authorPhoto": { "type": "string" },
+        "authorXp": { "type": "number" },
+        "communityId": { "type": "string" },
+        "content": { "type": "string" },
+        "codeSnippet": { "type": "string" },
+        "language": { "type": "string" },
+        "media": { 
+          "type": "array", 
+          "items": { 
+            "type": "object",
+            "properties": {
+              "type": { "type": "string", "enum": ["image", "video", "gif"] },
+              "url": { "type": "string" }
+            }
+          }
+        },
+        "poll": {
+          "type": "object",
+          "properties": {
+            "question": { "type": "string" },
+            "options": { 
+              "type": "array", 
+              "items": {
+                "type": "object",
+                "properties": {
+                  "text": { "type": "string" },
+                  "votes": { "type": "number" }
+                }
+              }
+            },
+            "expiresAt": { "type": "string", "format": "date-time" },
+            "voters": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "githubLink": { "type": "string" },
+        "hashtags": { "type": "array", "items": { "type": "string" } },
+        "likesCount": { "type": "number" },
+        "commentsCount": { "type": "number" },
+        "xpValue": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["authorUid", "content", "createdAt"]
+    },
+    "Comment": {
+      "title": "Comment",
+      "description": "Post comment",
+      "type": "object",
+      "properties": {
+        "authorUid": { "type": "string" },
+        "authorName": { "type": "string" },
+        "authorPhoto": { "type": "string" },
+        "content": { "type": "string" },
+        "likesCount": { "type": "number" },
+        "repliesCount": { "type": "number" },
+        "replyToId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["authorUid", "content", "createdAt"]
+    },
+    "XPTransaction": {
+      "title": "XPTransaction",
+      "description": "Record of XP gifting",
+      "type": "object",
+      "properties": {
+        "senderId": { "type": "string" },
+        "receiverId": { "type": "string" },
+        "amount": { "type": "number" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["senderId", "receiverId", "amount", "timestamp"]
+    },
+    "Category": {
+      "title": "Category",
+      "description": "Category for organizing community channels",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "order": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "order"]
+    },
+    "Challenge": {
+      "title": "Challenge",
+      "description": "Coding challenge",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "creatorUid": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "difficulty": { "type": "string", "enum": ["Easy", "Medium", "Hard"] },
+        "deadline": { "type": "string", "format": "date-time" },
+        "rewardXP": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["creatorUid", "title", "description", "deadline", "rewardXP"]
+    },
+    "Submission": {
+      "title": "Submission",
+      "description": "Challenge submission",
+      "type": "object",
+      "properties": {
+        "challengeId": { "type": "string" },
+        "userUid": { "type": "string" },
+        "githubRepo": { "type": "string" },
+        "demoUrl": { "type": "string" },
+        "status": { "type": "string", "enum": ["Pending", "Accepted", "Rejected"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["challengeId", "userUid", "githubRepo"]
+    },
+    "Article": {
+      "title": "Article",
+      "description": "Long-form written article or draft",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "authorUid": { "type": "string" },
+        "authorName": { "type": "string" },
+        "title": { "type": "string" },
+        "subtitle": { "type": "string" },
+        "coverImage": { "type": "string" },
+        "content": { "type": "string" },
+        "status": { "type": "string", "enum": ["draft", "published"] },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "readingTime": { "type": "number" },
+        "viewsCount": { "type": "number" },
+        "likesCount": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "publishedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["authorUid", "title", "content", "status", "createdAt", "updatedAt"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Marketplace product listing (Ebooks, Courses, Assets, etc.)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "creatorUid": { "type": "string" },
+        "creatorName": { "type": "string" },
+        "title": { "type": "string" },
+        "slug": { "type": "string" },
+        "description": { "type": "string" },
+        "productType": { "type": "string", "enum": ["ebook", "music", "course", "art", "video", "asset", "app"] },
+        "category": { "type": "string" },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "price": { "type": "number" },
+        "fileUrl": { "type": "string", "description": "Secure link to the digital file" },
+        "demoUrl": { "type": "string", "description": "Live demo or preview link" },
+        "previewImage": { "type": "string" },
+        "previewImages": { "type": "array", "items": { "type": "string" } },
+        "previewVideo": { "type": "string" },
+        "metadata": {
+          "type": "object",
+          "description": "Type-specific metadata (e.g. pages for ebook, duration for music)",
+          "properties": {
+            "pageCount": { "type": "number" },
+            "duration": { "type": "string" },
+            "format": { "type": "string" },
+            "lessonsCount": { "type": "number" },
+            "resolution": { "type": "string" }
+          }
+        },
+        "impressions": { "type": "number" },
+        "salesCount": { "type": "number" },
+        "likes": { "type": "number" },
+        "avgRating": { "type": "number" },
+        "reviewCount": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["creatorUid", "title", "productType", "price"]
+    },
+    "Review": {
+      "title": "Review",
+      "description": "Component review",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "rating": { "type": "number" },
+        "comment": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "rating"]
+    },
+    "Purchase": {
+      "title": "Purchase",
+      "description": "Record of a product purchase",
+      "type": "object",
+      "properties": {
+        "buyerUid": { "type": "string" },
+        "productId": { "type": "string" },
+        "amount": { "type": "number" },
+        "stripeSessionId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["buyerUid", "productId", "amount"]
+    },
+    "Hashtag": {
+      "title": "Hashtag",
+      "description": "Trending hashtag tracking",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "count": { "type": "number" },
+        "lastUsed": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "count", "lastUsed"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "Direct message between users",
+      "type": "object",
+      "properties": {
+        "senderId": { "type": "string" },
+        "receiverId": { "type": "string" },
+        "content": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "read": { "type": "boolean" },
+        "conversationId": { "type": "string" }
+      },
+      "required": ["senderId", "receiverId", "content", "createdAt", "conversationId"]
+    },
+    "Conversation": {
+      "title": "Conversation",
+      "description": "Chat conversation between two users",
+      "type": "object",
+      "properties": {
+        "participants": { "type": "array", "items": { "type": "string" } },
+        "lastMessage": { "type": "string" },
+        "lastMessageAt": { "type": "string", "format": "date-time" },
+        "unreadCount": { "type": "object" }
+      },
+      "required": ["participants", "lastMessageAt"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "User notification",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "recipientId": { "type": "string" },
+        "senderId": { "type": "string" },
+        "senderName": { "type": "string" },
+        "senderPhoto": { "type": "string" },
+        "type": { "type": "string", "enum": ["like", "comment", "mention", "message", "xp_gift", "challenge", "channel_mention", "purchase", "payout", "event_invite", "event_reminder", "system", "wallet"] },
+        "category": { "type": "string", "enum": ["social", "community", "marketplace", "events", "earnings", "system"] },
+        "priority": { "type": "string", "enum": ["low", "normal", "high"] },
+        "actors": { 
+          "type": "array", 
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "name": { "type": "string" },
+              "photo": { "type": "string" }
+            }
+          }
+        },
+        "mergedCount": { "type": "number" },
+        "content": { "type": "string" },
+        "relatedId": { "type": "string" },
+        "read": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["recipientId", "type", "content", "createdAt"]
+    },
+    "Community": {
+      "title": "Community",
+      "description": "User-created community",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "creatorId": { "type": "string" },
+        "image": { "type": "string" },
+        "backdrop": { "type": "string" },
+        "category": { "type": "string" },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "memberCount": { "type": "number" },
+        "isPrivate": { "type": "boolean" },
+        "isPaid": { "type": "boolean" },
+        "price": { "type": "number" },
+        "website": { "type": "string" },
+        "welcomeMessage": { "type": "string" },
+        "membershipControl": {
+          "type": "object",
+          "properties": {
+            "accessType": { "type": "string", "enum": ["public", "private", "invite-only"] },
+            "approvalRequired": { "type": "boolean" },
+            "onboardingQuestions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": { "type": "string" },
+                  "question": { "type": "string" },
+                  "type": { "type": "string", "enum": ["text", "multiple-choice"] },
+                  "options": { "type": "array", "items": { "type": "string" } },
+                  "required": { "type": "boolean" }
+                }
+              }
+            },
+            "memberVerificationRequired": { "type": "boolean" },
+            "profileCompletionRequired": { "type": "boolean" },
+            "autoRoles": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "xpMultiplier": { "type": "number" },
+        "socials": {
+          "type": "object",
+          "properties": {
+            "twitter": { "type": "string" },
+            "discord": { "type": "string" },
+            "github": { "type": "string" },
+            "linkedin": { "type": "string" }
+          }
+        },
+        "rules": { "type": "array", "items": { "type": "string" } },
+        "stats": {
+          "type": "object",
+          "properties": {
+            "postsCount": { "type": "number" },
+            "messagesCount": { "type": "number" },
+            "totalXp": { "type": "number" }
+          }
+        },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "creatorId", "createdAt"]
+    },
+    "CommunityMember": {
+      "title": "CommunityMember",
+      "description": "Member of a community",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "role": { "type": "string", "enum": ["owner", "admin", "moderator", "member"] },
+        "status": { "type": "string", "enum": ["active", "muted", "restricted", "banned"] },
+        "permissions": { "type": "array", "items": { "type": "string" } },
+        "xp": { "type": "number" },
+        "joinedAt": { "type": "string", "format": "date-time" },
+        "subscriptionId": { "type": "string" },
+        "subscriptionStatus": { "type": "string" }
+      },
+      "required": ["userId", "role", "joinedAt"]
+    },
+    "Channel": {
+      "title": "Channel",
+      "description": "Community channel",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "type": { "type": "string", "enum": ["feed", "chat", "code", "resources", "announcements", "voice", "live"] },
+        "voiceConfig": {
+          "type": "object",
+          "properties": {
+            "mode": { "type": "string", "enum": ["open", "stage", "private"] },
+            "maxParticipants": { "type": "number" },
+            "slowMode": { "type": "boolean" },
+            "recordingEnabled": { "type": "boolean" }
+          }
+        },
+        "isPremium": { "type": "boolean" },
+        "isFrozen": { "type": "boolean" },
+        "order": { "type": "number" },
+        "categoryId": { "type": "string", "description": "ID of the category this channel belongs to" },
+        "permissions": {
+          "type": "object",
+          "properties": {
+            "view": { "type": "array", "items": { "type": "string" } },
+            "post": { "type": "array", "items": { "type": "string" } },
+            "manage": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "type", "createdAt"]
+    },
+    "ChannelMessage": {
+      "title": "ChannelMessage",
+      "description": "Message in a community channel",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "authorUid": { "type": "string" },
+        "authorName": { "type": "string" },
+        "authorPhoto": { "type": "string" },
+        "content": { "type": "string" },
+        "codeSnippet": { "type": "string" },
+        "language": { "type": "string" },
+        "media": { "type": "array", "items": { "type": "string" } },
+        "repliesCount": { "type": "number" },
+        "replyToId": { "type": "string" },
+        "threadId": { "type": "string" },
+        "isThreadRoot": { "type": "boolean" },
+        "reactions": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "count": { "type": "number" },
+              "uids": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["authorUid", "content", "createdAt"]
+    },
+    "Event": {
+      "title": "Event",
+      "description": "User or Community event",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "category": { "type": "string" },
+        "description": { "type": "string" },
+        "banner": { "type": "string" },
+        "hostId": { "type": "string" },
+        "communityId": { "type": "string" },
+        "eventType": { "type": "string", "enum": ["user", "community"] },
+        "visibility": { "type": "string", "enum": ["public", "community"] },
+        "isPaid": { "type": "boolean" },
+        "price": { "type": "number" },
+        "startDate": { "type": "string", "format": "date-time" },
+        "endDate": { "type": "string", "format": "date-time" },
+        "timezone": { "type": "string" },
+        "isOffline": { "type": "boolean" },
+        "locationName": { "type": "string" },
+        "locationAddress": { "type": "string" },
+        "locationCoords": {
+          "type": "object",
+          "properties": {
+            "lat": { "type": "number" },
+            "lng": { "type": "number" }
+          }
+        },
+        "onlineType": { "type": "string", "enum": ["internal", "external"] },
+        "externalPlatform": { "type": "string" },
+        "externalUrl": { "type": "string" },
+        "maxAttendees": { "type": "number" },
+        "attendeeCount": { "type": "number" },
+        "status": { "type": "string", "enum": ["upcoming", "live", "ended"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "hostId", "eventType", "visibility", "startDate", "endDate", "timezone", "status", "createdAt"]
+    },
+    "EventRegistration": {
+      "title": "EventRegistration",
+      "description": "Record of a user registering for an event",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "eventId": { "type": "string" },
+        "paid": { "type": "boolean" },
+        "amount": { "type": "number" },
+        "registeredAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "eventId", "registeredAt"]
+    },
+    "EventSession": {
+      "title": "EventSession",
+      "description": "Live session state for an event",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "eventId": { "type": "string" },
+        "status": { "type": "string", "enum": ["waiting", "live", "ended"] },
+        "startTime": { "type": "string", "format": "date-time" },
+        "endTime": { "type": "string", "format": "date-time" },
+        "activePollId": { "type": "string" },
+        "spotlightParticipantId": { "type": "string" }
+      },
+      "required": ["eventId", "status"]
+    },
+    "SessionParticipant": {
+      "title": "SessionParticipant",
+      "description": "Participant in a live session",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "role": { "type": "string", "enum": ["host", "participant"] },
+        "joinedAt": { "type": "string", "format": "date-time" },
+        "isMuted": { "type": "boolean" },
+        "cameraOff": { "type": "boolean" },
+        "handRaised": { "type": "boolean" }
+      },
+      "required": ["userId", "role", "joinedAt"]
+    },
+    "SessionMessage": {
+      "title": "SessionMessage",
+      "description": "Chat message in a live session",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userPhoto": { "type": "string" },
+        "content": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "content", "createdAt"]
+    },
+    "SessionPoll": {
+      "title": "SessionPoll",
+      "description": "Poll in a live session",
+      "type": "object",
+      "properties": {
+        "question": { "type": "string" },
+        "options": { 
+          "type": "array", 
+          "items": {
+            "type": "object",
+            "properties": {
+              "text": { "type": "string" },
+              "votes": { "type": "number" }
+            }
+          }
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "voters": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["question", "options", "createdAt"]
+    },
+    "SessionQuestion": {
+      "title": "SessionQuestion",
+      "description": "Q&A question in a live session",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "content": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "isPinned": { "type": "boolean" },
+        "upvotes": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["userId", "content", "createdAt"]
+    },
+    "CommunityInvite": {
+      "title": "CommunityInvite",
+      "description": "Shareable invite link for a community",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "communityId": { "type": "string" },
+        "creatorId": { "type": "string" },
+        "code": { "type": "string" },
+        "uses": { "type": "number" },
+        "maxUses": { "type": "number" },
+        "rewardXp": { "type": "number" },
+        "expiresAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["communityId", "creatorId", "code"]
+    },
+    "CommunityReport": {
+      "title": "CommunityReport",
+      "description": "User report for moderation",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "communityId": { "type": "string" },
+        "reporterId": { "type": "string" },
+        "targetId": { "type": "string" },
+        "reason": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "resolved", "dismissed"] },
+        "aiModerationScore": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["communityId", "reporterId", "reason", "createdAt"]
+    },
+    "CommunityBadge": {
+      "title": "CommunityBadge",
+      "description": "Achievement badge for members",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "icon": { "type": "string" },
+        "description": { "type": "string" },
+        "criteria": { "type": "string" }
+      },
+      "required": ["name", "icon"]
+    },
+    "JoinRequest": {
+      "title": "JoinRequest",
+      "description": "Request to join a private/approval-required community",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userPhoto": { "type": "string" },
+        "answers": { "type": "object" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "status", "createdAt"]
+    },
+    "Role": {
+      "title": "Role",
+      "description": "Custom community role with permissions",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "color": { "type": "string", "description": "Hex color code" },
+        "permissions": { "type": "array", "items": { "type": "string" } },
+        "order": { "type": "number", "description": "Hierarchy order" },
+        "isSystem": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "permissions", "order"]
+    },
+    "CommunityDailyStats": {
+      "title": "CommunityDailyStats",
+      "description": "Snapshots of community engagement",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string", "format": "date" },
+        "active": { "type": "number", "description": "Simplified activity score" },
+        "activeMembers": { "type": "number" },
+        "newPosts": { "type": "number" },
+        "newMessages": { "type": "number" },
+        "newXp": { "type": "number" },
+        "retentionRate": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["date", "updatedAt"]
+    },
+    "VoiceParticipant": {
+      "title": "VoiceParticipant",
+      "description": "Real-time state for voice channel participation",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userPhoto": { "type": "string" },
+        "role": { "type": "string", "enum": ["host", "speaker", "listener"] },
+        "isMuted": { "type": "boolean" },
+        "isDeafened": { "type": "boolean" },
+        "handRaised": { "type": "boolean" },
+        "joinedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "role", "joinedAt"]
+    },
+    "LiveStream": {
+      "title": "LiveStream",
+      "description": "Live broadcast session within a community channel",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "communityId": { "type": "string" },
+        "channelId": { "type": "string" },
+        "hostId": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "thumbnail": { "type": "string" },
+        "status": { "type": "string", "enum": ["waiting", "live", "ended"] },
+        "type": { "type": "string", "enum": ["broadcast", "guest", "webinar", "paid"] },
+        "price": { "type": "number" },
+        "viewerCount": { "type": "number" },
+        "startTime": { "type": "string", "format": "date-time" },
+        "endTime": { "type": "string", "format": "date-time" },
+        "activePollId": { "type": "string" },
+        "spotlightParticipantId": { "type": "string" },
+        "isRecording": { "type": "boolean" },
+        "replayUrl": { "type": "string" }
+      },
+      "required": ["communityId", "channelId", "hostId", "status", "type"]
+    },
+    "callSession": {
+      "title": "Call Session",
+      "description": "Represents a voice or video call session",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string", "enum": ["one-to-one", "group"] },
+        "media": { "type": "string", "enum": ["voice", "video"] },
+        "status": { "type": "string", "enum": ["ringing", "active", "ended", "missed", "declined"] },
+        "callerId": { "type": "string" },
+        "callerName": { "type": "string" },
+        "callerPhoto": { "type": "string" },
+        "chatId": { "type": "string" },
+        "participantIds": { 
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "participants": { 
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "status": { "type": "string", "enum": ["ringing", "accepted", "declined", "missed"] },
+              "displayName": { "type": "string" },
+              "photoURL": { "type": "string" }
+            }
+          }
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "endedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["type", "media", "status", "callerId", "chatId", "participants", "createdAt"]
+    },
+    "LiveStreamAction": {
+      "title": "LiveStreamAction",
+      "description": "Transient engagement action like reactions",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "type": { "type": "string", "enum": ["reaction", "xp_tip", "request_stage"] },
+        "value": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "type", "timestamp"]
+    }
+    "Job": {
+      "title": "Job",
+      "description": "Job opportunity listing",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "creatorUid": { "type": "string" },
+        "company": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "location": { "type": "string" },
+        "salary": { "type": "string" },
+        "jobType": { "type": "string", "enum": ["Full-time", "Part-time", "Contract", "Freelance"] },
+        "category": { "type": "string" },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "skills": { "type": "array", "items": { "type": "string" } },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["creatorUid", "company", "title", "jobType"]
+    },
+    "UserInterest": {
+      "title": "UserInterest",
+      "description": "User's explicit and implicit interests",
+      "type": "object",
+      "properties": {
+        "categories": { "type": "array", "items": { "type": "string" } },
+        "skills": { "type": "array", "items": { "type": "string" } },
+        "hashtags": { "type": "array", "items": { "type": "string" } },
+        "followedTopics": { "type": "array", "items": { "type": "string" } },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "UserEngagementProfile": {
+      "title": "UserEngagementProfile",
+      "description": "User's engagement history for ranking",
+      "type": "object",
+      "properties": {
+        "likedTags": { "type": "object", "additionalProperties": { "type": "number" } },
+        "bookmarkedTags": { "type": "object", "additionalProperties": { "type": "number" } },
+        "purchasedCategories": { "type": "array", "items": { "type": "string" } },
+        "joinedCommunities": { "type": "array", "items": { "type": "string" } },
+        "interactionHistory": { 
+          "type": "array", 
+          "items": { 
+            "type": "object",
+            "properties": {
+              "creatorId": { "type": "string" },
+              "type": { "type": "string" },
+              "timestamp": { "type": "string", "format": "date-time" }
+            }
+          }
+        },
+        "lastActive": { "type": "string", "format": "date-time" }
+      }
+    },
+    "ContentMetrics": {
+      "title": "ContentMetrics",
+      "description": "Detailed metrics for any content type",
+      "type": "object",
+      "properties": {
+        "contentId": { "type": "string" },
+        "contentType": { "type": "string" },
+        "impressions": { "type": "number" },
+        "uniqueViews": { "type": "number" },
+        "likes": { "type": "number" },
+        "comments": { "type": "number" },
+        "bookmarks": { "type": "number" },
+        "reposts": { "type": "number" },
+        "dwellTime": { "type": "number" },
+        "completionRate": { "type": "number" },
+        "engagementRate": { "type": "number" },
+        "trendingScore": { "type": "number" },
+        "lastCalculated": { "type": "string", "format": "date-time" }
+      }
+    },
+    "FeedCache": {
+      "title": "FeedCache",
+      "description": "Precomputed feed for a user",
+      "type": "object",
+      "properties": {
+        "items": { 
+          "type": "array", 
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "type": { "type": "string" },
+              "score": { "type": "number" },
+              "reason": { "type": "string" }
+            }
+          }
+        },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  },
+  "firestore": {
+    "/userInterests/{userId}": {
+      "schema": "UserInterest"
+    },
+    "/userEngagementProfiles/{userId}": {
+      "schema": "UserEngagementProfile"
+    },
+    "/contentMetrics/{contentId}": {
+      "schema": "ContentMetrics"
+    },
+    "/feedCaches/{userId}/feeds/{feedType}": {
+      "schema": "FeedCache"
+    },
+    "/jobs/{jobId}": {
+      "schema": "Job"
+    },
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profile data"
+    },
+    "/events/{eventId}": {
+      "schema": "Event",
+      "description": "Global events"
+    },
+    "/events/{eventId}/registrations/{userId}": {
+      "schema": "EventRegistration",
+      "description": "Event registrations"
+    },
+    "/eventSessions/{eventId}": {
+      "schema": "EventSession",
+      "description": "Live session state"
+    },
+    "/eventSessions/{eventId}/participants/{userId}": {
+      "schema": "SessionParticipant",
+      "description": "Live session participants"
+    },
+    "/eventSessions/{eventId}/messages/{messageId}": {
+      "schema": "SessionMessage",
+      "description": "Live session chat"
+    },
+    "/eventSessions/{eventId}/polls/{pollId}": {
+      "schema": "SessionPoll",
+      "description": "Live session polls"
+    },
+    "/eventSessions/{eventId}/questions/{questionId}": {
+      "schema": "SessionQuestion",
+      "description": "Live session Q&A"
+    },
+    "/communities/{communityId}": {
+      "schema": "Community",
+      "description": "Community data"
+    },
+    "/communities/{communityId}/members/{userId}": {
+      "schema": "CommunityMember",
+      "description": "Members of a community"
+    },
+    "/communities/{communityId}/joinRequests/{requestId}": {
+      "schema": "JoinRequest",
+      "description": "Requests to join a community"
+    },
+    "/communities/{communityId}/roles/{roleId}": {
+      "schema": "Role",
+      "description": "Custom roles for a community"
+    },
+    "/communities/{communityId}/categories/{categoryId}": {
+      "schema": "Category",
+      "description": "Categories for organizing channels"
+    },
+    "/communities/{communityId}/channels/{channelId}": {
+      "schema": "Channel",
+      "description": "Channels within a community"
+    },
+    "/communities/{communityId}/channels/{channelId}/messages/{messageId}": {
+      "schema": "ChannelMessage",
+      "description": "Messages within a channel"
+    },
+    "/communities/{communityId}/channels/{channelId}/voiceParticipants/{userId}": {
+      "schema": "VoiceParticipant",
+      "description": "Active participants in a voice channel"
+    },
+    "/communities/{communityId}/channels/{channelId}/liveStreams/{streamId}": {
+      "schema": "LiveStream",
+      "description": "Active and past live streams in a channel"
+    },
+    "/communities/{communityId}/channels/{channelId}/liveStreams/{streamId}/chat/{messageId}": {
+      "schema": "SessionMessage",
+      "description": "Live chat for a stream"
+    },
+    "/communities/{communityId}/channels/{channelId}/liveStreams/{streamId}/actions/{actionId}": {
+      "schema": "LiveStreamAction",
+      "description": "Reactions and stage requests"
+    },
+    "/communities/{communityId}/channels/{channelId}/liveStreams/{streamId}/polls/{pollId}": {
+      "schema": "SessionPoll",
+      "description": "Live polls during stream"
+    },
+    "/communities/{communityId}/channels/{channelId}/liveStreams/{streamId}/questions/{questionId}": {
+      "schema": "SessionQuestion",
+      "description": "Q&A during stream"
+    },
+    "/notifications/{notificationId}": {
+      "schema": "Notification",
+      "description": "User notifications"
+    },
+    "/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Direct messages"
+    },
+    "/conversations/{conversationId}": {
+      "schema": "Conversation",
+      "description": "Chat conversations"
+    },
+    "/conversations/{conversationId}/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Messages within a conversation"
+    },
+    "/posts/{postId}": {
+      "schema": "Post",
+      "description": "Social posts"
+    },
+    "/posts/{postId}/comments/{commentId}": {
+      "schema": "Comment",
+      "description": "Comments on a post"
+    },
+    "/posts/{postId}/comments/{commentId}/likes/{userId}": {
+      "schema": "object",
+      "description": "Likes on a comment"
+    },
+    "/posts/{postId}/likes/{userId}": {
+      "schema": "object",
+      "description": "Likes on a post"
+    },
+    "/xpTransactions/{transactionId}": {
+      "schema": "XPTransaction",
+      "description": "XP gifting history"
+    },
+    "/challenges/{challengeId}": {
+      "schema": "Challenge",
+      "description": "Coding challenges"
+    },
+    "/challenges/{challengeId}/submissions/{submissionId}": {
+      "schema": "Submission",
+      "description": "Challenge submissions"
+    },
+    "/products/{productId}": {
+      "schema": "Product",
+      "description": "Digital product listings"
+    },
+    "/products/{productId}/reviews/{reviewId}": {
+      "schema": "Review",
+      "description": "Reviews for a product"
+    },
+    "/purchases/{purchaseId}": {
+      "schema": "Purchase",
+      "description": "Purchase history"
+    },
+    "/articles/{articleId}": {
+      "schema": "Article",
+      "description": "User created articles and drafts"
+    },
+    "/hashtags/{tagId}": {
+      "schema": "Hashtag",
+      "description": "Hashtag trending data"
+    },
+    "/communityInvites/{inviteId}": {
+      "schema": "CommunityInvite",
+      "description": "Shareable invite links for communities"
+    },
+    "/communities/{communityId}/reports/{reportId}": {
+      "schema": "CommunityReport",
+      "description": "Moderation reports in a community"
+    },
+    "/communities/{communityId}/dailyStats/{date}": {
+      "schema": "CommunityDailyStats",
+      "description": "Daily engagement snapshots"
+    }
+  }
+}
