@@ -38,7 +38,7 @@ export default function AuthPage() {
     
     if (result.type === 'SUCCESS') {
       setSuccess('Redirecting to system...');
-      setTimeout(() => navigate('/dashboard'), 1500);
+      setTimeout(() => navigate('/feed'), 1500);
     }
   };
 
@@ -68,7 +68,7 @@ export default function AuthPage() {
         setTimeout(() => navigate('/onboarding'), 2000);
       } else {
         await AuthService.loginWithEmail(email, password);
-        navigate('/dashboard');
+        navigate('/feed');
       }
     } catch (err: any) {
       setError(err.message);
@@ -262,7 +262,7 @@ export default function AuthPage() {
         onSuccess={(user) => {
           setLinkData(null);
           setSuccess('Accounts linked successfully! Redirecting...');
-          setTimeout(() => navigate('/dashboard'), 1500);
+          setTimeout(() => navigate('/feed'), 1500);
         }}
       />
     </div>

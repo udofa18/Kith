@@ -80,7 +80,7 @@ function AppRoutes({ user, onboardingRequired }: { user: any, onboardingRequired
 
   // Redirect authenticated users away from login page
   if (user && location.pathname === '/login') {
-    return <Navigate to={onboardingRequired ? "/onboarding" : "/dashboard"} replace />;
+    return <Navigate to={onboardingRequired ? "/onboarding" : "/feed"} replace />;
   }
 
   return (
