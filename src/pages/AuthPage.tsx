@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Mail, Lock, User, Github, ArrowRight, CheckCircle2, Loader2, Sparkles } from 'lucide-react';
+import { Mail, Lock, User, Github, ArrowRight, ArrowLeft, CheckCircle2, Loader2, Sparkles } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { AuthService } from '../lib/auth-service';
 import LinkAccountModal from '../components/LinkAccountModal';
@@ -83,6 +83,15 @@ export default function AuthPage() {
       <div className="absolute inset-0 z-0">
         <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] rounded-full bg-primary/20 blur-[120px] animate-pulse" />
         <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] rounded-full bg-purple-500/10 blur-[120px]" />
+      </div>      {/* Floating Back to Home Link */}
+      <div className="absolute top-4 left-4 md:top-8 md:left-8 z-20">
+        <button
+          onClick={() => navigate('/')}
+          className="flex items-center gap-2 px-4 py-2.5 bg-white/5 hover:bg-white/10 active:scale-95 border border-white/10 rounded-2xl text-white/70 hover:text-white transition-all text-xs font-bold font-mono tracking-wider uppercase group backdrop-blur-md"
+        >
+          <ArrowLeft size={14} className="group-hover:-translate-x-0.5 transition-transform" />
+          Back to Home
+        </button>
       </div>
 
       <motion.div 
