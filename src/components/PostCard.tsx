@@ -59,6 +59,12 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
   const postMenuRef = useRef<HTMLDivElement>(null);
   const commentInputRef = useRef<HTMLTextAreaElement>(null);
 
+  const [livePost, setLivePost] = useState(post);
+
+  useEffect(() => {
+    setLivePost(post);
+  }, [post]);
+
   const TRUNCATE_LIMIT = 280;
   const content = post.content || post.description || '';
   const shouldTruncate = !isDetailView && content.length > TRUNCATE_LIMIT;
@@ -111,6 +117,33 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
     };
     return typeMapping[post.contentType] || 'posts';
   }, [post.contentType]);
+
+  useEffect(() => {
+    if (!post.id) return;
+    const docRef = doc(db, collectionName, post.id);
+    const unsub = onSnapshot(docRef, (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.data();
+        setLivePost(prev => ({ ...prev, ...data }));
+        if (data.repostsCount !== undefined) {
+          setRepostsCount(data.repostsCount);
+        }
+      }
+    }, (error) => {
+      if (error.code !== 'permission-denied') {
+        console.warn("Failed to listen to post real-time updates:", error);
+      }
+    });
+    return () => unsub();
+  }, [post.id, collectionName]);
+
+  useEffect(() => {
+    if (auth.currentUser && livePost.poll?.voters?.includes(auth.currentUser.uid)) {
+      setVoted(true);
+    } else {
+      setVoted(false);
+    }
+  }, [livePost.poll?.voters, auth.currentUser?.uid]);
 
   useEffect(() => {
     const urlRegex = /(https?:\/\/[^\s]+)/g;
@@ -1191,12 +1224,12 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
           )}
 
           {/* Poll Rendering */}
-          {post.poll && (
+          {livePost.poll && (
             <div className="bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-xl p-6 mt-4 space-y-4">
-              <h4 className="font-black text-sm uppercase tracking-tight">{post.poll.question}</h4>
+              <h4 className="font-black text-sm uppercase tracking-tight">{livePost.poll.question}</h4>
               <div className="space-y-3">
-                {post.poll.options.map((option: any, i: number) => {
-                  const totalVotes = post.poll.options.reduce((acc: number, curr: any) => acc + curr.votes, 0);
+                {livePost.poll.options.map((option: any, i: number) => {
+                  const totalVotes = livePost.poll.options.reduce((acc: number, curr: any) => acc + curr.votes, 0);
                   const percentage = totalVotes > 0 ? Math.round((option.votes / totalVotes) * 100) : 0;
                   return (
                     <button
@@ -1218,11 +1251,11 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
                 })}
               </div>
               <div className="text-[10px] font-black uppercase tracking-widest text-black/30 dark:text-white/30 flex justify-between">
-                <span>{post.poll.options.reduce((acc: number, curr: any) => acc + curr.votes, 0)} votes</span>
+                <span>{livePost.poll.options.reduce((acc: number, curr: any) => acc + curr.votes, 0)} votes</span>
                 <span>Expires {(() => {
-                  if (!post.poll.expiresAt) return '';
+                  if (!livePost.poll.expiresAt) return '';
                   try {
-                    const d = post.poll.expiresAt.toDate ? post.poll.expiresAt.toDate() : new Date(post.poll.expiresAt);
+                    const d = livePost.poll.expiresAt.toDate ? livePost.poll.expiresAt.toDate() : new Date(livePost.poll.expiresAt);
                     if (!(d instanceof Date) || isNaN(d.getTime())) return '';
                     return formatDistanceToNow(d, { addSuffix: true });
                   } catch (e) {
@@ -1280,14 +1313,14 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
               className={`flex items-center gap-2 text-[13px] font-black uppercase tracking-widest transition-all duration-300 hover:scale-110 active:scale-95 ${liked ? 'text-red-500' : 'text-black/40 dark:text-white/50 hover:text-red-500'}`}
             >
               <Heart size={19} fill={liked ? 'currentColor' : 'none'} className="transition-all" />
-              <span>{post.likesCount || 0}</span>
+              <span>{livePost.likesCount || 0}</span>
             </button>
             <button 
               onClick={() => setShowComments(!showComments)}
               className={`flex items-center gap-2 text-[13px] font-black uppercase tracking-widest transition-all duration-300 hover:scale-110 active:scale-95 ${showComments ? 'text-blue-500' : 'text-black/40 dark:text-white/50 hover:text-blue-500'}`}
             >
               <MessageSquare size={19} />
-              <span>{post.commentsCount || 0}</span>
+              <span>{livePost.commentsCount || 0}</span>
             </button>
             <div className="relative" ref={repostMenuRef}>
               <button 
