@@ -65,28 +65,28 @@ export default function CommunityCard({ community, isMember, onClick }: { commun
           <div className="absolute inset-0 bg-gradient-to-t from-background to-transparent" />
           <div className="absolute top-3 right-3 flex gap-1.5">
             {isMember && (
-              <div className="bg-primary/20 backdrop-blur-md px-2 py-1 rounded-lg border border-primary/30 flex items-center gap-1">
-                <ShieldCheck size={12} className="text-primary" />
-                <span className="text-xs font-black text-primary">MEMBER</span>
+              <div className="bg-gradient-to-r from-teal-500 to-cyan-500 backdrop-blur-md px-2.5 py-1 rounded-lg shadow-lg shadow-teal-500/30 flex items-center gap-1">
+                <ShieldCheck size={12} className="text-white" />
+                <span className="text-xs font-black text-white">MEMBER</span>
               </div>
             )}
             {community.isPaid ? (
-              <div className="bg-yellow-500/20 backdrop-blur-md px-2 py-1 rounded-lg border border-yellow-500/30 flex items-center gap-1">
-                <DollarSign size={12} className="text-yellow-500" />
-                <span className="text-xs font-bold text-yellow-500">${community.price}</span>
+              <div className="bg-gradient-to-r from-amber-500 to-orange-500 backdrop-blur-md px-2.5 py-1 rounded-lg shadow-lg shadow-amber-500/30 flex items-center gap-1">
+                <DollarSign size={12} className="text-white" />
+                <span className="text-xs font-bold text-white">${community.price}</span>
               </div>
             ) : (
-              <div className="bg-green-500/20 backdrop-blur-md px-2 py-1 rounded-lg border border-green-500/30 flex items-center gap-1">
-                <span className="text-xs font-bold text-green-500">FREE</span>
+              <div className="bg-gradient-to-r from-emerald-500 to-green-500 backdrop-blur-md px-2.5 py-1 rounded-lg shadow-lg shadow-emerald-500/30 flex items-center gap-1">
+                <span className="text-xs font-bold text-white">FREE</span>
               </div>
             )}
             {community.isPrivate ? (
-              <div className="bg-background/60 backdrop-blur-md p-1.5 rounded-lg border border-foreground/10">
-                <Lock size={14} className="text-foreground/80" />
+              <div className="bg-gradient-to-r from-slate-600 to-gray-600 backdrop-blur-md p-1.5 rounded-lg shadow-lg shadow-slate-600/30">
+                <Lock size={14} className="text-white" />
               </div>
             ) : (
-              <div className="bg-primary/20 backdrop-blur-md p-1.5 rounded-lg border border-primary/20">
-                <Globe size={14} className="text-primary" />
+              <div className="bg-gradient-to-r from-blue-500 to-indigo-500 backdrop-blur-md p-1.5 rounded-lg shadow-lg shadow-blue-500/30">
+                <Globe size={14} className="text-white" />
               </div>
             )}
           </div>

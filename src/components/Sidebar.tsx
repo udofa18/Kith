@@ -104,7 +104,7 @@ export default function Sidebar({ activeType }: SidebarProps) {
       to={to}
       className={`relative group w-full flex items-center justify-center p-3 rounded-xl transition-all ${active ? 'bg-primary text-white neon-glow' : 'hover:bg-white/5 text-white/50'}`}
     >
-      <Icon size={20} className="shrink-0" /> 
+      <Icon size={20} className="shrink-0 !text-white" /> 
       {badgeCount !== undefined && badgeCount > 0 && (
         <span className="absolute -top-1 -right-1 px-1.5 py-0.5 rounded-full bg-primary text-white text-[8px] font-bold border-2 border-[#121212] neon-glow">
           {badgeCount > 9 ? '9+' : badgeCount}

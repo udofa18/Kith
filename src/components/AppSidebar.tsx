@@ -218,7 +218,7 @@ export default function AppSidebar({ user }: { user: any }) {
           }`}
           style={active ? { boxShadow: `0 4px 14px ${glowColor}` } : {}}
         >
-          <Icon size={18} className="text-white" />
+          <Icon size={18} className="!text-white" />
         </div>
         <AnimatePresence>
           {isExpanded && (

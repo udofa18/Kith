@@ -60,7 +60,13 @@ export default function SocialRightSidebar() {
         </div>
         <div className="space-y-4">
           {upcomingEvents.map(event => {
-            const isLive = new Date(event.startDate).getTime() < Date.now() && new Date(event.endDate).getTime() > Date.now();
+            const toMs = (d: any) => d?.toMillis ? d.toMillis() : d?.seconds ? d.seconds * 1000 : new Date(d).getTime();
+            const now = Date.now();
+            const start = toMs(event.startDate);
+            const end = toMs(event.endDate);
+            const isLive = start < now && end > now;
+            const isEnded = end <= now;
+            // If not live and not ended, it's upcoming
             
             return (
               <Link key={event.id} to={`/events/${event.id}`} className="block group hover:bg-black/5 dark:hover:bg-white/5 p-2 transition-all">
@@ -70,18 +76,31 @@ export default function SocialRightSidebar() {
                   </div>
                   
                   <div className="min-w-0 flex-1">
-                    <p className="text-[15px] font-bold line-clamp-2 leading-tight group-hover:text-primary transition-colors text-black dark:text-white mb-1">{event.title}</p>
+                    <div className="flex items-start justify-between gap-2 mb-1">
+                      <p className="text-[15px] font-bold line-clamp-2 leading-tight group-hover:text-primary transition-colors text-black dark:text-white">{event.title}</p>
+                      
+                      {/* Status Badge */}
+                      {isLive ? (
+                        <span className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-500/15 text-red-500 text-[10px] font-black uppercase tracking-wider border border-red-500/20">
+                          <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse"></span>
+                          Live
+                        </span>
+                      ) : isEnded ? (
+                        <span className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-black/5 dark:bg-white/10 text-black/40 dark:text-white/40 text-[10px] font-black uppercase tracking-wider border border-black/5 dark:border-white/5">
+                          Ended
+                        </span>
+                      ) : (
+                        <span className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gradient-to-r from-blue-500/15 to-purple-500/15 text-blue-500 dark:text-blue-400 text-[10px] font-black uppercase tracking-wider border border-blue-500/20 dark:border-blue-400/20">
+                          Upcoming
+                        </span>
+                      )}
+                    </div>
                     
                     <div className="space-y-0.5">
                       <p className="text-[13px] text-black/50 dark:text-white/50 flex items-center gap-1.5 font-bold uppercase tracking-wider">
                         <Clock size={10} className="text-purple-400/50" />
                         {formatDate(event.startDate, 'MMM d, HH:mm')}
                       </p>
-                      {isLive && (
-                        <span className="text-[11px] font-black text-red-500 flex items-center gap-1 uppercase tracking-widest mt-1">
-                          <span className="w-1 h-1 rounded-full bg-red-500 animate-pulse"></span> LIVE NOW
-                        </span>
-                      )}
                     </div>
                   </div>
                 </div>

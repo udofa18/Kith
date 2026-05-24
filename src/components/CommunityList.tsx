@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { db, auth, handleFirestoreError, OperationType } from '../firebase';
 import { collection, query, orderBy, onSnapshot, collectionGroup, where, limit, getDocs } from 'firebase/firestore';
 import { motion, AnimatePresence } from 'motion/react';
-import { Users, Plus, Search, Filter, ChevronLeft, ChevronRight, Award, DollarSign } from 'lucide-react';
+import { Users, Plus, Search, Filter, ChevronLeft, ChevronRight, Award, DollarSign, Globe, Monitor, Rocket, Briefcase, GraduationCap, Trophy, Coins, Sparkles } from 'lucide-react';
 import CommunityCard from './CommunityCard';
 import CreateCommunityModal from './CreateCommunityModal';
 import CommunityDetailsModal from './CommunityDetailsModal';
@@ -27,14 +27,14 @@ export default function CommunityList() {
   const categoryScrollRef = useRef<HTMLDivElement>(null);
 
   const categories = [
-    { id: 'All', name: 'All', icon: '🌍' },
-    { id: 'technology', name: 'Technology', icon: '💻' },
-    { id: 'build-projects', name: 'Build & Projects', icon: '🚀' },
-    { id: 'career', name: 'Career', icon: '💼' },
-    { id: 'education-learning', name: 'Education & Learning', icon: '📚' },
-    { id: 'challenges-competition', name: 'Challenges & Competition', icon: '🏆' },
-    { id: 'monetization-sales', name: 'Monetization & Sales', icon: '💰' },
-    { id: 'brand', name: 'Brand', icon: '✨' }
+    { id: 'All', name: 'All', icon: Globe },
+    { id: 'technology', name: 'Technology', icon: Monitor },
+    { id: 'build-projects', name: 'Build & Projects', icon: Rocket },
+    { id: 'career', name: 'Career', icon: Briefcase },
+    { id: 'education-learning', name: 'Education & Learning', icon: GraduationCap },
+    { id: 'challenges-competition', name: 'Challenges & Competition', icon: Trophy },
+    { id: 'monetization-sales', name: 'Monetization & Sales', icon: Coins },
+    { id: 'brand', name: 'Brand', icon: Sparkles }
   ];
 
   const scrollCategories = (direction: 'left' | 'right') => {
@@ -130,7 +130,7 @@ export default function CommunityList() {
       <div className="max-w-[1400px] mx-auto px-4 sm:px-6 md:px-8 pb-20">
       
       {/* Category Filter Bar */}
-      <div className="mb-10 max-w-4xl mx-auto w-full border-b border-foreground/5 relative group">
+      <div className="mb-10 w-full border-b border-foreground/5 relative group">
         <div className="absolute left-0 top-1/2 -translate-y-1/2 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
           <button 
             onClick={() => scrollCategories('left')}
@@ -144,33 +144,36 @@ export default function CommunityList() {
           ref={categoryScrollRef}
           className="overflow-x-auto no-scrollbar pb-4 -mb-4 scroll-smooth"
         >
-          <div className="flex justify-start gap-8 min-w-max px-10 py-4">
-            {categories.map((cat) => (
-              <button
-                key={cat.id}
-                onClick={() => setCategoryFilter(cat.id)}
-                className={`flex flex-col items-center gap-3 group transition-all relative pb-2 ${
-                  categoryFilter === cat.id ? 'text-foreground' : 'text-foreground/40 hover:text-foreground/60'
-                }`}
-              >
-                <div className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all text-xl ${
-                  categoryFilter === cat.id ? 'bg-foreground/10 scale-110 shadow-lg shadow-foreground/5' : 'bg-transparent group-hover:bg-foreground/5'
-                }`}>
-                  {cat.icon}
-                </div>
-                <span className={`text-xs font-bold uppercase tracking-[0.1em] transition-all ${
-                  categoryFilter === cat.id ? 'opacity-100' : 'opacity-60'
-                }`}>
-                  {cat.name}
-                </span>
-                {categoryFilter === cat.id && (
-                  <motion.div 
-                    layoutId="activeCatUnderline" 
-                    className="absolute bottom-0 left-1/2 -translate-x-1/2 h-0.5 w-6 bg-primary rounded-full" 
-                  />
-                )}
-              </button>
-            ))}
+          <div className="flex justify-start gap-4 min-w-max px-10 py-4">
+            {categories.map((cat) => {
+              const IconComp = cat.icon;
+              const isActive = categoryFilter === cat.id;
+              return (
+                <button
+                  key={cat.id}
+                  onClick={() => setCategoryFilter(cat.id)}
+                  className={`flex items-center gap-2.5 px-5 py-3 rounded-2xl transition-all relative ${
+                    isActive
+                      ? 'bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-lg shadow-emerald-500/25 scale-105'
+                      : 'bg-foreground/5 text-foreground/50 hover:bg-foreground/10 hover:text-foreground/70'
+                  }`}
+                >
+                  <IconComp size={18} className={isActive ? 'text-white' : ''} />
+                  <span className={`text-sm font-bold whitespace-nowrap ${
+                    isActive ? 'text-white' : ''
+                  }`}>
+                    {cat.name}
+                  </span>
+                  {isActive && (
+                    <motion.div
+                      layoutId="activeCatPill"
+                      className="absolute inset-0 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 -z-10"
+                      transition={{ type: 'spring', bounce: 0.2, duration: 0.5 }}
+                    />
+                  )}
+                </button>
+              );
+            })}
           </div>
         </div>
 
