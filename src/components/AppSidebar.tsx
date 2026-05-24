@@ -133,12 +133,16 @@ export default function AppSidebar({ user }: { user: any }) {
     );
     const unsubscribeConvs = onSnapshot(qConvs, (snapshot) => {
       let dmCount = 0;
+      let requestCount = 0;
       snapshot.docs.forEach(d => {
         const data = d.data();
         const count = data.unreadCount?.[user.uid] || 0;
         dmCount += count;
+        if (data.status === 'pending' && data.requestedBy !== user.uid) {
+          requestCount += 1;
+        }
       });
-      setTotalUnreadDMs(dmCount);
+      setTotalUnreadDMs(dmCount + requestCount);
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'conversations');
     });

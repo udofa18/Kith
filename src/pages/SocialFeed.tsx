@@ -18,6 +18,7 @@ import CommunityDetailsModal from '../components/CommunityDetailsModal';
 import SidebarCreatorItem from '../components/SidebarCreatorItem';
 import { feedService } from '../services/feedService';
 import { useQuery } from '@tanstack/react-query';
+import { keepPreviousData, queryKeys, STALE } from '../lib/queryClient';
 import SocialLeftSidebar from '../components/SocialLeftSidebar';
 import SocialRightSidebar from '../components/SocialRightSidebar';
 
@@ -36,7 +37,7 @@ export default function SocialFeed() {
 
   // Feed Query
   const { data: feedData, isLoading: feedLoading } = useQuery({
-    queryKey: ['feed', feedType, auth.currentUser?.uid, searchParams.toString()],
+    queryKey: queryKeys.feed(feedType, auth.currentUser?.uid, searchParams.toString()),
     queryFn: async () => {
       if (feedType === 'foryou') {
         return feedService.getPersonalizedFeed(auth.currentUser?.uid || 'anonymous');
@@ -47,6 +48,8 @@ export default function SocialFeed() {
       return null;
     },
     enabled: ['foryou', 'trending'].includes(feedType),
+    staleTime: STALE.feed,
+    placeholderData: keepPreviousData,
   });
 
   useEffect(() => {

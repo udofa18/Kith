@@ -8,6 +8,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'react-hot-toast';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { feedService } from '../services/feedService';
+import { queryKeys, STALE } from '../lib/queryClient';
 import { 
   Users, Settings, Plus, MessageSquare, Shield, UserPlus, UserMinus, 
   Info, Calendar, Hash, Lock, Search, MoreVertical, Trash2, 
@@ -38,17 +39,18 @@ export default function CommunityView({ communityId }: { communityId: string }) 
   const queryClient = useQueryClient();
   
   const { data: community, isLoading: communityLoading } = useQuery({
-    queryKey: ['community', communityId],
+    queryKey: queryKeys.community(communityId),
     queryFn: async () => {
       const docSnap = await getDoc(doc(db, 'communities', communityId));
       if (!docSnap.exists()) return null;
       return { id: docSnap.id, ...docSnap.data() } as any;
     },
     enabled: !!communityId,
+    staleTime: STALE.community,
   });
 
   const { data: channels = [], isLoading: channelsLoading } = useQuery({
-    queryKey: ['community-channels', communityId],
+    queryKey: queryKeys.communityChannels(communityId),
     queryFn: async () => {
       const q = query(
         collection(db, 'communities', communityId, 'channels'),
@@ -58,6 +60,7 @@ export default function CommunityView({ communityId }: { communityId: string }) 
       return snap.docs.map(d => ({ id: d.id, ...d.data() })) as any[];
     },
     enabled: !!communityId,
+    staleTime: STALE.channels,
   });
 
   const [activeChannelId, setActiveChannelId] = useState<string>('');
@@ -314,7 +317,7 @@ export default function CommunityView({ communityId }: { communityId: string }) 
       return c;
     });
 
-    queryClient.setQueryData(['community-channels', communityId], finalChannels);
+    queryClient.setQueryData(queryKeys.communityChannels(communityId), finalChannels);
 
     try {
       const batch = writeBatch(db);

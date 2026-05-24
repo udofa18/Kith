@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { Calendar, Clock, Zap, DollarSign, Layers, FileText } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { feedService } from '../services/feedService';
+import { queryKeys, STALE } from '../lib/queryClient';
 import { formatDate } from '../lib/utils';
 
 export default function SocialRightSidebar() {
@@ -10,18 +11,21 @@ export default function SocialRightSidebar() {
   const [sidebarTop, setSidebarTop] = useState(24);
 
   const { data: upcomingEvents = [] } = useQuery({
-    queryKey: ['upcoming-events'],
+    queryKey: queryKeys.upcomingEvents(),
     queryFn: () => feedService.getUpcomingEvents(5),
+    staleTime: STALE.sidebar,
   });
 
   const { data: featuredArticles = [] } = useQuery({
-    queryKey: ['featured-articles'],
+    queryKey: queryKeys.featuredArticles(),
     queryFn: () => feedService.getFeaturedArticles(5),
+    staleTime: STALE.sidebar,
   });
 
   const { data: featuredChallenges = [] } = useQuery({
-    queryKey: ['featured-challenges'],
+    queryKey: queryKeys.featuredChallenges(),
     queryFn: () => feedService.getFeaturedChallenges(3),
+    staleTime: STALE.sidebar,
   });
 
   useEffect(() => {

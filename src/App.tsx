@@ -11,6 +11,7 @@ import PersistentVoiceOverlay from './components/PersistentVoiceOverlay';
 import CallInterface from './components/call/CallInterface';
 import { LiveKitRoom } from '@livekit/components-react';
 import { unlockAudio } from './lib/sounds';
+import { prefetchFeedExperienceData } from './lib/queryClient';
 
 // Pages
 import LandingPage from './pages/LandingPage';
@@ -266,6 +267,7 @@ export default function App() {
       if (user) {
         // Start reminders
         reminderService.start();
+        prefetchFeedExperienceData(user.uid);
 
         // Set up real-time listener for the user document
         unsubscribeSnapshot = onSnapshot(doc(db, 'users', user.uid), (userDoc) => {

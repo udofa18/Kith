@@ -2,7 +2,7 @@ import { db } from '../firebase';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 
 export type NotificationType = 
-  | 'like' | 'comment' | 'mention' | 'message' | 'xp_gift' | 'challenge' | 'channel_mention' 
+  | 'like' | 'comment' | 'mention' | 'message' | 'message_request' | 'xp_gift' | 'challenge' | 'channel_mention' 
   | 'purchase' | 'payout' | 'event_invite' | 'event_reminder' | 'system' | 'wallet'
   | 'repost' | 'quote' | 'new_post';
 
@@ -43,7 +43,7 @@ export async function createNotification({
   let finalCategory: NotificationCategory = category || 'system';
   if (!category) {
     if (['like', 'comment', 'mention', 'repost', 'quote', 'new_post'].includes(type)) finalCategory = 'social';
-    else if (['message', 'channel_mention', 'challenge'].includes(type)) finalCategory = 'community';
+    else if (['message', 'message_request', 'channel_mention', 'challenge'].includes(type)) finalCategory = 'community';
     else if (['purchase'].includes(type)) finalCategory = 'marketplace';
     else if (['payout', 'xp_gift', 'wallet'].includes(type)) finalCategory = 'earnings';
     else if (['event_invite', 'event_reminder'].includes(type)) finalCategory = 'events';

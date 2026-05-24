@@ -283,6 +283,17 @@ service cloud.firestore {
              data.conversationId is string;
     }
 
+    function canSendConversationMessage(conversationId) {
+      let convPath = /databases/$(database)/documents/conversations/$(conversationId);
+      return exists(convPath) &&
+             request.auth.uid in get(convPath).data.participants &&
+             (
+               !('status' in get(convPath).data) ||
+               get(convPath).data.status == 'accepted' ||
+               (get(convPath).data.status == 'pending' && get(convPath).data.requestedBy == request.auth.uid)
+             );
+    }
+
     function isValidNotification(data) {
       let requiredFields = ['recipientId', 'type', 'content', 'createdAt', 'read'];
       return data.keys().hasAll(requiredFields) &&
@@ -968,9 +979,8 @@ service cloud.firestore {
         allow read: if isAuthenticated() && 
                       (!exists(/databases/$(database)/documents/conversations/$(conversationId)) || 
                        request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants);
-        allow create: if isAuthenticated() && 
-                      exists(/databases/$(database)/documents/conversations/$(conversationId)) &&
-                      request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants && 
+        allow create: if isAuthenticated() &&
+                      canSendConversationMessage(conversationId) &&
                       isValidNestedMessage(request.resource.data);
       }
     }

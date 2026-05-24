@@ -9,11 +9,13 @@ import CommunityDetailsModal from './CommunityDetailsModal';
 import { useSearchParams, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { feedService } from '../services/feedService';
+import { queryKeys, STALE } from '../lib/queryClient';
 
 export default function CommunityList() {
   const { data: communities = [], isLoading: loading } = useQuery({
-    queryKey: ['communities'],
+    queryKey: queryKeys.communities(),
     queryFn: () => feedService.getCommunities(),
+    staleTime: STALE.communities,
   });
 
   const [joinedCommunityIds, setJoinedCommunityIds] = useState<Set<string>>(new Set());

@@ -3,6 +3,7 @@ import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import { TrendingUp, Award, Users } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { feedService } from '../services/feedService';
+import { queryKeys, STALE } from '../lib/queryClient';
 import SidebarCreatorItem from './SidebarCreatorItem';
 
 export default function SocialLeftSidebar() {
@@ -12,18 +13,21 @@ export default function SocialLeftSidebar() {
   const [sidebarTop, setSidebarTop] = useState(24);
 
   const { data: trendingCommunities = [] } = useQuery({
-    queryKey: ['trending-communities'],
+    queryKey: queryKeys.trendingCommunities(),
     queryFn: () => feedService.getTrendingCommunities(5),
+    staleTime: STALE.sidebar,
   });
 
   const { data: trendingTags = [] } = useQuery({
-    queryKey: ['trending-tags'],
+    queryKey: queryKeys.trendingTags(),
     queryFn: () => feedService.getTrendingTags(5),
+    staleTime: STALE.sidebar,
   });
 
   const { data: topCreators = [] } = useQuery({
-    queryKey: ['top-creators'],
+    queryKey: queryKeys.topCreators(),
     queryFn: () => feedService.getTopCreators(5),
+    staleTime: STALE.sidebar,
   });
 
   useEffect(() => {
