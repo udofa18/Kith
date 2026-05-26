@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useSearchParams, useNavigate, Link } from 'react-router-dom';
-import { TrendingUp, Award, Users } from 'lucide-react';
+import { TrendingUp, Award, Users, SearchIcon } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { feedService } from '../services/feedService';
 import { queryKeys, STALE } from '../lib/queryClient';
@@ -11,7 +11,10 @@ export default function SocialLeftSidebar() {
   const navigate = useNavigate();
   const sidebarRef = useRef<HTMLDivElement>(null);
   const [sidebarTop, setSidebarTop] = useState(24);
-
+  const [searchQuery, setSearchQuery] = useState(searchParams.get('search') ?? '');
+  useEffect(() => {
+    setSearchQuery(searchParams.get('search') ?? '');
+  }, [searchParams]);
   const { data: trendingCommunities = [] } = useQuery({
     queryKey: queryKeys.trendingCommunities(),
     queryFn: () => feedService.getTrendingCommunities(5),
@@ -65,6 +68,30 @@ export default function SocialLeftSidebar() {
       style={{ top: `${sidebarTop}px` }}
       className="hidden lg:block w-72 xl:w-80 space-y-0 pt-6 sticky h-fit order-1 shrink-0 border-r border-black/10 dark:border-white/10 no-scrollbar"
     >
+      {/* Search Input */}
+      <div className="px-4 py-2 border-b border-black/10 dark:border-white/10">
+        <div className="relative">
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') {
+                const trimmed = searchQuery.trim();
+                if (trimmed) {
+                  navigate(`/feed?search=${encodeURIComponent(trimmed)}`);
+                } else {
+                  navigate('/feed');
+                }
+              }
+            }}
+            placeholder="Search posts..."
+            className="w-full pl-8 pr-3 py-1.5 rounded-md bg-black/5 dark:bg-white/5 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+          />
+          <SearchIcon className="absolute left-2 top-1/2 transform -translate-y-1/2 text-gray-500" size={16} />
+        </div>
+      </div>
+
       {/* Trending Topics */}
       <div className="bg-transparent p-4 border-b border-black/10 dark:border-white/10">
         <div className="flex items-center justify-between mb-4">

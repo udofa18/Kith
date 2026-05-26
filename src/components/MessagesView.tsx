@@ -49,7 +49,7 @@ interface Message {
   };
 }
 
-interface Conversation extends ConversationData {}
+interface Conversation extends ConversationData { }
 
 const MESSAGE_CATEGORIES: {
   id: MessageCategory;
@@ -57,11 +57,11 @@ const MESSAGE_CATEGORIES: {
   icon: typeof MessageSquare;
   gradient: string;
 }[] = [
-  { id: 'all', label: 'All', icon: MessageSquare, gradient: 'from-cyan-400 to-blue-500' },
-  { id: 'unread', label: 'Unread', icon: Mail, gradient: 'from-violet-400 to-purple-500' },
-  { id: 'favourites', label: 'Favourites', icon: Star, gradient: 'from-amber-400 to-orange-500' },
-  { id: 'requests', label: 'Requests', icon: UserPlus, gradient: 'from-pink-400 to-rose-500' },
-];
+    { id: 'all', label: 'All', icon: MessageSquare, gradient: 'from-cyan-400 to-blue-500' },
+    { id: 'unread', label: 'Unread', icon: Mail, gradient: 'from-violet-400 to-purple-500' },
+    { id: 'favourites', label: 'Favourites', icon: Star, gradient: 'from-amber-400 to-orange-500' },
+    { id: 'requests', label: 'Requests', icon: UserPlus, gradient: 'from-pink-400 to-rose-500' },
+  ];
 
 export default function MessagesView() {
   const [searchParams] = useSearchParams();
@@ -168,7 +168,7 @@ export default function MessagesView() {
     if (initialUserId && initialUserId !== auth.currentUser.uid) {
       const myId = auth.currentUser.uid;
       const conversationId = [myId, initialUserId].sort().join('_');
-      
+
       const existingConv = conversations.find(c => c.id === conversationId);
       if (existingConv) {
         setSelectedConv(existingConv);
@@ -232,17 +232,17 @@ export default function MessagesView() {
         const newMsgs = snapshot.docs.map(d => {
           const data = d.data();
           const createdAt = data.createdAt;
-          const date = createdAt && typeof createdAt.toDate === 'function' ? createdAt.toDate() : 
-                       (createdAt && typeof createdAt.seconds === 'number' ? new Date(createdAt.seconds * 1000) : 
-                       (typeof createdAt === 'string' || typeof createdAt === 'number' ? new Date(createdAt) : new Date()));
+          const date = createdAt && typeof createdAt.toDate === 'function' ? createdAt.toDate() :
+            (createdAt && typeof createdAt.seconds === 'number' ? new Date(createdAt.seconds * 1000) :
+              (typeof createdAt === 'string' || typeof createdAt === 'number' ? new Date(createdAt) : new Date()));
           return { id: d.id, ...data, createdAt: date } as Message;
         });
-        
+
         // Ensure uniqueness and sort
         const combined = [...newMsgs];
         const unique = Array.from(new Map(combined.map(m => [m.id, m])).values())
           .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
-        
+
         return unique;
       });
     }, (error) => {
@@ -272,7 +272,7 @@ export default function MessagesView() {
       };
 
       const batch = writeBatch(db);
-      
+
       // Update receiver's XP
       const receiverRef = doc(db, 'users', otherUserId!);
       batch.update(receiverRef, {
@@ -309,7 +309,7 @@ export default function MessagesView() {
       const reader = new FileReader();
       reader.onloadend = async () => {
         const base64data = reader.result as string;
-        
+
         const otherUserId = selectedConv.participants.find(p => p !== auth.currentUser?.uid);
         const fileMessage = {
           senderId: auth.currentUser!.uid,
@@ -416,7 +416,7 @@ export default function MessagesView() {
         content: isNewRequest ? 'sent you a message request' : 'sent you a message',
         relatedId: selectedConv.id
       }).catch(console.error);
-      
+
       scrollToBottom();
     } catch (error) {
       console.error("Error sending message:", error);
@@ -486,7 +486,7 @@ export default function MessagesView() {
 
     const text = newMessage;
     const currentReplyTo = replyTo;
-    
+
     // Clear input immediately
     setNewMessage('');
     setReplyTo(null);
@@ -496,17 +496,17 @@ export default function MessagesView() {
 
   const handleStartCall = async (media: 'voice' | 'video') => {
     if (!selectedConv || !auth.currentUser || !isConversationAccepted(selectedConv)) return;
-    
+
     const otherUserId = selectedConv.participants.find(p => p !== auth.currentUser?.uid);
     if (!otherUserId) return;
 
     try {
       await initiateCall(
-        selectedConv.id, 
-        [otherUserId], 
-        'one-to-one', 
+        selectedConv.id,
+        [otherUserId],
+        'one-to-one',
         media,
-        { 
+        {
           name: currentUserProfile?.displayName || auth.currentUser.displayName || 'Unknown',
           photo: currentUserProfile?.profileImage || auth.currentUser.photoURL || ''
         },
@@ -593,18 +593,16 @@ export default function MessagesView() {
                 <button
                   key={id}
                   onClick={() => setActiveCategory(id)}
-                  className={`relative flex items-center gap-1.5 px-3 py-2 rounded-xl text-[11px] font-bold transition-all whitespace-nowrap shrink-0 ${
-                    isActive
+                  className={`relative flex items-center gap-1.5 px-3 py-2 rounded-xl text-[11px] font-bold transition-all whitespace-nowrap shrink-0 ${isActive
                       ? `bg-gradient-to-r ${gradient} text-white shadow-lg`
                       : 'bg-black/5 dark:bg-white/5 text-black/50 dark:text-white/50 hover:bg-black/10 dark:hover:bg-white/10'
-                  }`}
+                    }`}
                 >
                   <Icon size={14} />
                   <span>{label}</span>
                   {count > 0 && (
-                    <span className={`min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-black flex items-center justify-center ${
-                      isActive ? 'bg-white/25 text-white' : 'bg-primary text-white'
-                    }`}>
+                    <span className={`min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-black flex items-center justify-center ${isActive ? 'bg-white/25 text-white' : 'bg-primary text-white'
+                      }`}>
                       {count > 9 ? '9+' : count}
                     </span>
                   )}
@@ -630,73 +628,72 @@ export default function MessagesView() {
             const isPending = auth.currentUser && isOutgoingRequest(conv, auth.currentUser.uid);
             const favourited = auth.currentUser && isFavourited(conv, auth.currentUser.uid);
             return (
-            <button
-              key={conv.id}
-              onClick={() => setSelectedConv(conv)}
-              className={`w-full p-4 flex gap-3 hover:bg-black/5 dark:hover:bg-white/5 transition-all text-left ${
-                selectedConv?.id === conv.id
-                  ? 'bg-gradient-to-r from-cyan-500/10 to-blue-500/5 border-l-4 border-cyan-500'
-                  : ''
-              } text-black dark:text-white`}
-            >
-              <motion.div
-                className="relative w-12 h-12 rounded-full bg-black/10 dark:bg-white/10 overflow-hidden flex-shrink-0"
-                whileHover={{ scale: 1.05 }}
+              <button
+                key={conv.id}
+                onClick={() => setSelectedConv(conv)}
+                className={`w-full p-4 flex gap-3 hover:bg-black/5 dark:hover:bg-white/5 transition-all text-left ${selectedConv?.id === conv.id
+                    ? 'bg-gradient-to-r from-cyan-500/10 to-blue-500/5 border-l-4 border-cyan-500'
+                    : ''
+                  } text-black dark:text-white`}
               >
-                <img 
-                  src={(conv.otherUser?.profileImage && conv.otherUser.profileImage.trim() !== '') ? conv.otherUser.profileImage : `https://api.dicebear.com/7.x/avataaars/svg?seed=${conv.id}`} 
-                  alt="Avatar" 
-                  referrerPolicy="no-referrer"
-                />
-                {isRequest && (
-                  <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-gradient-to-br from-pink-400 to-rose-500 rounded-full flex items-center justify-center">
-                    <UserPlus size={10} className="text-white" />
-                  </span>
-                )}
-              </motion.div>
-              <div className="flex-1 min-w-0">
-                <div className="flex justify-between items-baseline mb-1">
-                  <h3 className="font-bold text-sm truncate text-black dark:text-white flex items-center gap-1">
-                    <span>{conv.otherUser?.username || 'Unknown User'}</span>
-                    <VerifiedBadge verified={conv.otherUser?.verified} />
-                    {isPending && (
-                      <span className="text-[9px] font-bold uppercase tracking-wider text-amber-500 bg-amber-500/10 px-1.5 py-0.5 rounded-full">Pending</span>
-                    )}
-                  </h3>
-                  <span className="text-[10px] text-black/30 dark:text-white/30">
-                    {(() => {
-                      if (!conv.lastMessageAt) return '';
-                      try {
-                        const d = conv.lastMessageAt.toDate ? conv.lastMessageAt.toDate() : new Date(conv.lastMessageAt);
-                        if (!(d instanceof Date) || isNaN(d.getTime())) return '';
-                        return formatDistanceToNow(d, { addSuffix: false });
-                      } catch (e) {
-                        return '';
-                      }
-                    })()}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center gap-2">
-                  <p className="text-xs text-black/50 dark:text-white/50 truncate flex-1">
-                    {isRequest ? `Request: ${conv.lastMessage}` : conv.lastMessage}
-                  </p>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <button
-                      type="button"
-                      onClick={(e) => handleToggleFavourite(conv, e)}
-                      className={`p-1 rounded-lg transition-colors ${favourited ? 'text-amber-400' : 'text-black/20 dark:text-white/20 hover:text-amber-400'}`}
-                    >
-                      <Star size={14} className={favourited ? 'fill-amber-400' : ''} />
-                    </button>
-                    {auth.currentUser && conv.unreadCount?.[auth.currentUser.uid] ? (
-                      <span className="bg-gradient-to-r from-cyan-500 to-blue-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[18px] text-center">
-                        {conv.unreadCount[auth.currentUser.uid]}
-                      </span>
-                    ) : null}
+                <motion.div
+                  className="relative w-12 h-12 rounded-full bg-black/10 dark:bg-white/10 overflow-hidden flex-shrink-0"
+                  whileHover={{ scale: 1.05 }}
+                >
+                  <img
+                    src={(conv.otherUser?.profileImage && conv.otherUser.profileImage.trim() !== '') ? conv.otherUser.profileImage : `https://api.dicebear.com/7.x/avataaars/svg?seed=${conv.id}`}
+                    alt="Avatar"
+                    referrerPolicy="no-referrer"
+                  />
+                  {isRequest && (
+                    <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-gradient-to-br from-pink-400 to-rose-500 rounded-full flex items-center justify-center">
+                      <UserPlus size={10} className="text-white" />
+                    </span>
+                  )}
+                </motion.div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex justify-between items-baseline mb-1">
+                    <h3 className="font-bold text-[15px] truncate text-black dark:text-white flex items-center gap-1">
+                      <span>{conv.otherUser?.username || 'Unknown User'}</span>
+                      <VerifiedBadge verified={conv.otherUser?.verified} />
+                      {isPending && (
+                        <span className="text-[9px] font-bold uppercase tracking-wider text-amber-500 bg-amber-500/10 px-1.5 py-0.5 rounded-full">Pending</span>
+                      )}
+                    </h3>
+                    <span className="text-[10px] text-black/30 dark:text-white/30">
+                      {(() => {
+                        if (!conv.lastMessageAt) return '';
+                        try {
+                          const d = conv.lastMessageAt.toDate ? conv.lastMessageAt.toDate() : new Date(conv.lastMessageAt);
+                          if (!(d instanceof Date) || isNaN(d.getTime())) return '';
+                          return formatDistanceToNow(d, { addSuffix: false });
+                        } catch (e) {
+                          return '';
+                        }
+                      })()}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center gap-2">
+                    <p className="text-xs text-black/50 dark:text-white/50 truncate flex-1">
+                      {isRequest ? `Request: ${conv.lastMessage}` : conv.lastMessage}
+                    </p>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={(e) => handleToggleFavourite(conv, e)}
+                        className={`p-1 rounded-lg transition-colors ${favourited ? 'text-amber-400' : 'text-black/20 dark:text-white/20 hover:text-amber-400'}`}
+                      >
+                        <Star size={14} className={favourited ? 'fill-amber-400' : ''} />
+                      </button>
+                      {auth.currentUser && conv.unreadCount?.[auth.currentUser.uid] ? (
+                        <span className="bg-gradient-to-r from-cyan-500 to-blue-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[18px] text-center">
+                          {conv.unreadCount[auth.currentUser.uid]}
+                        </span>
+                      ) : null}
+                    </div>
                   </div>
                 </div>
-              </div>
-            </button>
+              </button>
             );
           })}
           {filteredConversations.length === 0 && (
@@ -710,10 +707,10 @@ export default function MessagesView() {
               </div>
               <p className="text-sm text-black/30 dark:text-white/30">
                 {activeCategory === 'requests' ? 'No message requests.' :
-                 activeCategory === 'favourites' ? 'No favourite conversations yet.' :
-                 activeCategory === 'unread' ? 'All caught up — no unread messages.' :
-                 searchQuery ? 'No conversations match your search.' :
-                 'No conversations yet.'}
+                  activeCategory === 'favourites' ? 'No favourite conversations yet.' :
+                    activeCategory === 'unread' ? 'All caught up — no unread messages.' :
+                      searchQuery ? 'No conversations match your search.' :
+                        'No conversations yet.'}
               </p>
             </motion.div>
           )}
@@ -721,21 +718,20 @@ export default function MessagesView() {
       </div>
 
       {/* Chat Window */}
-      <div className={`md:col-span-8 flex flex-col bg-gray-50 dark:bg-black/20 h-full overflow-hidden text-black dark:text-white ${
-        showChatDetails && selectedConv ? 'lg:col-span-6' : 'lg:col-span-9'
-      }`}>
+      <div className={`md:col-span-8 flex flex-col bg-gray-50 dark:bg-black/20 h-full overflow-hidden text-black dark:text-white relative ${showChatDetails && selectedConv ? 'lg:col-span-6' : 'lg:col-span-9'
+        }`}>
         {selectedConv ? (
           <>
             {/* Chat Header */}
-            <div className="p-4 border-b border-black/5 dark:border-white/5 flex items-center justify-between bg-gradient-to-r from-white/90 via-cyan-500/5 to-blue-500/5 dark:from-black/40 dark:via-cyan-500/10 dark:to-blue-500/10 backdrop-blur-md shrink-0 text-black dark:text-white">
+            <div className="absolute top-0 left-0 right-0 z-10 p-4 border-b border-black/5  dark:border-white/5 flex items-center justify-between bg-white/50 dark:bg-black/50 backdrop-blur-md text-black dark:text-white">
               <div className="flex items-center gap-3">
                 <motion.div
                   className="w-10 h-10 rounded-full bg-black/10 dark:bg-white/10 overflow-hidden ring-2 ring-cyan-500/20"
                   whileHover={{ scale: 1.05 }}
                 >
-                  <img 
-                    src={(selectedConv.otherUser?.profileImage && selectedConv.otherUser.profileImage.trim() !== '') ? selectedConv.otherUser.profileImage : `https://api.dicebear.com/7.x/avataaars/svg?seed=${selectedConv.id}`} 
-                    alt="Avatar" 
+                  <img
+                    src={(selectedConv.otherUser?.profileImage && selectedConv.otherUser.profileImage.trim() !== '') ? selectedConv.otherUser.profileImage : `https://api.dicebear.com/7.x/avataaars/svg?seed=${selectedConv.id}`}
+                    alt="Avatar"
                     referrerPolicy="no-referrer"
                   />
                 </motion.div>
@@ -744,15 +740,14 @@ export default function MessagesView() {
                     <span>{selectedConv.otherUser?.username || 'Unknown User'}</span>
                     <VerifiedBadge verified={selectedConv.otherUser?.verified} />
                   </h3>
-                  <p className={`text-[10px] font-medium ${
-                    isIncomingRequestChat ? 'text-pink-500' :
-                    isWaitingForAcceptance || isNewRequestChat ? 'text-amber-500' :
-                    'text-green-500'
-                  }`}>
+                  <p className={`text-[10px] font-medium ${isIncomingRequestChat ? 'text-pink-500' :
+                      isWaitingForAcceptance || isNewRequestChat ? 'text-amber-500' :
+                        'text-green-500'
+                    }`}>
                     {isIncomingRequestChat ? 'Message request' :
-                     isWaitingForAcceptance ? 'Awaiting acceptance' :
-                     isNewRequestChat ? 'Send a message request' :
-                     'Online'}
+                      isWaitingForAcceptance ? 'Awaiting acceptance' :
+                        isNewRequestChat ? 'Send a message request' :
+                          'Online'}
                   </p>
                 </div>
               </div>
@@ -763,13 +758,13 @@ export default function MessagesView() {
               >
                 {isConversationAccepted(selectedConv) && (
                   <>
-                    <button 
+                    <button
                       onClick={() => handleStartCall('voice')}
                       className="hover:text-primary transition-colors"
                     >
                       <Phone size={18} />
                     </button>
-                    <button 
+                    <button
                       onClick={() => handleStartCall('video')}
                       className="hover:text-primary transition-colors"
                     >
@@ -796,27 +791,27 @@ export default function MessagesView() {
             </div>
 
             {/* Messages Area */}
-              <div className="flex-1 overflow-y-auto p-6 space-y-4 scrollbar-thin overflow-x-hidden">
-                {messages.map((msg, i) => {
-                  const isMe = msg.senderId === auth.currentUser?.uid;
-                  const prevMsg = i > 0 ? messages[i - 1] : null;
-                  const showDateHeader = isNewDay(msg, prevMsg);
+            <div className="flex-1 overflow-y-auto p-6 pt-24 space-y-4 scrollbar-thin overflow-x-hidden">
+              {messages.map((msg, i) => {
+                const isMe = msg.senderId === auth.currentUser?.uid;
+                const prevMsg = i > 0 ? messages[i - 1] : null;
+                const showDateHeader = isNewDay(msg, prevMsg);
 
-                  return (
-                    <div key={msg.id}>
-                      {showDateHeader && (
-                        <div key={`date-${msg.createdAt?.seconds || i}`} className="flex items-center gap-4 py-6">
-                          <div className="flex-1 h-[1px] bg-black/5 dark:bg-white/5" />
-                          <span className="text-[10px] font-bold text-black/30 dark:text-white/30 uppercase tracking-widest">
-                            {getDateLabel(msg.createdAt)}
-                          </span>
-                          <div className="flex-1 h-[1px] bg-black/5 dark:bg-white/5" />
-                        </div>
-                      )}
-                      <div id={`message-${msg.id}`} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} transition-all mb-4`}>
-                        <div className={`max-w-[70%] group relative`}>
+                return (
+                  <div key={msg.id}>
+                    {showDateHeader && (
+                      <div key={`date-${msg.createdAt?.seconds || i}`} className="flex items-center gap-4 py-6">
+                        <div className="flex-1 h-[1px] bg-black/5 dark:bg-white/5" />
+                        <span className="text-[10px] font-bold text-black/30 dark:text-white/30 uppercase tracking-widest">
+                          {getDateLabel(msg.createdAt)}
+                        </span>
+                        <div className="flex-1 h-[1px] bg-black/5 dark:bg-white/5" />
+                      </div>
+                    )}
+                    <div id={`message-${msg.id}`} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} transition-all mb-4`}>
+                      <div className={`max-w-[70%] group relative`}>
                         {msg.replyTo && (
-                          <div 
+                          <div
                             onClick={() => scrollToMessage(msg.replyTo!.id)}
                             className="flex items-center gap-2 mb-1 opacity-60 hover:opacity-100 transition-opacity cursor-pointer text-xs bg-black/5 dark:bg-white/5 p-2 rounded-lg border-l-2 border-primary text-black dark:text-white"
                           >
@@ -825,11 +820,10 @@ export default function MessagesView() {
                             </p>
                           </div>
                         )}
-                        <div className={`p-3 rounded-2xl text-sm ${
-                          isMe 
-                            ? 'bg-primary text-white rounded-tr-none shadow-lg shadow-primary/20' 
+                        <div className={`p-4 rounded-4xl text-[15px] ${isMe
+                            ? 'bg-primary/60  text-white rounded-tr-none shadow-lg shadow-primary/20'
                             : 'bg-black/10 dark:bg-white/10 text-black dark:text-white rounded-tl-none border border-black/5 dark:border-white/5'
-                        } ${isSoloEmoji(msg.content) ? 'bg-transparent !p-0 shadow-none border-none' : ''}`}>
+                          } ${isSoloEmoji(msg.content) ? 'bg-transparent !p-0 shadow-none border-none' : ''}`}>
                           {msg.type === 'gift' ? (
                             <div className="flex items-center gap-3 py-2 px-4 bg-gradient-to-r from-yellow-500/20 to-orange-500/20 rounded-xl border border-yellow-500/30">
                               <div className="w-10 h-10 rounded-full bg-yellow-500 flex items-center justify-center shadow-lg shadow-yellow-500/20">
@@ -843,15 +837,15 @@ export default function MessagesView() {
                           ) : msg.type === 'attachment' ? (
                             <div className="space-y-2">
                               {msg.attachmentType?.startsWith('image/') ? (
-                                <img 
-                                  src={msg.attachmentUrl} 
-                                  alt={msg.attachmentName} 
+                                <img
+                                  src={msg.attachmentUrl}
+                                  alt={msg.attachmentName}
                                   className="max-w-full rounded-lg cursor-pointer hover:opacity-90 transition-opacity border border-black/5 dark:border-white/10"
                                   onClick={() => window.open(msg.attachmentUrl, '_blank')}
                                 />
                               ) : (
-                                <a 
-                                  href={msg.attachmentUrl} 
+                                <a
+                                  href={msg.attachmentUrl}
                                   download={msg.attachmentName}
                                   className="flex items-center gap-3 p-3 bg-black/5 dark:bg-white/5 rounded-xl hover:bg-black/10 dark:hover:bg-white/10 transition-all border border-black/10 dark:border-white/10"
                                 >
@@ -866,14 +860,12 @@ export default function MessagesView() {
                               )}
                             </div>
                           ) : msg.type === 'call_history' ? (
-                            <div className={`flex items-center gap-4 py-3 px-5 rounded-2xl border ${
-                              msg.metadata?.status === 'missed' 
-                                ? 'bg-rose-500/10 border-rose-500/20 text-rose-500' 
+                            <div className={`flex items-center gap-4 py-3 px-5 rounded-2xl border ${msg.metadata?.status === 'missed'
+                                ? 'bg-rose-500/10 border-rose-500/20 text-rose-500'
                                 : 'bg-green-500/5 border-green-500/10 text-green-500 dark:text-green-400'
-                            }`}>
-                              <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
-                                msg.metadata?.status === 'missed' ? 'bg-rose-500/20' : 'bg-green-500/20'
                               }`}>
+                              <div className={`w-10 h-10 rounded-full flex items-center justify-center ${msg.metadata?.status === 'missed' ? 'bg-rose-500/20' : 'bg-green-500/20'
+                                }`}>
                                 {msg.metadata?.status === 'missed' ? (
                                   <PhoneOff size={20} />
                                 ) : (
@@ -887,8 +879,8 @@ export default function MessagesView() {
                                 <div className="flex items-center gap-1.5 mt-0.5">
                                   {isMe ? <ArrowUpRight size={12} className="opacity-60" /> : <ArrowDownLeft size={12} className="opacity-60" />}
                                   <p className="text-[10px] font-medium opacity-60 uppercase tracking-wider">
-                                    {msg.metadata?.status === 'missed' 
-                                      ? (isMe ? 'Outgoing' : 'Unanswered') 
+                                    {msg.metadata?.status === 'missed'
+                                      ? (isMe ? 'Outgoing' : 'Unanswered')
                                       : (msg.metadata?.duration ? `${Math.floor(msg.metadata.duration / 60)}m ${msg.metadata.duration % 60}s` : 'Call Ended')}
                                   </p>
                                 </div>
@@ -908,38 +900,38 @@ export default function MessagesView() {
                                 <div className="text-6xl my-4 leading-none">
                                   {solo.value}
                                 </div>
-                               );
-                             }
-                             
-                             const urlRegex = /(https?:\/\/[^\s]+)/g;
-                             const parts = msg.content.split(urlRegex);
-                             
-                             return (
-                               <span>
-                                 {parts.map((part, index) => {
-                                   if (part.match(urlRegex)) {
-                                     return (
-                                       <a 
-                                         key={index} 
-                                         href={part} 
-                                         target="_blank" 
-                                         rel="noopener noreferrer" 
-                                         className={isMe ? "text-white underline font-medium" : "text-violet-600 dark:text-violet-400 hover:underline transition-colors font-medium underline decoration-violet-500/30 underline-offset-2"}
-                                         onClick={(e) => e.stopPropagation()}
-                                       >
-                                         {part}
-                                       </a>
-                                     );
-                                   }
-                                   return <AnimatedEmojiRenderer key={index} content={part} />;
-                                 })}
-                               </span>
-                             );
+                              );
+                            }
+
+                            const urlRegex = /(https?:\/\/[^\s]+)/g;
+                            const parts = msg.content.split(urlRegex);
+
+                            return (
+                              <span>
+                                {parts.map((part, index) => {
+                                  if (part.match(urlRegex)) {
+                                    return (
+                                      <a
+                                        key={index}
+                                        href={part}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className={isMe ? "text-white underline font-medium" : "text-violet-600 dark:text-violet-400 hover:underline transition-colors font-medium underline decoration-violet-500/30 underline-offset-2"}
+                                        onClick={(e) => e.stopPropagation()}
+                                      >
+                                        {part}
+                                      </a>
+                                    );
+                                  }
+                                  return <AnimatedEmojiRenderer key={index} content={part} />;
+                                })}
+                              </span>
+                            );
                           })()}
                         </div>
-                        
+
                         {/* Reply Action Area */}
-                        <button 
+                        <button
                           onClick={() => {
                             setReplyTo(msg);
                             inputRef.current?.focus();
@@ -973,8 +965,8 @@ export default function MessagesView() {
                   </div>
                 );
               })}
-                <div ref={messagesEndRef} />
-              </div>
+              <div ref={messagesEndRef} />
+            </div>
 
             {/* Message Input */}
             {isIncomingRequestChat ? (
@@ -1008,157 +1000,157 @@ export default function MessagesView() {
                 <p className="text-sm font-medium text-amber-600 dark:text-amber-400">Your message request is pending. You can send more messages once {selectedConv.otherUser?.username} accepts.</p>
               </div>
             ) : canSendMessages ? (
-            <div className="p-4 border-t border-black/5 dark:border-white/5 bg-white/80 dark:bg-black/40 shrink-0 text-black dark:text-white">
-              {replyTo && (
-                <div className="flex items-center justify-between bg-black/5 dark:bg-white/5 px-4 py-2 rounded-t-2xl border-x border-t border-black/10 dark:border-white/10 animate-in slide-in-from-bottom-2 text-black dark:text-white">
-                  <div className="flex items-center gap-2 overflow-hidden">
-                    <div className="w-1 h-6 bg-primary rounded-full shrink-0" />
-                    <div className="min-w-0">
-                      <p className="text-[10px] uppercase font-bold text-primary">Replying to {replyTo.senderId === auth.currentUser?.uid ? 'yourself' : 'them'}</p>
-                      <p className="text-xs text-black/60 dark:text-white/60 truncate italic font-medium">{replyTo.content}</p>
+              <div className="p-4 border-t border-black/5 dark:border-white/5 bg-white/80 dark:bg-black/40 shrink-0 text-black dark:text-white">
+                {replyTo && (
+                  <div className="flex items-center justify-between bg-black/5 dark:bg-white/5 px-4 py-2 rounded-t-2xl border-x border-t border-black/10 dark:border-white/10 animate-in slide-in-from-bottom-2 text-black dark:text-white">
+                    <div className="flex items-center gap-2 overflow-hidden">
+                      <div className="w-1 h-6 bg-primary rounded-full shrink-0" />
+                      <div className="min-w-0">
+                        <p className="text-[10px] uppercase font-bold text-primary">Replying to {replyTo.senderId === auth.currentUser?.uid ? 'yourself' : 'them'}</p>
+                        <p className="text-xs text-black/60 dark:text-white/60 truncate italic font-medium">{replyTo.content}</p>
+                      </div>
                     </div>
+                    <button onClick={() => setReplyTo(null)} className="text-black/30 dark:text-white/30 hover:text-primary transition-colors">
+                      <MoreVertical size={16} className="rotate-45" />
+                    </button>
                   </div>
-                  <button onClick={() => setReplyTo(null)} className="text-black/30 dark:text-white/30 hover:text-primary transition-colors">
-                    <MoreVertical size={16} className="rotate-45" />
-                  </button>
-                </div>
-              )}
-              <form onSubmit={handleSendMessage} className="flex items-center gap-3">
-                <input 
-                  type="file" 
-                  ref={fileInputRef} 
-                  className="hidden" 
-                  onChange={handleFileUpload}
-                  accept="image/*,.pdf,.doc,.docx,.txt"
-                />
-                
-                {isConversationAccepted(selectedConv) && (
-                <>
-                <button 
-                  type="button" 
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={isUploading}
-                  className="text-black/30 dark:text-white/30 hover:text-primary transition-colors disabled:opacity-50"
-                  title="Attach File"
-                >
-                  <Paperclip size={20} className={isUploading ? 'animate-pulse' : ''} />
-                </button>
-
-                <motion.div
-                  className="relative"
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
-                >
-                  <button 
-                    type="button" 
-                    onClick={() => setShowGiftOptions(!showGiftOptions)}
-                    className={`text-black/30 dark:text-white/30 hover:text-yellow-500 transition-colors ${showGiftOptions ? 'text-yellow-500' : ''}`}
-                    title="Gift XP"
-                  >
-                    <Gift size={20} />
-                  </button>
-
-                  <AnimatePresence>
-                    {showGiftOptions && (
-                      <motion.div 
-                        initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                        animate={{ opacity: 1, y: 0, scale: 1 }}
-                        exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                        className="absolute bottom-full mb-4 left-0 z-50 bg-white dark:bg-[#151A2C] border border-black/10 dark:border-white/10 rounded-2xl p-4 shadow-2xl w-48 shadow-black/10"
-                      >
-                        <p className="text-[10px] uppercase font-bold text-black/40 dark:text-white/40 mb-3 tracking-wider">Gift XP</p>
-                        <div className="grid grid-cols-2 gap-2">
-                          {[50, 100, 250, 500].map(amount => (
-                            <button
-                              key={amount}
-                              type="button"
-                              onClick={() => handleGiftXP(amount)}
-                              className="px-3 py-2 bg-black/5 dark:bg-white/5 hover:bg-yellow-500/20 border border-black/5 dark:border-white/5 hover:border-yellow-500/30 rounded-xl text-xs font-bold transition-all flex items-center justify-between group text-black dark:text-white"
-                            >
-                              <span className="text-yellow-500">{amount}</span>
-                              <Zap size={10} className="fill-yellow-500 text-yellow-500 opacity-0 group-hover:opacity-100 transition-opacity" />
-                            </button>
-                          ))}
-                        </div>
-                        </motion.div>
-                    )}
-                  </AnimatePresence>
-                </motion.div>
-                </>
                 )}
+                <form onSubmit={handleSendMessage} className="flex items-center gap-3">
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    className="hidden"
+                    onChange={handleFileUpload}
+                    accept="image/*,.pdf,.doc,.docx,.txt"
+                  />
 
-                <div className="relative">
-                  <button 
-                    type="button" 
-                    onClick={() => setShowAnimatedPicker(!showAnimatedPicker)}
-                    className={`hover:scale-110 transition-transform ${showAnimatedPicker ? 'grayscale-0' : 'grayscale opacity-50 hover:opacity-100 hover:grayscale-0'}`}
-                    title="Animated Emoji"
-                  >
-                    <div className="w-6 h-6">
-                      <SafeAnimatedEmoji emoji="joy" size="24px" />
-                    </div>
-                  </button>
-                  
-                  <AnimatePresence>
-                    {showAnimatedPicker && (
-                      <div className="absolute bottom-full mb-4 left-0 z-50">
-                        <AnimatedEmojiPicker 
-                          onSelect={(emoji) => {
-                            sendMessage(`:animated-${emoji}:`);
-                            setShowAnimatedPicker(false);
-                          }}
-                          onClose={() => setShowAnimatedPicker(false)}
-                        />
+                  {isConversationAccepted(selectedConv) && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={isUploading}
+                        className="text-black/30 dark:text-white/30 hover:text-primary transition-colors disabled:opacity-50"
+                        title="Attach File"
+                      >
+                        <Paperclip size={20} className={isUploading ? 'animate-pulse' : ''} />
+                      </button>
+
+                      <motion.div
+                        className="relative"
+                        whileHover={{ scale: 1.05 }}
+                        whileTap={{ scale: 0.95 }}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => setShowGiftOptions(!showGiftOptions)}
+                          className={`text-black/30 dark:text-white/30 hover:text-yellow-500 transition-colors ${showGiftOptions ? 'text-yellow-500' : ''}`}
+                          title="Gift XP"
+                        >
+                          <Gift size={20} />
+                        </button>
+
+                        <AnimatePresence>
+                          {showGiftOptions && (
+                            <motion.div
+                              initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                              animate={{ opacity: 1, y: 0, scale: 1 }}
+                              exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                              className="absolute bottom-full mb-4 left-0 z-50 bg-white dark:bg-[#151A2C] border border-black/10 dark:border-white/10 rounded-2xl p-4 shadow-2xl w-48 shadow-black/10"
+                            >
+                              <p className="text-[10px] uppercase font-bold text-black/40 dark:text-white/40 mb-3 tracking-wider">Gift XP</p>
+                              <div className="grid grid-cols-2 gap-2">
+                                {[50, 100, 250, 500].map(amount => (
+                                  <button
+                                    key={amount}
+                                    type="button"
+                                    onClick={() => handleGiftXP(amount)}
+                                    className="px-3 py-2 bg-black/5 dark:bg-white/5 hover:bg-yellow-500/20 border border-black/5 dark:border-white/5 hover:border-yellow-500/30 rounded-xl text-xs font-bold transition-all flex items-center justify-between group text-black dark:text-white"
+                                  >
+                                    <span className="text-yellow-500">{amount}</span>
+                                    <Zap size={10} className="fill-yellow-500 text-yellow-500 opacity-0 group-hover:opacity-100 transition-opacity" />
+                                  </button>
+                                ))}
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </motion.div>
+                    </>
+                  )}
+
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setShowAnimatedPicker(!showAnimatedPicker)}
+                      className={`hover:scale-110 transition-transform ${showAnimatedPicker ? 'grayscale-0' : 'grayscale opacity-50 hover:opacity-100 hover:grayscale-0'}`}
+                      title="Animated Emoji"
+                    >
+                      <div className="w-6 h-6">
+                        <SafeAnimatedEmoji emoji="joy" size="24px" />
+                      </div>
+                    </button>
+
+                    <AnimatePresence>
+                      {showAnimatedPicker && (
+                        <div className="absolute bottom-full mb-4 left-0 z-50">
+                          <AnimatedEmojiPicker
+                            onSelect={(emoji) => {
+                              sendMessage(`:animated-${emoji}:`);
+                              setShowAnimatedPicker(false);
+                            }}
+                            onClose={() => setShowAnimatedPicker(false)}
+                          />
+                        </div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+                      className={`text-black/30 dark:text-white/30 hover:text-primary transition-colors ${showEmojiPicker ? 'text-primary' : ''}`}
+                      title="Emoji Picker"
+                    >
+                      <Smile size={20} />
+                    </button>
+
+                    {showEmojiPicker && (
+                      <div className="absolute bottom-full mb-4 right-0 z-50">
+                        <div className="fixed inset-0" onClick={() => setShowEmojiPicker(false)} />
+                        <div className="relative">
+                          <EmojiPicker
+                            theme={document.documentElement.classList.contains('dark') ? Theme.DARK : Theme.LIGHT}
+                            onEmojiClick={(emojiData) => {
+                              setNewMessage(prev => prev + emojiData.emoji);
+                              setShowEmojiPicker(false);
+                            }}
+                          />
+                        </div>
                       </div>
                     )}
-                  </AnimatePresence>
-                </div>
+                  </div>
 
-                <div className="relative">
-                  <button 
-                    type="button" 
-                    onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-                    className={`text-black/30 dark:text-white/30 hover:text-primary transition-colors ${showEmojiPicker ? 'text-primary' : ''}`}
-                    title="Emoji Picker"
+                  <div className="flex-1 relative">
+                    <input
+                      type="text"
+                      ref={inputRef}
+                      value={newMessage}
+                      onChange={(e) => setNewMessage(e.target.value)}
+                      placeholder={isNewRequestChat ? 'Write your message request...' : 'Start a new message'}
+                      className="w-full bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-primary outline-none transition-all text-black dark:text-white placeholder:text-black/40 dark:placeholder:text-white/40"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={!newMessage.trim()}
+                    className="w-10 h-10 bg-gradient-to-r from-cyan-500 to-blue-500 text-white rounded-full flex items-center justify-center disabled:opacity-50 hover:scale-105 active:scale-95 transition-all shadow-lg shadow-cyan-500/25"
                   >
-                    <Smile size={20} />
+                    <Send size={18} />
                   </button>
-
-                  {showEmojiPicker && (
-                    <div className="absolute bottom-full mb-4 right-0 z-50">
-                      <div className="fixed inset-0" onClick={() => setShowEmojiPicker(false)} />
-                      <div className="relative">
-                        <EmojiPicker 
-                          theme={document.documentElement.classList.contains('dark') ? Theme.DARK : Theme.LIGHT}
-                          onEmojiClick={(emojiData) => {
-                            setNewMessage(prev => prev + emojiData.emoji);
-                            setShowEmojiPicker(false);
-                          }}
-                        />
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                <div className="flex-1 relative">
-                  <input 
-                    type="text" 
-                    ref={inputRef}
-                    value={newMessage}
-                    onChange={(e) => setNewMessage(e.target.value)}
-                    placeholder={isNewRequestChat ? 'Write your message request...' : 'Start a new message'}
-                    className="w-full bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-primary outline-none transition-all text-black dark:text-white placeholder:text-black/40 dark:placeholder:text-white/40"
-                  />
-                </div>
-                <button 
-                  type="submit"
-                  disabled={!newMessage.trim()}
-                  className="w-10 h-10 bg-gradient-to-r from-cyan-500 to-blue-500 text-white rounded-full flex items-center justify-center disabled:opacity-50 hover:scale-105 active:scale-95 transition-all shadow-lg shadow-cyan-500/25"
-                >
-                  <Send size={18} />
-                </button>
-              </form>
-            </div>
+                </form>
+              </div>
             ) : null}
           </>
         ) : (

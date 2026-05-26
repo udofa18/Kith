@@ -67,7 +67,7 @@ export default function SocialFeed() {
 
   useEffect(() => {
     // Fetch joined community IDs - Real-time is still good for membership
-    let unsubscribeMembers = () => {};
+    let unsubscribeMembers = () => { };
     if (auth.currentUser) {
       setIsJoinedLoaded(false);
       setJoinedCommunityIds(new Set());
@@ -94,18 +94,18 @@ export default function SocialFeed() {
 
   useEffect(() => {
     const inviteCode = searchParams.get('invite');
-    if (inviteCode && isJoinedLoaded) { 
+    if (inviteCode && isJoinedLoaded) {
       const handleInvite = async () => {
         setCheckingInvite(true);
         setActiveInviteCode(inviteCode);
         try {
           const q = query(collection(db, 'communityInvites'), where('code', '==', inviteCode));
           const snap = await getDocs(q);
-          
+
           if (!snap.empty) {
             const inviteData = snap.docs[0].data();
             const cid = inviteData.communityId;
-            
+
             // Check if user is already a member
             if (auth.currentUser && joinedCommunityIds.has(cid)) {
               // Direct to community
@@ -140,7 +140,7 @@ export default function SocialFeed() {
           setCheckingInvite(false);
         }
       };
-      
+
       handleInvite();
     }
   }, [searchParams, joinedCommunityIds, auth.currentUser, isJoinedLoaded]);
@@ -183,9 +183,9 @@ export default function SocialFeed() {
 
   useEffect(() => {
     if (['messages', 'notifications', 'communities', 'community'].includes(feedType)) return;
-    
+
     let unsub: any = null;
-    
+
     const fetchFeed = async () => {
       setLoading(true);
       try {
@@ -202,7 +202,7 @@ export default function SocialFeed() {
           setLoading(false);
           return;
         }
-        
+
         // Fallback to basic Firestore query for search/following etc
         setRankedPosts([]);
         setPosts([]);
@@ -217,10 +217,10 @@ export default function SocialFeed() {
         if (search || hashtag) {
           q = query(postsRef, where('visibility', '==', 'public'), orderBy('createdAt', 'desc'), limit(15));
         } else if (feedType === 'following') {
-           // In real app, query based on followed ids. For preview, just show newest.
-           q = query(postsRef, where('visibility', '==', 'public'), orderBy('createdAt', 'desc'), limit(10));
+          // In real app, query based on followed ids. For preview, just show newest.
+          q = query(postsRef, where('visibility', '==', 'public'), orderBy('createdAt', 'desc'), limit(10));
         } else {
-           q = query(postsRef, where('visibility', '==', 'public'), orderBy('createdAt', 'desc'), limit(10));
+          q = query(postsRef, where('visibility', '==', 'public'), orderBy('createdAt', 'desc'), limit(10));
         }
 
         unsub = onSnapshot(q, (snapshot) => {
@@ -232,10 +232,10 @@ export default function SocialFeed() {
           }
 
           let fetchedPosts = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() as any }));
-          
+
           if (hashtag) {
             const tag = hashtag.toLowerCase().replace('#', '');
-            fetchedPosts = fetchedPosts.filter((post: any) => 
+            fetchedPosts = fetchedPosts.filter((post: any) =>
               post.hashtags && post.hashtags.some((h: string) => h.toLowerCase().replace('#', '') === tag)
             );
           }
@@ -265,7 +265,7 @@ export default function SocialFeed() {
 
   const fetchMorePosts = async () => {
     if (!lastVisible || !hasMore || loadingMore) return;
-    
+
     setLoadingMore(true);
     const postsRef = collection(db, 'posts');
     const search = searchParams.get('search');
@@ -273,9 +273,9 @@ export default function SocialFeed() {
 
     let q;
     if (search || hashtag) {
-       q = query(postsRef, where('visibility', '==', 'public'), orderBy('createdAt', 'desc'), startAfter(lastVisible), limit(15));
+      q = query(postsRef, where('visibility', '==', 'public'), orderBy('createdAt', 'desc'), startAfter(lastVisible), limit(15));
     } else {
-       q = feedType === 'following' 
+      q = feedType === 'following'
         ? query(postsRef, where('visibility', '==', 'public'), where('communityId', '==', null), orderBy('createdAt', 'desc'), startAfter(lastVisible), limit(10))
         : query(postsRef, where('visibility', '==', 'public'), where('communityId', '==', null), orderBy('likesCount', 'desc'), startAfter(lastVisible), limit(10));
     }
@@ -288,17 +288,17 @@ export default function SocialFeed() {
       }
 
       let fetchedPosts = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() as any }));
-      
+
       // Filter logic
       if (hashtag) {
         const tag = hashtag.toLowerCase().replace('#', '');
-        fetchedPosts = fetchedPosts.filter((post: any) => 
+        fetchedPosts = fetchedPosts.filter((post: any) =>
           post.hashtags && post.hashtags.some((h: string) => h.toLowerCase().replace('#', '') === tag)
         );
       } else if (search) {
         const queryStr = search.toLowerCase();
-        fetchedPosts = fetchedPosts.filter((post: any) => 
-          post.content.toLowerCase().includes(queryStr) || 
+        fetchedPosts = fetchedPosts.filter((post: any) =>
+          post.content.toLowerCase().includes(queryStr) ||
           post.authorName.toLowerCase().includes(queryStr)
         );
       }
@@ -337,12 +337,12 @@ export default function SocialFeed() {
         )}
 
         {/* Main Feed Content */}
-          <main className={`w-full ${feedType === 'messages' || feedType === 'community' ? 'pt-0 h-full overflow-hidden' : 'pt-4'} order-2 flex-1 ${(feedType === 'messages' || feedType === 'community' || feedType === 'notifications') ? 'max-w-full' : 'max-w-[640px]'}`}>
+        <main className={`w-full ${feedType === 'messages' || feedType === 'community' ? 'pt-0 h-full overflow-hidden' : 'pt-4'} order-2 flex-1 ${(feedType === 'messages' || feedType === 'community' || feedType === 'notifications') ? 'max-w-full' : 'max-w-[640px]'}`}>
           {feedType === 'search' && (
             <div className="bg-transparent border-b border-black/10 dark:border-white/10 p-6">
               <h2 className="text-xl font-black flex items-center gap-2 text-black dark:text-white uppercase tracking-tight">
-                <SearchIcon className="text-primary" size={24} /> 
-                {searchParams.get('hashtag') 
+                <SearchIcon className="text-primary" size={24} />
+                {searchParams.get('hashtag')
                   ? `Tag: ${searchParams.get('hashtag')}`
                   : `Search: ${searchParams.get('search')}`
                 }
@@ -362,8 +362,8 @@ export default function SocialFeed() {
             <CommunityView communityId={searchParams.get('id') || ''} />
           ) : (
             <div className="space-y-0">
-               {/* Feed Selector Tabs */}
-               <div className="flex items-center gap-6 px-6 py-4 border-b border-black/10 dark:border-white/10 overflow-x-auto no-scrollbar bg-white/50 dark:bg-black/50 backdrop-blur-sm sticky top-0 z-20">
+              {/* Feed Selector Tabs */}
+              <div className="flex items-center gap-6 px-6 py-4 border-b border-black/10 dark:border-white/10 overflow-x-auto no-scrollbar bg-white/50 dark:bg-black/50 backdrop-blur-sm sticky top-0 z-20">
                 {[
                   { id: 'foryou', label: 'For You', icon: Globe },
                   { id: 'following', label: 'Following', icon: Users },
@@ -372,11 +372,10 @@ export default function SocialFeed() {
                   <button
                     key={tab.id}
                     onClick={() => setSearchParams({ view: tab.id })}
-                    className={`flex items-center gap-2 pb-2 border-b-2 transition-all whitespace-nowrap ${
-                      feedType === tab.id 
-                        ? 'border-primary text-black dark:text-white font-black' 
+                    className={`flex items-center gap-2 pb-2 border-b-2 transition-all whitespace-nowrap ${feedType === tab.id
+                        ? 'border-primary text-black dark:text-white font-black'
                         : 'border-transparent text-black/40 dark:text-white/40 font-bold hover:text-black dark:hover:text-white'
-                    }`}
+                      }`}
                   >
                     <tab.icon size={14} />
                     <span className="text-[11px] uppercase tracking-[0.2em]">{tab.label}</span>
@@ -397,8 +396,8 @@ export default function SocialFeed() {
 
               {['foryou', 'following', 'trending'].includes(feedType) && !searchParams.get('search') && (
                 auth.currentUser ? (
-                  <PostEditor 
-                    quotedPostId={searchParams.get('quote')} 
+                  <PostEditor
+                    quotedPostId={searchParams.get('quote')}
                     onCancelQuote={() => {
                       setSearchParams(prev => {
                         const p = new URLSearchParams(prev);
@@ -423,8 +422,8 @@ export default function SocialFeed() {
                       <h3 className="text-2xl font-black text-black dark:text-white uppercase">Join the Conversation</h3>
                       <p className="text-sm text-black/50 dark:text-white/50 mt-2 max-w-sm mx-auto">Sign in to share your thoughts, projects, and connect with other creators.</p>
                     </div>
-                    <Link 
-                      to="/login" 
+                    <Link
+                      to="/login"
                       state={{ from: { pathname: '/feed' } }}
                       className="inline-block bg-black dark:bg-white text-white dark:text-black font-black px-10 py-4 transition-all text-xs uppercase tracking-[0.2em] border border-transparent hover:bg-primary dark:hover:bg-primary hover:text-white"
                     >
@@ -433,7 +432,7 @@ export default function SocialFeed() {
                   </div>
                 )
               )}
-              
+
               {/* Trending Section Featured in Feed */}
               {feedType === 'foryou' && (
                 <div className="bg-transparent p-6 overflow-hidden relative group border-b border-black/10 dark:border-white/10">
@@ -447,7 +446,7 @@ export default function SocialFeed() {
                         <p className="text-[10px] text-black/50 dark:text-white/50">Explore community buzz</p>
                       </div>
                     </div>
-                    <button 
+                    <button
                       onClick={() => setSearchParams({ view: 'trending' })}
                       className="text-[10px] font-black text-white uppercase tracking-widest bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 px-5 py-2.5 rounded-full transition-all duration-300 shadow-md shadow-purple-500/15 hover:scale-105 active:scale-95 cursor-pointer"
                     >
@@ -465,18 +464,18 @@ export default function SocialFeed() {
                 </div>
               ) : (
                 <div className="space-y-0">
-                      {/* Ranked Posts */}
-                      {(feedType === 'foryou' || feedType === 'trending') && rankedPosts.map((item) => (
-                        <div key={`${item.type}-${item.id}`}>
-                          {item.reason && (
-                            <div className="px-6 pt-4 flex items-center gap-1.5">
-                               <Zap size={10} className="text-primary/70" />
-                               <span className="text-[11px] font-medium text-black/40 dark:text-white/40 tracking-tight">{item.reason}</span>
-                            </div>
-                          )}
-                          <PostCard post={item.data} isDetailView={false} />
+                  {/* Ranked Posts */}
+                  {(feedType === 'foryou' || feedType === 'trending') && rankedPosts.map((item) => (
+                    <div key={`${item.type}-${item.id}`}>
+                      {item.reason && (
+                        <div className="px-6 pt-4 flex items-center gap-1.5">
+                          <Zap size={10} className="text-primary/70" />
+                          <span className="text-[11px] font-medium text-black/40 dark:text-white/40 tracking-tight">{item.reason}</span>
                         </div>
-                      ))}
+                      )}
+                      <PostCard post={item.data} isDetailView={false} />
+                    </div>
+                  ))}
 
                   {/* Regular Posts (new/following/search) */}
                   {['new', 'following', 'search'].includes(feedType) && posts.map((post, index) => (
@@ -484,7 +483,7 @@ export default function SocialFeed() {
                       <PostCard post={post} isDetailView={false} />
                     </div>
                   ))}
-                  
+
                   {loadingMore && (
                     <div className="flex justify-center py-12 border-t border-black/10 dark:border-white/10">
                       <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-purple-600 via-indigo-500 to-fuchsia-500 p-0.5 animate-spin">
@@ -517,12 +516,12 @@ export default function SocialFeed() {
           <SocialRightSidebar />
         )}
       </div>
-      <CommunityDetailsModal 
-        isOpen={!!selectedCommunityId} 
+      <CommunityDetailsModal
+        isOpen={!!selectedCommunityId}
         onClose={() => {
           setSelectedCommunityId(null);
           setActiveInviteCode(null);
-        }} 
+        }}
         communityId={selectedCommunityId || ''}
         inviteCode={activeInviteCode || undefined}
         onJoinSuccess={() => {
