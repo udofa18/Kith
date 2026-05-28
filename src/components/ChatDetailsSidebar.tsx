@@ -104,7 +104,7 @@ export default function ChatDetailsSidebar({
         </button>
       </motion.div>
 
-      <div className="flex-1 overflow-y-auto scrollbar-thin p-4 space-y-5">
+      <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-5">
         {/* Profile */}
         <div className="text-center space-y-3">
           <div className="w-20 h-20 mx-auto rounded-2xl overflow-hidden ring-2 ring-cyan-500/20 shadow-lg shadow-cyan-500/10">

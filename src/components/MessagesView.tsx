@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { auth, db, handleFirestoreError, OperationType } from '../firebase';
-import { collection, query, where, orderBy, onSnapshot, serverTimestamp, doc, updateDoc, getDoc, setDoc, limit, increment, writeBatch, arrayUnion, arrayRemove } from 'firebase/firestore';
+import { collection, query, where, orderBy, onSnapshot, serverTimestamp, doc, updateDoc, getDoc, setDoc, limit, increment, writeBatch, arrayUnion, arrayRemove, deleteDoc } from 'firebase/firestore';
 import { motion, AnimatePresence } from 'motion/react';
-import { Send, Search, MoreVertical, Phone, Video, Info, Check, CheckCheck, Smile, Zap, Reply, Gift, Paperclip, ArrowUpRight, ArrowDownLeft, PhoneOff, MessageSquare, Mail, Star, UserPlus, X, CheckCircle2 } from 'lucide-react';
+import { Send, Search, MoreVertical, Phone, Video, Info, Check, CheckCheck, Smile, Zap, Reply, Gift, Paperclip, ArrowUpRight, ArrowDownLeft, PhoneOff, MessageSquare, Mail, Star, UserPlus, X, CheckCircle2, Trash2, Edit2, ExternalLink } from 'lucide-react';
 import { formatDistanceToNow, isToday, isYesterday, format, isSameDay } from 'date-fns';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
 import { createNotification } from '../lib/notifications';
@@ -47,6 +47,8 @@ interface Message {
     senderId: string;
     content: string;
   };
+  reactions?: Record<string, { count: number; uids: string[] }>;
+  isEdited?: boolean;
 }
 
 interface Conversation extends ConversationData { }
@@ -62,6 +64,13 @@ const MESSAGE_CATEGORIES: {
     { id: 'favourites', label: 'Favourites', icon: Star, gradient: 'from-amber-400 to-orange-500' },
     { id: 'requests', label: 'Requests', icon: UserPlus, gradient: 'from-pink-400 to-rose-500' },
   ];
+
+const REACTION_EMOJIS = [
+  { emoji: '👍', label: 'Like' },
+  { emoji: '❤️', label: 'Love' },
+  { emoji: '🔥', label: 'Fire' },
+  { emoji: '🎉', label: 'Celebrate' },
+];
 
 export default function MessagesView() {
   const [searchParams] = useSearchParams();
@@ -80,6 +89,10 @@ export default function MessagesView() {
   const [searchQuery, setSearchQuery] = useState('');
   const [convExistsInFirestore, setConvExistsInFirestore] = useState(false);
   const [showChatDetails, setShowChatDetails] = useState(false);
+  const [showReactionMenu, setShowReactionMenu] = useState<string | null>(null);
+  const [activeMessageMenu, setActiveMessageMenu] = useState<string | null>(null);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editContent, setEditContent] = useState('');
   const { initiateCall } = useCall();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -522,6 +535,57 @@ export default function MessagesView() {
     }
   };
 
+  const handleAddReaction = async (messageId: string, emoji: string) => {
+    if (!auth.currentUser || !selectedConv) return;
+    try {
+      const messageRef = doc(db, 'conversations', selectedConv.id, 'messages', messageId);
+      const msg = messages.find(m => m.id === messageId);
+      const reactions = msg?.reactions || {};
+      const emojiData = reactions[emoji] || { count: 0, uids: [] };
+      
+      const hasReacted = emojiData.uids.includes(auth.currentUser.uid);
+      
+      if (hasReacted) {
+        emojiData.count = Math.max(0, emojiData.count - 1);
+        emojiData.uids = emojiData.uids.filter((id: string) => id !== auth.currentUser?.uid);
+      } else {
+        emojiData.count += 1;
+        emojiData.uids.push(auth.currentUser.uid);
+      }
+
+      await updateDoc(messageRef, {
+        [`reactions.${emoji}`]: emojiData
+      });
+      setShowReactionMenu(null);
+    } catch (error) {
+      console.error("Reaction error:", error);
+    }
+  };
+
+  const handleEditMessage = async (messageId: string) => {
+    if (!auth.currentUser || !selectedConv || !editContent.trim()) return;
+    try {
+      const messageRef = doc(db, 'conversations', selectedConv.id, 'messages', messageId);
+      await updateDoc(messageRef, {
+        content: editContent.trim(),
+        isEdited: true
+      });
+      setEditingMessageId(null);
+    } catch (error) {
+      console.error("Error editing message:", error);
+    }
+  };
+
+  const handleDeleteMessage = async (messageId: string) => {
+    if (!auth.currentUser || !selectedConv) return;
+    try {
+      const messageRef = doc(db, 'conversations', selectedConv.id, 'messages', messageId);
+      await deleteDoc(messageRef);
+    } catch (error) {
+      console.error("Error deleting message:", error);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-[600px]">
@@ -584,7 +648,7 @@ export default function MessagesView() {
           <motion.div
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
-            className="flex gap-2 overflow-x-auto pb-3 scrollbar-thin -mx-1 px-1"
+            className="flex gap-2 overflow-x-auto pb-3 custom-scrollbar -mx-1 px-1"
           >
             {MESSAGE_CATEGORIES.map(({ id, label, icon: Icon, gradient }) => {
               const count = categoryCounts[id];
@@ -622,7 +686,7 @@ export default function MessagesView() {
             />
           </div>
         </motion.div>
-        <div className="flex-1 overflow-y-auto scrollbar-thin text-black dark:text-white">
+        <div className="flex-1 overflow-y-auto custom-scrollbar text-black dark:text-white">
           {filteredConversations.map(conv => {
             const isRequest = auth.currentUser && isIncomingRequest(conv, auth.currentUser.uid);
             const isPending = auth.currentUser && isOutgoingRequest(conv, auth.currentUser.uid);
@@ -791,7 +855,7 @@ export default function MessagesView() {
             </div>
 
             {/* Messages Area */}
-            <div className="flex-1 overflow-y-auto p-6 pt-24 space-y-4 scrollbar-thin overflow-x-hidden">
+            <div className="flex-1 overflow-y-auto p-6 pt-24 space-y-4 custom-scrollbar overflow-x-hidden">
               {messages.map((msg, i) => {
                 const isMe = msg.senderId === auth.currentUser?.uid;
                 const prevMsg = i > 0 ? messages[i - 1] : null;
@@ -823,8 +887,31 @@ export default function MessagesView() {
                         <div className={`p-4 rounded-4xl text-[15px] ${isMe
                             ? 'bg-primary/60  text-white rounded-tr-none shadow-lg shadow-primary/20'
                             : 'bg-black/10 dark:bg-white/10 text-black dark:text-white rounded-tl-none border border-black/5 dark:border-white/5'
-                          } ${isSoloEmoji(msg.content) ? 'bg-transparent !p-0 shadow-none border-none' : ''}`}>
-                          {msg.type === 'gift' ? (
+                          } ${isSoloEmoji(msg.content) && editingMessageId !== msg.id ? 'bg-transparent !p-0 shadow-none border-none' : ''}`}>
+                          {editingMessageId === msg.id ? (
+                            <div className="flex flex-col gap-2 min-w-[200px]">
+                              <textarea
+                                value={editContent}
+                                onChange={(e) => setEditContent(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter' && !e.shiftKey) {
+                                    e.preventDefault();
+                                    handleEditMessage(msg.id);
+                                  } else if (e.key === 'Escape') {
+                                    setEditingMessageId(null);
+                                  }
+                                }}
+                                className="w-full bg-black/10 dark:bg-white/10 border border-black/10 dark:border-white/20 rounded-xl p-2 text-sm outline-none focus:border-white/50 text-white resize-none"
+                                rows={2}
+                                autoFocus
+                              />
+                              <div className="flex justify-between items-center text-[10px] text-white/80">
+                                <span>esc <button type="button" onClick={() => setEditingMessageId(null)} className="underline hover:text-white">cancel</button></span>
+                                <span>•</span>
+                                <span>enter <button type="button" onClick={() => handleEditMessage(msg.id)} className="underline hover:text-white">save</button></span>
+                              </div>
+                            </div>
+                          ) : msg.type === 'gift' ? (
                             <div className="flex items-center gap-3 py-2 px-4 bg-gradient-to-r from-yellow-500/20 to-orange-500/20 rounded-xl border border-yellow-500/30">
                               <div className="w-10 h-10 rounded-full bg-yellow-500 flex items-center justify-center shadow-lg shadow-yellow-500/20">
                                 <Gift className="text-white" size={20} />
@@ -907,41 +994,159 @@ export default function MessagesView() {
                             const parts = msg.content.split(urlRegex);
 
                             return (
-                              <span>
-                                {parts.map((part, index) => {
-                                  if (part.match(urlRegex)) {
-                                    return (
-                                      <a
-                                        key={index}
-                                        href={part}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className={isMe ? "text-white underline font-medium" : "text-violet-600 dark:text-violet-400 hover:underline transition-colors font-medium underline decoration-violet-500/30 underline-offset-2"}
-                                        onClick={(e) => e.stopPropagation()}
-                                      >
-                                        {part}
-                                      </a>
-                                    );
-                                  }
-                                  return <AnimatedEmojiRenderer key={index} content={part} />;
-                                })}
-                              </span>
-                            );
+                               <div>
+                                 <span>
+                                   {parts.map((part, index) => {
+                                     if (part.match(urlRegex)) {
+                                       return (
+                                         <a
+                                           key={index}
+                                           href={part}
+                                           target="_blank"
+                                           rel="noopener noreferrer"
+                                           className={isMe ? "text-white underline font-medium" : "text-violet-600 dark:text-violet-400 hover:underline transition-colors font-medium underline decoration-violet-500/30 underline-offset-2"}
+                                           onClick={(e) => e.stopPropagation()}
+                                         >
+                                           {part}
+                                         </a>
+                                       );
+                                     }
+                                     return <AnimatedEmojiRenderer key={index} content={part} />;
+                                   })}
+                                 </span>
+                                 <MessageLinkPreview content={msg.content} isMe={isMe} />
+                               </div>
+                             );
                           })()}
                         </div>
 
-                        {/* Reply Action Area */}
-                        <button
-                          onClick={() => {
-                            setReplyTo(msg);
-                            inputRef.current?.focus();
-                          }}
-                          className={`absolute ${isMe ? '-left-10' : '-right-10'} top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-2 text-black/40 dark:text-white/40 hover:text-primary transition-all`}
-                        >
-                          <Reply size={16} />
-                        </button>
+                        {/* Reactions Display */}
+                        {msg.reactions && Object.keys(msg.reactions).length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-1 justify-start">
+                            {Object.entries(msg.reactions).map(([emoji, data]: [string, any]) => {
+                              if (data.count === 0) return null;
+                              const hasReacted = data.uids.includes(auth.currentUser?.uid);
+                              return (
+                                <motion.button
+                                  key={emoji}
+                                  whileTap={{ scale: 0.9 }}
+                                  onClick={() => handleAddReaction(msg.id, emoji)}
+                                  className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold border transition-all ${
+                                    hasReacted 
+                                      ? 'bg-primary/20 border-primary/40 text-primary' 
+                                      : 'bg-black/5 border-black/10 text-black/60 dark:bg-white/5 dark:border-white/10 dark:text-white/60 hover:border-black/20 dark:hover:border-white/20'
+                                  }`}
+                                >
+                                  <span>{emoji}</span>
+                                  <span className="text-[10px]">{data.count}</span>
+                                </motion.button>
+                              );
+                            })}
+                          </div>
+                        )}
 
-                        <div className={`flex items-center gap-1 mt-1 ${isMe ? 'justify-end' : 'justify-start'}`}>
+                        {/* Message Actions Toolkit */}
+                        <div className={`absolute -top-9 ${isMe ? 'right-2' : 'left-2'} opacity-0 group-hover:opacity-100 transition-all flex items-center bg-white dark:bg-[#1A1F2C] border border-black/10 dark:border-white/10 rounded-xl shadow-lg z-10 overflow-visible py-0.5 px-1`}>
+                          
+                          {/* Reactions Button & Submenu */}
+                          <div className="relative">
+                            <button 
+                              onClick={() => setShowReactionMenu(showReactionMenu === msg.id ? null : msg.id)}
+                              className="p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/5 text-black/40 dark:text-white/40 hover:text-black dark:hover:text-white transition-all"
+                              title="Add Reaction"
+                            >
+                              <Smile size={15} />
+                            </button>
+                            
+                            <AnimatePresence>
+                              {showReactionMenu === msg.id && (
+                                <>
+                                  <div className="fixed inset-0 z-40" onClick={() => setShowReactionMenu(null)} />
+                                  <motion.div
+                                    initial={{ opacity: 0, scale: 0.9, y: 10 }}
+                                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                                    exit={{ opacity: 0, scale: 0.9, y: 10 }}
+                                    className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 flex items-center gap-1 bg-white dark:bg-[#1A1F2C] border border-black/10 dark:border-white/10 p-1 rounded-full shadow-2xl z-50 whitespace-nowrap"
+                                  >
+                                    {REACTION_EMOJIS.map((r) => (
+                                      <button
+                                        key={r.emoji}
+                                        onClick={() => handleAddReaction(msg.id, r.emoji)}
+                                        className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-black/5 dark:hover:bg-white/5 transition-all hover:scale-125 text-lg"
+                                        title={r.label}
+                                      >
+                                        {r.emoji}
+                                      </button>
+                                    ))}
+                                  </motion.div>
+                                </>
+                              )}
+                            </AnimatePresence>
+                          </div>
+
+                          {/* Reply Button */}
+                          <button 
+                            onClick={() => {
+                              setReplyTo(msg);
+                              setShowReactionMenu(null);
+                              inputRef.current?.focus();
+                            }}
+                            className="p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/5 text-black/40 dark:text-white/40 hover:text-black dark:hover:text-white transition-all"
+                            title="Reply"
+                          >
+                            <Reply size={15} />
+                          </button>
+
+                          {/* Gift XP Button (only for other user's messages) */}
+                          {!isMe && isConversationAccepted(selectedConv) && (
+                            <button 
+                              onClick={() => {
+                                handleGiftXP(100);
+                                setShowReactionMenu(null);
+                              }}
+                              className="p-1.5 rounded-lg hover:bg-yellow-500/10 text-black/40 dark:text-white/40 hover:text-yellow-500 transition-all"
+                              title="Quick Gift 100 XP"
+                            >
+                              <Gift size={15} />
+                            </button>
+                          )}
+
+                          {/* Edit Button (only for my text messages) */}
+                          {isMe && (!msg.type || msg.type === 'text') && (
+                            <button 
+                              onClick={() => {
+                                setEditingMessageId(msg.id);
+                                setEditContent(msg.content);
+                                setShowReactionMenu(null);
+                              }}
+                              className="p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/5 text-black/40 dark:text-white/40 hover:text-black dark:hover:text-white transition-all"
+                              title="Edit"
+                            >
+                              <Edit2 size={15} />
+                            </button>
+                          )}
+
+                          {/* Delete Button (only for my messages) */}
+                          {isMe && (
+                            <button 
+                              onClick={() => {
+                                handleDeleteMessage(msg.id);
+                                setShowReactionMenu(null);
+                              }}
+                              className="p-1.5 rounded-lg hover:bg-rose-500/10 text-black/40 dark:text-white/40 hover:text-rose-500 transition-all"
+                              title="Delete"
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                          )}
+                        </div>
+
+                        <div className={`flex items-center gap-1.5 mt-1 ${isMe ? 'justify-end' : 'justify-start'}`}>
+                          {msg.isEdited && (
+                            <span className="text-[9px] text-black/40 dark:text-white/40 italic">
+                              (edited)
+                            </span>
+                          )}
                           <span className="text-[10px] text-black/20 dark:text-white/20">
                             {(() => {
                               if (!msg.createdAt) return '';
@@ -1094,13 +1299,16 @@ export default function MessagesView() {
                     <AnimatePresence>
                       {showAnimatedPicker && (
                         <div className="absolute bottom-full mb-4 left-0 z-50">
-                          <AnimatedEmojiPicker
-                            onSelect={(emoji) => {
-                              sendMessage(`:animated-${emoji}:`);
-                              setShowAnimatedPicker(false);
-                            }}
-                            onClose={() => setShowAnimatedPicker(false)}
-                          />
+                          <div className="fixed inset-0" onClick={() => setShowAnimatedPicker(false)} />
+                          <div className="relative">
+                            <AnimatedEmojiPicker
+                              onSelect={(emoji) => {
+                                sendMessage(`:animated-${emoji}:`);
+                                setShowAnimatedPicker(false);
+                              }}
+                              onClose={() => setShowAnimatedPicker(false)}
+                            />
+                          </div>
                         </div>
                       )}
                     </AnimatePresence>
@@ -1117,14 +1325,13 @@ export default function MessagesView() {
                     </button>
 
                     {showEmojiPicker && (
-                      <div className="absolute bottom-full mb-4 right-0 z-50">
+                      <div className="absolute bottom-full mb-4 left-0 z-50">
                         <div className="fixed inset-0" onClick={() => setShowEmojiPicker(false)} />
                         <div className="relative">
                           <EmojiPicker
                             theme={document.documentElement.classList.contains('dark') ? Theme.DARK : Theme.LIGHT}
                             onEmojiClick={(emojiData) => {
                               setNewMessage(prev => prev + emojiData.emoji);
-                              setShowEmojiPicker(false);
                             }}
                           />
                         </div>
@@ -1206,5 +1413,71 @@ export default function MessagesView() {
         )}
       </AnimatePresence>
     </div>
+  );
+}
+
+function MessageLinkPreview({ content, isMe }: { content: string; isMe: boolean }) {
+  const [preview, setPreview] = useState<any>(null);
+
+  useEffect(() => {
+    const urlRegex = /(https?:\/\/[^\s]+)/g;
+    const urls = content.match(urlRegex);
+    if (urls && urls.length > 0) {
+      const fetchMetadata = async () => {
+        try {
+          const res = await fetch(`/api/unfurl?url=${encodeURIComponent(urls[0])}`);
+          if (res.ok) {
+            const data = await res.json();
+            setPreview(data);
+          }
+        } catch (e) {
+          console.error('Link preview error:', e);
+        }
+      };
+      fetchMetadata();
+    }
+  }, [content]);
+
+  if (!preview) return null;
+
+  const cardBg = isMe 
+    ? 'bg-black/20 dark:bg-black/30' 
+    : 'bg-black/5 dark:bg-white/5';
+  const cardBorder = isMe 
+    ? 'border-white/10' 
+    : 'border-black/5 dark:border-white/10';
+  const textColor = isMe 
+    ? 'text-white' 
+    : 'text-black dark:text-white';
+  const subTextColor = isMe 
+    ? 'text-white/60' 
+    : 'text-black/50 dark:text-white/40';
+
+  return (
+    <a 
+      href={preview.url} 
+      target="_blank" 
+      rel="noopener noreferrer"
+      className={`mt-2 block rounded-2xl border ${cardBg} ${cardBorder} overflow-hidden transition-all group max-w-sm`}
+    >
+      {preview.image && preview.image.trim() !== '' && (
+        <div className={`w-full aspect-video overflow-hidden border-b ${cardBorder}`}>
+          <img 
+            src={preview.image} 
+            alt={preview.title} 
+            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+            referrerPolicy="no-referrer"
+          />
+        </div>
+      )}
+      <div className="p-3 text-left">
+        <div className="flex items-center gap-1.5 mb-1">
+          <ExternalLink size={10} className={isMe ? 'text-white/40' : 'text-black/30 dark:text-white/30'} />
+          <span className={`text-[8px] uppercase tracking-widest font-bold font-mono ${subTextColor}`}>{preview.siteName || 'Link Preview'}</span>
+        </div>
+        <h4 className={`text-xs font-bold ${textColor} line-clamp-1 group-hover:underline`}>{preview.title}</h4>
+        {preview.description && <p className={`text-[10px] ${subTextColor} mt-1 line-clamp-2 leading-relaxed`}>{preview.description}</p>}
+      </div>
+    </a>
   );
 }

@@ -982,6 +982,8 @@ service cloud.firestore {
         allow create: if isAuthenticated() &&
                       canSendConversationMessage(conversationId) &&
                       isValidNestedMessage(request.resource.data);
+        allow update, delete: if isAuthenticated() &&
+                              request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants;
       }
     }
 
