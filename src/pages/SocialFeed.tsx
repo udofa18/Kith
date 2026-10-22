@@ -329,7 +329,7 @@ export default function SocialFeed() {
   }
 
   return (
-    <div className={`w-full ${(feedType === 'messages' || feedType === 'community') ? 'max-w-full px-0 pb-0 h-full overflow-hidden' : 'max-w-[1500px] px-4 pb-8'} mx-auto text-black dark:text-white relative`}>
+    <div className={`w-full ${(feedType === 'messages' || feedType === 'community') ? 'max-w-full px-0 pb-0 h-full overflow-hidden' : 'max-w-[1200px] px-4 pb-8'} mx-auto text-black dark:text-white relative`}>
       <div className={`flex flex-col lg:flex-row ${(feedType === 'messages' || feedType === 'community') ? 'gap-0 h-full items-stretch overflow-hidden' : 'gap-4 items-start'} justify-center`}>
         {/* Left Sidebar - Stats/Trends/Communities */}
         {((feedType !== 'messages' && feedType !== 'notifications' && feedType !== 'community') || searchParams.get('postId')) && (

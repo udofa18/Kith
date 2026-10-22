@@ -1,0 +1,76 @@
+/**
+ * One-time script: set role: 'authenticated' custom claim on all Firebase users.
+ * Required for Supabase third-party Firebase Auth integration.
+ *
+ * Usage:
+ *   GOOGLE_APPLICATION_CREDENTIALS=path/to/service-account.json \
+ *   npx tsx scripts/set-firebase-role-claim.ts
+ *
+ * Options:
+ *   --dry-run   List users without updating claims
+ */
+
+import admin from 'firebase-admin';
+import firebaseConfig from '../firebase-applet-config.json' assert { type: 'json' };
+
+const dryRun = process.argv.includes('--dry-run');
+
+if (!admin.apps.length) {
+  admin.initializeApp({ projectId: firebaseConfig.projectId });
+}
+
+const auth = admin.auth();
+
+async function setRoleClaimForAllUsers() {
+  let nextPageToken: string | undefined;
+  let updated = 0;
+  let skipped = 0;
+  let errors = 0;
+
+  do {
+    const listResult = await auth.listUsers(1000, nextPageToken);
+
+    for (const user of listResult.users) {
+      const existingRole = user.customClaims?.role;
+
+      if (existingRole === 'authenticated') {
+        skipped++;
+        continue;
+      }
+
+      if (dryRun) {
+        console.log(`[dry-run] Would set claim for ${user.uid} (${user.email})`);
+        updated++;
+        continue;
+      }
+
+      try {
+        await auth.setCustomUserClaims(user.uid, {
+          ...user.customClaims,
+          role: 'authenticated',
+        });
+        console.log(`Set role claim for ${user.uid} (${user.email})`);
+        updated++;
+      } catch (err) {
+        console.error(`Failed for ${user.uid}:`, err);
+        errors++;
+      }
+    }
+
+    nextPageToken = listResult.pageToken;
+  } while (nextPageToken);
+
+  console.log('\nDone.');
+  console.log(`Updated: ${updated}, Skipped (already set): ${skipped}, Errors: ${errors}`);
+
+  if (dryRun) {
+    console.log('Run without --dry-run to apply changes.');
+  } else {
+    console.log('Note: users must re-authenticate or refresh tokens for claims to take effect.');
+  }
+}
+
+setRoleClaimForAllUsers().catch((err) => {
+  console.error('Fatal error:', err);
+  process.exit(1);
+});

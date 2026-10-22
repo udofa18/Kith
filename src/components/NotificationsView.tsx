@@ -1,6 +1,9 @@
 import { useState, useEffect, useMemo } from 'react';
-import { db, auth, handleFirestoreError, OperationType } from '../firebase';
-import { collection, query, where, orderBy, onSnapshot, updateDoc, doc, deleteDoc, writeBatch, serverTimestamp, getDoc } from 'firebase/firestore';
+import { auth, handleFirestoreError, OperationType } from '../firebase';
+import { doc, getDoc } from 'firebase/firestore';
+import { db } from '../firebase';
+import { notificationsRepository } from '../services/db/notificationsRepository';
+import { usersRepository } from '../services/db/usersRepository';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Bell, Heart, MessageSquare, AtSign, Zap, Trophy, Trash2, 
@@ -49,24 +52,21 @@ export default function NotificationsView() {
     if (!auth.currentUser) return;
 
     // Fetch user profile for summary card
-    getDoc(doc(db, 'users', auth.currentUser.uid)).then(snap => {
-      if (snap.exists()) setUserProfile(snap.data());
+    usersRepository.getById(auth.currentUser.uid).then((profile) => {
+      if (profile) setUserProfile(profile);
     });
 
-    const q = query(
-      collection(db, 'notifications'),
-      where('recipientId', '==', auth.currentUser.uid),
-      orderBy('createdAt', 'desc')
+    const unsubscribe = notificationsRepository.subscribe(
+      auth.currentUser.uid,
+      (data) => {
+        setNotifications(data as Notification[]);
+        setLoading(false);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.LIST, 'notifications');
+        setLoading(false);
+      }
     );
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Notification));
-      setNotifications(data);
-      setLoading(false);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'notifications');
-      setLoading(false);
-    });
 
     return () => unsubscribe();
   }, []);
@@ -321,11 +321,7 @@ export default function NotificationsView() {
   const markAsRead = async (ids: string) => {
     const idArray = ids.split(',');
     try {
-      const batch = writeBatch(db);
-      idArray.forEach(id => {
-        batch.update(doc(db, 'notifications', id), { read: true });
-      });
-      await batch.commit();
+      await Promise.all(idArray.map((id) => notificationsRepository.markRead(id)));
     } catch (error) {
       console.error("Error marking as read:", error);
     }
@@ -334,22 +330,16 @@ export default function NotificationsView() {
   const markAllAsRead = async () => {
     const unread = notifications.filter(n => !n.read);
     if (unread.length === 0) return;
-
-    const batch = writeBatch(db);
-    unread.forEach(n => {
-      batch.update(doc(db, 'notifications', n.id), { read: true });
-    });
-    await batch.commit();
+    await notificationsRepository.markAllRead(
+      auth.currentUser!.uid,
+      unread.map(n => n.id)
+    );
   };
 
   const deleteNotifications = async (ids: string) => {
     const idArray = ids.split(',');
     try {
-      const batch = writeBatch(db);
-      idArray.forEach(id => {
-        batch.delete(doc(db, 'notifications', id));
-      });
-      await batch.commit();
+      await Promise.all(idArray.map((id) => notificationsRepository.deleteNotification(id)));
     } catch (error) {
       console.error("Error deleting:", error);
     }

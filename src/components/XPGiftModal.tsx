@@ -1,10 +1,13 @@
 import { useState, useEffect } from 'react';
 import { auth, db } from '../firebase';
-import { doc, getDoc, runTransaction, serverTimestamp, collection, addDoc, increment } from 'firebase/firestore';
-import { motion, AnimatePresence } from 'motion/react';
-import { Gift, X, Zap, AlertCircle } from 'lucide-react';
+import { doc, getDoc, runTransaction, collection, increment } from 'firebase/firestore';
+import { motion } from 'motion/react';
+import { Gift, X, AlertCircle } from 'lucide-react';
 import { createNotification } from '../lib/notifications';
 import { updateDailyStats } from '../lib/stats';
+import { getSupabase } from '../supabase';
+import { usersRepository } from '../services/db/usersRepository';
+import { shouldWriteToSupabase, shouldWriteToFirestore } from '../lib/database-config';
 
 export default function XPGiftModal({ isOpen, onClose, receiverId, receiverName, communityId }: { 
   isOpen: boolean, 
@@ -20,15 +23,78 @@ export default function XPGiftModal({ isOpen, onClose, receiverId, receiverName,
 
   useEffect(() => {
     if (isOpen && auth.currentUser) {
-      const fetchXP = async () => {
-        const userDoc = await getDoc(doc(db, 'users', auth.currentUser!.uid));
-        if (userDoc.exists()) {
-          setUserXPData(userDoc.data());
-        }
-      };
-      fetchXP();
+      usersRepository.getById(auth.currentUser.uid).then(setUserXPData);
     }
   }, [isOpen]);
+
+  const giftViaFirestore = async () => {
+    await runTransaction(db, async (transaction) => {
+      const senderRef = doc(db, 'users', auth.currentUser!.uid);
+      const receiverRef = doc(db, 'users', receiverId);
+      
+      const senderDoc = await transaction.get(senderRef);
+      const receiverDoc = await transaction.get(receiverRef);
+
+      let communityReceiverRef = null;
+      if (communityId) {
+        communityReceiverRef = doc(db, 'communities', communityId, 'members', receiverId);
+      }
+
+      if (!senderDoc.exists() || !receiverDoc.exists()) {
+        throw new Error("User not found");
+      }
+
+      const senderData = senderDoc.data();
+      const now = new Date();
+      const lastResetStr = senderData.lastGiftingReset || now.toISOString();
+      const lastReset = new Date(lastResetStr);
+      
+      let dailyRemaining = senderData.dailyGiftingRemaining !== undefined ? senderData.dailyGiftingRemaining : 100;
+      
+      if (now.toDateString() !== lastReset.toDateString()) {
+        dailyRemaining = 100;
+      }
+
+      if (dailyRemaining < amount) {
+        throw new Error(`Daily limit reached. Remaining: ${dailyRemaining} XP`);
+      }
+
+      if (senderData.xp < amount) {
+        throw new Error("Insufficient XP balance");
+      }
+
+      transaction.update(senderRef, {
+        xp: senderData.xp - amount,
+        dailyGiftingRemaining: dailyRemaining - amount,
+        lastGiftingReset: now.toISOString()
+      });
+
+      transaction.update(receiverRef, {
+        xp: (receiverDoc.data().xp || 0) + amount
+      });
+
+      if (communityId && communityReceiverRef) {
+        transaction.update(communityReceiverRef, { xp: increment(amount) });
+      }
+
+      const transRef = doc(collection(db, 'xpTransactions'));
+      transaction.set(transRef, {
+        senderId: auth.currentUser!.uid,
+        receiverId: receiverId,
+        communityId: communityId || null,
+        amount: amount,
+        timestamp: now.toISOString()
+      });
+    });
+  };
+
+  const giftViaSupabase = async () => {
+    const { error } = await getSupabase().rpc('gift_xp', {
+      p_receiver_id: receiverId,
+      p_amount: amount,
+    });
+    if (error) throw new Error(error.message);
+  };
 
   const handleGift = async () => {
     if (!auth.currentUser || !receiverId) return;
@@ -41,74 +107,17 @@ export default function XPGiftModal({ isOpen, onClose, receiverId, receiverName,
     setError('');
 
     try {
-      await runTransaction(db, async (transaction) => {
-        const senderRef = doc(db, 'users', auth.currentUser!.uid);
-        const receiverRef = doc(db, 'users', receiverId);
-        
-        const senderDoc = await transaction.get(senderRef);
-        const receiverDoc = await transaction.get(receiverRef);
+      const writeFs = shouldWriteToFirestore();
+      const writeSb = shouldWriteToSupabase();
 
-        let communitySenderRef = null;
-        let communityReceiverRef = null;
-        
-        if (communityId) {
-          communitySenderRef = doc(db, 'communities', communityId, 'members', auth.currentUser!.uid);
-          communityReceiverRef = doc(db, 'communities', communityId, 'members', receiverId);
-        }
+      if (writeFs && writeSb) {
+        await Promise.all([giftViaFirestore(), giftViaSupabase()]);
+      } else if (writeSb) {
+        await giftViaSupabase();
+      } else {
+        await giftViaFirestore();
+      }
 
-        if (!senderDoc.exists() || !receiverDoc.exists()) {
-          throw new Error("User not found");
-        }
-
-        const senderData = senderDoc.data();
-        const now = new Date();
-        const lastResetStr = senderData.lastGiftingReset || now.toISOString();
-        const lastReset = new Date(lastResetStr);
-        
-        let dailyRemaining = senderData.dailyGiftingRemaining !== undefined ? senderData.dailyGiftingRemaining : 100;
-        
-        if (now.toDateString() !== lastReset.toDateString()) {
-          dailyRemaining = 100;
-        }
-
-        if (dailyRemaining < amount) {
-          throw new Error(`Daily limit reached. Remaining: ${dailyRemaining} XP`);
-        }
-
-        if (senderData.xp < amount) {
-          throw new Error("Insufficient XP balance");
-        }
-
-        // Update sender (Global)
-        transaction.update(senderRef, {
-          xp: senderData.xp - amount,
-          dailyGiftingRemaining: dailyRemaining - amount,
-          lastGiftingReset: now.toISOString()
-        });
-
-        // Update receiver (Global)
-        transaction.update(receiverRef, {
-          xp: (receiverDoc.data().xp || 0) + amount
-        });
-
-        // Update Community XP if applicable
-        if (communityId && communitySenderRef && communityReceiverRef) {
-          transaction.update(communityReceiverRef, { xp: increment(amount) });
-          // Optionally decrement sender community XP too, though gifting is usually altruistic
-        }
-
-        // Log transaction
-        const transRef = doc(collection(db, 'xpTransactions'));
-        transaction.set(transRef, {
-          senderId: auth.currentUser!.uid,
-          receiverId: receiverId,
-          communityId: communityId || null,
-          amount: amount,
-          timestamp: now.toISOString()
-        });
-      });
-
-      // Trigger notification
       await createNotification({
         recipientId: receiverId,
         senderId: auth.currentUser.uid,

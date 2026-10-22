@@ -8,12 +8,16 @@ import {
   doc, 
   getDoc,
   Timestamp,
-  startAfter,
-  DocumentSnapshot,
   Firestore
 } from 'firebase/firestore';
 import { db, auth } from '../firebase';
-import { calculateFeedScore, RankingSignals, RankingWeights } from './rankingEngine';
+import { getSupabase } from '../supabase';
+import { calculateFeedScore, RankingSignals } from './rankingEngine';
+import { contentRepository } from './db/postsRepository';
+import { usersRepository } from './db/usersRepository';
+import { dualRead } from './db/utils';
+import { supabasePostToApp } from '../lib/db-mappers';
+import { shouldReadCollectionFromSupabase } from '../lib/database-config';
 
 export type ContentType = 'post' | 'article' | 'challenge' | 'event' | 'product' | 'job' | 'liveStream' | 'poll';
 
@@ -45,31 +49,117 @@ export class FeedService {
 
   async getUserInterests(userId: string): Promise<UserInterests | null> {
     if (!userId || userId === 'anonymous') return null;
-    try {
-      const docRef = doc(this.firestore, 'userInterests', userId);
-      const snap = await getDoc(docRef);
-      return snap.exists() ? snap.data() as UserInterests : null;
-    } catch {
-      return null;
-    }
+
+    return dualRead(
+      async () => {
+        const snap = await getDoc(doc(this.firestore, 'userInterests', userId));
+        return snap.exists() ? snap.data() as UserInterests : null;
+      },
+      async () => {
+        const { data, error } = await getSupabase()
+          .from('user_interests')
+          .select('*')
+          .eq('user_id', userId)
+          .maybeSingle();
+        if (error) throw error;
+        if (!data) return null;
+        return {
+          categories: data.categories || [],
+          skills: data.skills || [],
+          hashtags: data.hashtags || [],
+          followedTopics: data.followed_topics || [],
+        };
+      },
+      'user_interests'
+    );
   }
 
   async getUserEngagementProfile(userId: string): Promise<UserEngagementProfile | null> {
     if (!userId || userId === 'anonymous') return null;
-    try {
-      const docRef = doc(this.firestore, 'userEngagementProfiles', userId);
-      const snap = await getDoc(docRef);
-      return snap.exists() ? snap.data() as UserEngagementProfile : null;
-    } catch {
-      return null;
+
+    return dualRead(
+      async () => {
+        const snap = await getDoc(doc(this.firestore, 'userEngagementProfiles', userId));
+        return snap.exists() ? snap.data() as UserEngagementProfile : null;
+      },
+      async () => {
+        const { data, error } = await getSupabase()
+          .from('user_engagement_profiles')
+          .select('*')
+          .eq('user_id', userId)
+          .maybeSingle();
+        if (error) throw error;
+        if (!data) return null;
+        return {
+          likedTags: (data.liked_tags as Record<string, number>) || {},
+          bookmarkedTags: (data.bookmarked_tags as Record<string, number>) || {},
+          purchasedCategories: data.purchased_categories || [],
+          joinedCommunities: data.joined_communities || [],
+          interactionHistory: (data.interaction_history as UserEngagementProfile['interactionHistory']) || [],
+        };
+      },
+      'user_engagement_profiles'
+    );
+  }
+
+  private normalizeCandidate(id: string, type: ContentType, data: any): FeedItem {
+    return {
+      id,
+      type,
+      data: {
+        id,
+        ...data,
+        authorUid: data.authorUid || data.author_uid || data.creatorUid || data.creator_uid || data.hostId || data.host_id,
+        authorName: data.authorName || data.author_name || data.creatorName || data.company || 'Anonymous',
+        authorPhoto: data.authorPhoto || data.author_photo || data.creatorPhoto || '',
+        content: data.content || data.description || '',
+        contentType: type,
+        likesCount: data.likesCount ?? data.likes_count ?? 0,
+        commentsCount: data.commentsCount ?? data.comments_count ?? 0,
+        createdAt: data.createdAt || data.created_at,
+      },
+      score: 0,
+      reason: '',
+    };
+  }
+
+  private async fetchFromSupabaseTable(
+    table: string,
+    type: ContentType,
+    filters?: { column: string; value: unknown }[],
+    limitCount = 20
+  ): Promise<FeedItem[]> {
+    let q = getSupabase().from(table).select('*');
+    for (const f of filters || []) {
+      q = q.eq(f.column, f.value as string);
     }
+    const orderCol = table === 'articles' ? 'created_at' : 'created_at';
+    q = q.order(orderCol, { ascending: false }).limit(limitCount);
+    const { data, error } = await q;
+    if (error) throw error;
+
+    return (data || []).map((row) => {
+      const appData = table === 'posts' ? supabasePostToApp(row as Record<string, unknown>) : row;
+      return this.normalizeCandidate((row as { id: string }).id, type, appData);
+    });
   }
 
   private async fetchCandidates(): Promise<FeedItem[]> {
+    const useSupabase = shouldReadCollectionFromSupabase('posts') || shouldReadCollectionFromSupabase('articles');
+
+    if (useSupabase) {
+      const [posts, articles, challenges, events, products, jobs] = await Promise.all([
+        this.fetchFromSupabaseTable('posts', 'post', [{ column: 'visibility', value: 'public' }]).catch(() => []),
+        this.fetchFromSupabaseTable('articles', 'article', [{ column: 'status', value: 'published' }]).catch(() => []),
+        this.fetchFromSupabaseTable('challenges', 'challenge').catch(() => []),
+        this.fetchFromSupabaseTable('events', 'event', [{ column: 'visibility', value: 'public' }]).catch(() => []),
+        this.fetchFromSupabaseTable('products', 'product').catch(() => []),
+        this.fetchFromSupabaseTable('jobs', 'job').catch(() => []),
+      ]);
+      return [...posts, ...articles, ...challenges, ...events, ...products, ...jobs];
+    }
+
     const candidates: FeedItem[] = [];
-    
-    // In a real app, this would be much more selective or happen in a function
-    // Fetch recent items from various collections
     const collections: { path: string; type: ContentType }[] = [
       { path: 'posts', type: 'post' },
       { path: 'articles', type: 'article' },
@@ -94,23 +184,7 @@ export class FeedService {
         
         const snap = await getDocs(q);
         snap.forEach(d => {
-          const data = d.data() as any;
-          candidates.push({
-            id: d.id,
-            type,
-            data: { 
-              id: d.id, 
-              ...data,
-              // Normalize common fields for UI/ranking consistency
-              authorUid: data.authorUid || data.creatorUid || data.hostId,
-              authorName: data.authorName || data.creatorName || data.company || 'Anonymous',
-              authorPhoto: data.authorPhoto || data.creatorPhoto || '',
-              content: data.content || data.description || '',
-              contentType: type,
-            },
-            score: 0,
-            reason: ''
-          });
+          candidates.push(this.normalizeCandidate(d.id, type, d.data()));
         });
       } catch (e) {
         console.warn(`Failed to fetch ${type}:`, e);
@@ -121,23 +195,35 @@ export class FeedService {
     return candidates;
   }
 
+  private async getBlockedUserIds(userId: string): Promise<Set<string>> {
+    if (userId === 'anonymous') return new Set();
+
+    const ids = await dualRead(
+      async () => {
+        const snap = await getDocs(collection(this.firestore, 'users', userId, 'blockedUsers'));
+        return snap.docs.map(d => d.id);
+      },
+      async () => {
+        const { data, error } = await getSupabase()
+          .from('user_blocked_users')
+          .select('blocked_user_id')
+          .eq('user_id', userId);
+        if (error) throw error;
+        return (data || []).map(r => r.blocked_user_id);
+      },
+      'user_blocked_users'
+    );
+
+    return new Set(ids);
+  }
+
   async getPersonalizedFeed(userId: string): Promise<FeedItem[]> {
-    const [interests, profile, allCandidates, blockedSnap] = await Promise.all([
+    const [interests, profile, allCandidates, blockedIds] = await Promise.all([
       this.getUserInterests(userId),
       this.getUserEngagementProfile(userId),
       this.fetchCandidates(),
-      (async () => {
-        if (userId === 'anonymous') return null;
-        try {
-          return await getDocs(collection(this.firestore, 'users', userId, 'blockedUsers'));
-        } catch (e) {
-          console.warn("Blocked users fetch failed:", e);
-          return null;
-        }
-      })()
+      this.getBlockedUserIds(userId),
     ]);
-
-    const blockedIds = new Set(blockedSnap?.docs.map(d => d.id) || []);
 
     const rankedFeed = allCandidates
       .filter(item => !blockedIds.has(item.data.authorUid || item.data.creatorUid || item.data.hostId))
@@ -147,17 +233,16 @@ export class FeedService {
         return { ...item, score, reason };
       });
 
-    // Diversity control: limit consecutive items from the same creator
     const finalFeed: FeedItem[] = [];
     const creatorCounts: Record<string, number> = {};
     
     for (const item of rankedFeed.filter(item => item.score > -1).sort((a, b) => b.score - a.score)) {
       const creatorId = item.data.authorUid || item.data.creatorUid || item.data.hostId || 'unknown';
-      if ((creatorCounts[creatorId] || 0) < 3) { // Max 3 items from same creator in one view
+      if ((creatorCounts[creatorId] || 0) < 3) {
         finalFeed.push(item);
         creatorCounts[creatorId] = (creatorCounts[creatorId] || 0) + 1;
       }
-      if (finalFeed.length >= 40) break; // Limit first page
+      if (finalFeed.length >= 40) break;
     }
 
     return finalFeed;
@@ -172,7 +257,6 @@ export class FeedService {
     const data = item.data;
     const itemCreatorId = data.authorUid || data.creatorUid || data.hostId;
     
-    // Helper to check for matches
     const hasTagMatch = (tags: string[] = []) => {
       if (!interests) return false;
       return tags.some(tag => interests.hashtags.includes(tag) || interests.followedTopics.includes(tag));
@@ -184,39 +268,32 @@ export class FeedService {
     };
 
     return {
-      isFollowing: false, // Would check a 'follows' collection in real app
+      isFollowing: false,
       mutualConnections: 0,
       sharedCommunities: profile?.joinedCommunities.includes(data.communityId) ? 1 : 0,
       pastInteractionsCount: profile?.interactionHistory.filter(i => i.creatorId === itemCreatorId).length || 0,
       hasDMHistory: false,
       viewedProfileRecently: false,
-
       matchesInterests: hasCategoryMatch(data.category),
       matchesFollowedHashtags: hasTagMatch(data.hashtags || data.tags),
       matchesTechStack: data.skills?.some((s: string) => interests?.skills.includes(s)) || false,
-      topicRelevance: 0.5, // Default
-
+      topicRelevance: 0.5,
       likesCount: (data.likesCount || data.likes || 0) / 1000,
       commentsCount: (data.commentsCount || 0) / 500,
       repostsCount: 0,
       bookmarksCount: (data.bookmarksCount || 0) / 100,
       avgDwellTime: 0.5,
       completionRate: 1,
-
       createdAt: data.createdAt instanceof Timestamp ? data.createdAt.toDate() : (data.createdAt || new Date()),
       engagementVelocity: 0,
-
       creatorReputation: 0.7,
       isVerified: false,
       reportRate: 0,
-
       matchesPastLikes: false,
       matchesPurchases: profile?.purchasedCategories.includes(data.category) || false,
       matchesAttendedEvents: false,
-
       isPromoted: data.isPromoted || false,
       relevanceToPurchases: 0,
-
       isMuted: false,
       isHidden: false,
       isReported: false,
@@ -224,24 +301,12 @@ export class FeedService {
     };
   }
 
-  // Other feed modes
   async getTrendingFeed(): Promise<FeedItem[]> {
-    const userId = auth.currentUser?.uid;
-    // Trending: filter candidates by engagement metrics within last 24h
-    const [candidates, blockedSnap] = await Promise.all([
+    const userId = auth.currentUser?.uid || 'anonymous';
+    const [candidates, blockedIds] = await Promise.all([
       this.fetchCandidates(),
-      (async () => {
-        if (!userId) return null;
-        try {
-          return await getDocs(collection(this.firestore, 'users', userId, 'blockedUsers'));
-        } catch (e) {
-          console.warn("Blocked users fetch failed in trending:", e);
-          return null;
-        }
-      })()
+      this.getBlockedUserIds(userId),
     ]);
-
-    const blockedIds = new Set(blockedSnap?.docs.map(d => d.id) || []);
 
     return candidates
       .filter(item => !blockedIds.has(item.data.authorUid || item.data.creatorUid || item.data.hostId))
@@ -254,58 +319,58 @@ export class FeedService {
   }
 
   async getTrendingCommunities(count: number = 5): Promise<any[]> {
-    const q = query(collection(this.firestore, 'communities'), limit(count));
-    const snap = await getDocs(q);
-    return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    return contentRepository.queryCollection('communities', 'communities', { limit: count });
   }
 
   async getTrendingTags(count: number = 5): Promise<any[]> {
-    const q = query(collection(this.firestore, 'hashtags'), orderBy('count', 'desc'), limit(count));
-    const snap = await getDocs(q);
-    return snap.docs.map(d => ({ id: d.id, ...d.data() as any }));
+    return dualRead(
+      async () => {
+        const snap = await getDocs(query(collection(this.firestore, 'hashtags'), orderBy('count', 'desc'), limit(count)));
+        return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      },
+      async () => {
+        const { data, error } = await getSupabase()
+          .from('hashtags')
+          .select('*')
+          .order('count', { ascending: false })
+          .limit(count);
+        if (error) throw error;
+        return (data || []).map(row => ({ id: row.id, tag: row.tag, count: row.count }));
+      },
+      'hashtags'
+    );
   }
 
   async getUpcomingEvents(count: number = 5): Promise<any[]> {
-    const q = query(
-      collection(this.firestore, 'events'), 
-      where('visibility', '==', 'public'), // Corrected: events usually use visibility
-      limit(count)
-    );
-    const snap = await getDocs(q);
-    return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    return contentRepository.queryCollection('events', 'events', {
+      filters: [{ field: 'visibility', op: 'eq', value: 'public' }],
+      limit: count,
+    });
   }
 
   async getFeaturedArticles(count: number = 5): Promise<any[]> {
-    const q = query(
-      collection(this.firestore, 'articles'),
-      where('status', '==', 'published'),
-      orderBy('createdAt', 'desc'),
-      limit(count)
-    );
-    const snap = await getDocs(q);
-    return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    return contentRepository.queryCollection('articles', 'articles', {
+      filters: [{ field: 'status', op: 'eq', value: 'published' }],
+      orderBy: { field: 'createdAt', desc: true },
+      limit: count,
+    });
   }
 
   async getFeaturedChallenges(count: number = 3): Promise<any[]> {
-    const q = query(
-      collection(this.firestore, 'challenges'),
-      where('status', '==', 'active'),
-      limit(count)
-    );
-    const snap = await getDocs(q);
-    return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    return contentRepository.queryCollection('challenges', 'challenges', {
+      filters: [{ field: 'status', op: 'eq', value: 'active' }],
+      limit: count,
+    });
   }
 
   async getTopCreators(count: number = 5): Promise<any[]> {
-    const q = query(collection(this.firestore, 'users'), orderBy('xp', 'desc'), limit(count));
-    const snap = await getDocs(q);
-    return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    return usersRepository.getTopByXp(count);
   }
 
   async getCommunities(): Promise<any[]> {
-    const q = query(collection(this.firestore, 'communities'), orderBy('createdAt', 'desc'));
-    const snap = await getDocs(q);
-    return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    return contentRepository.queryCollection('communities', 'communities', {
+      orderBy: { field: 'createdAt', desc: true },
+    });
   }
 }
 

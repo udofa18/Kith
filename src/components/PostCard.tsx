@@ -18,6 +18,12 @@ import { toast } from 'react-hot-toast';
 import { updateDailyStats } from '../lib/stats';
 import VerifiedBadge from './VerifiedBadge';
 
+function formatCount(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(n % 1_000 === 0 ? 0 : 1)}k`;
+  return String(n);
+}
+
 export default function PostCard({ post, onPostDeleted, isDetailView = false, compact = false }: { post: any, onPostDeleted?: () => void, isDetailView?: boolean, compact?: boolean }) {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -989,14 +995,11 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
             <div className="flex flex-col">
               <div className="flex items-center gap-2">
                 <UserHoverCard userId={post.authorUid}>
-                  <Link to={`/creators/${post.authorUid}`} className={`${compact ? 'text-sm' : ''} text-[15px] font-bold hover:text-primary transition-colors text-black dark:text-white flex items-center gap-1.5`}>
+                  <Link to={`/creators/${post.authorUid}`} className={`${compact ? 'text-sm' : ''} text-[14px] font-bold hover:text-primary transition-colors text-black dark:text-white flex items-center gap-1.5`}>
                     <span>{authorProfile?.displayName || post.authorName}</span>
                     <VerifiedBadge userId={post.authorUid} verified={authorProfile?.verified} />
                   </Link>
                 </UserHoverCard>
-                {authorProfile?.username && (
-                  <span className="text-[15px] text-black/30 dark:text-white/50">@{authorProfile.username}</span>
-                )}
                 <div className="flex items-center gap-1 bg-yellow-400/10 px-2 py-0.5 rounded-full border border-yellow-400/20">
                   <Zap size={10} className="text-yellow-400" />
                   <span className="text-[10px] font-bold text-yellow-400">{authorProfile?.xp || post.authorXp || 0}</span>
@@ -1010,12 +1013,12 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
                   </button>
                 )}
               </div>
-              {authorProfile?.bio && (
-                <p className="text-[14px] text-black/40 dark:text-white/60 line-clamp-1 mt-0.5">{authorProfile.bio}</p>
+              {authorProfile?.username && (
+                <span className="text-[14px] text-black/30 dark:text-white/50">@{authorProfile.username}</span>
               )}
             </div>
             <div className="flex items-center gap-3">
-              <span className="text-[15px] text-black/30 dark:text-white/30 font-medium">
+              <span className="text-[11px] text-black/70 dark:text-white/30 font-medium">
                 {formatPostDate(post.createdAt)}
               </span>
               {auth.currentUser && (
@@ -1103,7 +1106,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
               </div>
             </div>
           ) : (
-            <div className={`mt-2 ${compact ? 'text-sm' : 'text-[15px]'} leading-relaxed text-white/90 font-medium whitespace-pre-wrap`}>
+            <div className={`mt-2 ${compact ? 'text-sm' : 'text-[14px]'} leading-relaxed text-white/90 font-medium whitespace-pre-wrap`}>
               {isDetailView ? (
                 renderContent(content)
               ) : (
@@ -1313,14 +1316,14 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
               className={`flex items-center gap-2 text-[13px] font-black uppercase tracking-widest transition-all duration-300 hover:scale-110 active:scale-95 ${liked ? 'text-red-500' : 'text-black/40 dark:text-white/50 hover:text-red-500'}`}
             >
               <Heart size={19} fill={liked ? 'currentColor' : 'none'} className="transition-all" />
-              <span>{livePost.likesCount || 0}</span>
+              <span>{formatCount(livePost.likesCount || 0)}</span>
             </button>
             <button 
               onClick={() => setShowComments(!showComments)}
               className={`flex items-center gap-2 text-[13px] font-black uppercase tracking-widest transition-all duration-300 hover:scale-110 active:scale-95 ${showComments ? 'text-blue-500' : 'text-black/40 dark:text-white/50 hover:text-blue-500'}`}
             >
               <MessageSquare size={19} />
-              <span>{livePost.commentsCount || 0}</span>
+              <span>{formatCount(livePost.commentsCount || 0)}</span>
             </button>
             <div className="relative" ref={repostMenuRef}>
               <button 
@@ -1328,7 +1331,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
                 className={`flex items-center gap-2 text-[13px] font-black uppercase tracking-widest transition-all duration-300 hover:scale-110 active:scale-95 ${reposted ? 'text-green-500' : 'text-black/40 dark:text-white/50 hover:text-green-500'}`}
               >
                 <Repeat size={19} className={reposting ? 'animate-spin' : ''} />
-                <span>{repostsCount}</span>
+                <span>{formatCount(repostsCount)}</span>
               </button>
               <AnimatePresence>
                 {showRepostMenu && (
@@ -1364,7 +1367,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
             </button>
             <div className="flex items-center gap-2 text-[13px] font-black uppercase tracking-widest text-black/40 dark:text-white/50">
               <Eye size={19} />
-              <span>{post.impressions || 0}</span>
+              <span>{formatCount(livePost.impressions || 0)}</span>
             </div>
             <button className="flex items-center gap-2 text-[13px] font-black uppercase tracking-widest text-black/40 dark:text-white/50 hover:text-green-500 transition-all duration-300 hover:scale-110 active:scale-95">
               <Share2 size={19} />
@@ -1380,7 +1383,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
               className="flex items-center gap-1.5 text-[11px] font-black uppercase tracking-[0.1em] text-white hover:text-white bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 transition-all duration-300 hover:scale-[1.05] active:scale-95 ml-auto border border-transparent shadow-md shadow-amber-500/10 px-3.5 py-1.5 rounded-full cursor-pointer"
               title="Gift XP"
             >
-              <Gift size={15} className="text-white" />
+              <Gift size={18} className="text-white" />
               <span>Gift XP</span>
             </button>
           </div>
@@ -1458,7 +1461,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
                         }
                       }}
                       placeholder={replyTo ? `Reply to @${replyTo.authorUsername || replyTo.authorName}...` : "Add a comment..."}
-                      className="w-full bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-full px-6 py-3 text-[15px] outline-none focus:border-primary pr-24 resize-none min-h-[48px] max-h-[120px] font-bold tracking-tight"
+                      className="w-full bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-full px-6 py-3 text-[14px] outline-none focus:border-primary pr-24 resize-none min-h-[48px] max-h-[120px] font-bold tracking-tight"
                       rows={1}
                     />
                     <div className="absolute right-3 bottom-0 top-0 flex items-center gap-3">
@@ -1511,16 +1514,16 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
                       <div className="flex items-center justify-between mb-1">
                         <div className="flex items-center gap-2">
                           <UserHoverCard userId={comment.authorUid}>
-                            <Link to={`/creators/${comment.authorUid}`} className="text-[15px] font-bold hover:text-primary transition-colors text-black dark:text-white flex items-center gap-1.5">
+                            <Link to={`/creators/${comment.authorUid}`} className="text-[14px] font-bold hover:text-primary transition-colors text-black dark:text-white flex items-center gap-1.5">
                               <span>{comment.authorName}</span>
                               <VerifiedBadge userId={comment.authorUid} />
                             </Link>
                           </UserHoverCard>
                           {comment.authorUsername && (
-                            <span className="text-[15px] text-black/30 dark:text-white/30">@{comment.authorUsername}</span>
+                            <span className="text-[14px] text-black/30 dark:text-white/30">@{comment.authorUsername}</span>
                           )}
-                          <span className="text-[15px] text-black/20 dark:text-white/20">·</span>
-                          <span className="text-[15px] text-black/30 dark:text-white/30">
+                          <span className="text-[14px] text-black/20 dark:text-white/20">·</span>
+                          <span className="text-[14px] text-black/30 dark:text-white/30">
                             {formatPostDate(comment.createdAt)}
                           </span>
                         </div>
@@ -1533,7 +1536,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
                           </button>
                         )}
                       </div>
-                      <p className="text-[15px] text-black/80 dark:text-white/80 leading-relaxed font-medium">
+                      <p className="text-[14px] text-black/80 dark:text-white/80 leading-relaxed font-medium">
                         {comment.content.split(/(@\w+)/g).map((part: string, i: number) => 
                           part.startsWith('@') ? (
                             <span key={i} className="text-primary font-bold hover:underline cursor-pointer" onClick={() => navigate(`/creators/${part.slice(1)}`)}>{part}</span>
@@ -1594,18 +1597,18 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center justify-between mb-1">
                                   <div className="flex items-center gap-2">
-                                    <span className="text-[15px] font-bold text-black dark:text-white flex items-center gap-1.5">
+                                    <span className="text-[14px] font-bold text-black dark:text-white flex items-center gap-1.5">
                                       <span>{reply.authorName}</span>
                                       <VerifiedBadge userId={reply.authorUid} />
                                     </span>
-                                    {reply.authorUsername && <span className="text-[15px] text-black/30 dark:text-white/30">@{reply.authorUsername}</span>}
-                                    <span className="text-[15px] text-black/20 dark:text-white/20">·</span>
-                                    <span className="text-[15px] text-black/30 dark:text-white/30">
+                                    {reply.authorUsername && <span className="text-[14px] text-black/30 dark:text-white/30">@{reply.authorUsername}</span>}
+                                    <span className="text-[14px] text-black/20 dark:text-white/20">·</span>
+                                    <span className="text-[14px] text-black/30 dark:text-white/30">
                                       {formatPostDate(reply.createdAt)}
                                     </span>
                                   </div>
                                 </div>
-                                <p className="text-[15px] text-black/70 dark:text-white/70 leading-relaxed font-medium">
+                                <p className="text-[14px] text-black/70 dark:text-white/70 leading-relaxed font-medium">
                                   {reply.content.split(/(@\w+)/g).map((part: string, i: number) => 
                                     part.startsWith('@') ? (
                                       <span key={i} className="text-primary font-bold hover:underline cursor-pointer" onClick={() => navigate(`/creators/${part.slice(1)}`)}>{part}</span>

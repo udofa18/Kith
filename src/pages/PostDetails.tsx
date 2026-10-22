@@ -55,7 +55,7 @@ export default function PostDetails() {
   );
   
   if (!post) return (
-    <div className="max-w-[1500px] mx-auto px-4 py-12">
+    <div className="max-w-[1200px] mx-auto px-4 py-12">
       <main className="max-w-2xl mx-auto">
         <button 
           onClick={handleBack}
@@ -72,7 +72,7 @@ export default function PostDetails() {
   );
 
   return (
-    <div className="max-w-[1500px] mx-auto px-4 pb-8 text-black dark:text-white relative">
+    <div className="max-w-[1200px] mx-auto px-4 pb-8 text-black dark:text-white relative">
       <div className="flex flex-col lg:flex-row gap-4 items-start justify-center">
         {/* Left Sidebar */}
         <SocialLeftSidebar />
