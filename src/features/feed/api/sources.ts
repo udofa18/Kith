@@ -46,6 +46,7 @@ export function normalizeItem(id: string, type: ContentType, raw: any): FeedItem
       createdAt: raw.createdAt || raw.created_at,
     },
     score: 0,
+    reasons: [],
     reason: '',
   };
 }

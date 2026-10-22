@@ -1,10 +1,20 @@
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Loader2, RefreshCw, Sparkles } from 'lucide-react';
 import PostCard from '../../../components/PostCard';
 import { useInView } from '../../../hooks/useInView';
-import type { FeedItem } from '../types';
+import type { FeedItem, FeedTab, Reason } from '../types';
+import { useFeedActions } from '../hooks/useFeedActions';
+import WhySheet from './WhySheet';
+
+/** Items outside For You aren't individually scored; explain them by the tab they're in. */
+const TAB_REASONS: Partial<Record<FeedTab, Reason[]>> = {
+  following: [{ kind: 'following' }],
+  trending: [{ kind: 'popular' }],
+};
 
 interface FeedListProps {
+  tab: FeedTab;
+  uid: string | null;
   items: FeedItem[];
   isLoading: boolean;
   isError: boolean;
@@ -16,9 +26,15 @@ interface FeedListProps {
 }
 
 export default function FeedList({
-  items, isLoading, isError, hasNextPage, isFetchingNextPage, fetchNextPage, refetch, empty,
+  tab, uid, items, isLoading, isError, hasNextPage, isFetchingNextPage, fetchNextPage, refetch, empty,
 }: FeedListProps) {
   const { ref: sentinel, inView } = useInView();
+  const actions = useFeedActions(uid);
+  const [whyItem, setWhyItem] = useState<FeedItem | null>(null);
+  const withReasons = (item: FeedItem): FeedItem =>
+    item.reasons.length ? item : { ...item, reasons: TAB_REASONS[tab] ?? [{ kind: 'discovery' }] };
+  // Search results are what the viewer asked for; tuning them would be confusing.
+  const tunable = !!uid && tab !== 'search';
 
   useEffect(() => {
     if (inView && hasNextPage && !isFetchingNextPage) fetchNextPage();
@@ -52,7 +68,16 @@ export default function FeedList({
               <Sparkles size={11} className="text-primary/70" /> {item.reason}
             </p>
           )}
-          <PostCard post={item.data} isDetailView={false} />
+          <PostCard
+            post={item.data}
+            isDetailView={false}
+            feedActions={tunable ? {
+              onWhy: () => setWhyItem(withReasons(item)),
+              onNotInterested: () => actions.notInterested(item),
+              onShowMore: () => actions.showMore(item),
+              onMute: () => actions.muteCreator(item),
+            } : undefined}
+          />
         </div>
       ))}
 
@@ -63,6 +88,8 @@ export default function FeedList({
           <Loader2 size={22} className="animate-spin text-primary" />
         </div>
       )}
+
+      <WhySheet item={whyItem} onClose={() => setWhyItem(null)} onShowMore={actions.showMore} onNotInterested={actions.notInterested} />
 
       {!hasNextPage && (
         <p className="py-10 text-center text-sm text-black/40 dark:text-white/40 border-t border-black/10 dark:border-white/10">

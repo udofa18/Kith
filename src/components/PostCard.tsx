@@ -4,7 +4,7 @@ import { auth, db, handleFirestoreError, OperationType } from '../firebase';
 import { doc, updateDoc, increment, setDoc, deleteDoc, collection, query, orderBy, onSnapshot, addDoc, getDoc, arrayUnion, serverTimestamp, where, startAfter, getDocs, limit, writeBatch } from 'firebase/firestore';
 import { useQuery } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'motion/react';
-import { Heart, MessageSquare, Share2, Copy, Check, Gift, Zap, Send, MoreVertical, Edit2, Trash2, Reply, ThumbsUp, Smile, X, UserPlus, UserMinus, Eye, ExternalLink, Bookmark, ChevronRight, Hash, Flag, Bell, BellOff, ShieldAlert, Repeat } from 'lucide-react';
+import { Heart, MessageSquare, Share2, Copy, Check, Gift, Zap, Send, MoreVertical, Edit2, Trash2, Reply, ThumbsUp, Smile, X, UserPlus, UserMinus, Eye, EyeOff, ExternalLink, Bookmark, ChevronRight, Hash, Flag, Bell, BellOff, ShieldAlert, Repeat, HelpCircle, VolumeX } from 'lucide-react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { atomDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { formatDistanceToNow, format, isSameYear, differenceInSeconds, differenceInMinutes, differenceInHours } from 'date-fns';
@@ -22,6 +22,7 @@ import { useCurrentUser } from '../contexts/CurrentUserContext';
 import { useInView } from '../hooks/useInView';
 import { usersRepository } from '../services/db/usersRepository';
 import { followUser, unfollowUser } from '../services/socialService';
+import { trackEngagement } from '../features/feed/signals/tracker';
 import { queryKeys } from '../lib/queryClient';
 
 function formatCount(n: number): string {
@@ -30,7 +31,15 @@ function formatCount(n: number): string {
   return String(n);
 }
 
-export default function PostCard({ post, onPostDeleted, isDetailView = false, compact = false }: { post: any, onPostDeleted?: () => void, isDetailView?: boolean, compact?: boolean }) {
+/** Feed-only menu actions ("Why am I seeing this?", "Not interested", ...), supplied by FeedList. */
+export interface PostFeedActions {
+  onWhy: () => void;
+  onNotInterested: () => void;
+  onShowMore: () => void;
+  onMute: () => void;
+}
+
+export default function PostCard({ post, onPostDeleted, isDetailView = false, compact = false, feedActions }: { post: any, onPostDeleted?: () => void, isDetailView?: boolean, compact?: boolean, feedActions?: PostFeedActions }) {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [liked, setLiked] = useState(false);
@@ -110,6 +119,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
 
   // Defer per-card reads and live updates until the card is actually on screen.
   const { ref: cardRef, inView, seen } = useInView();
+  const engagementTarget = { id: post.id, authorUid: post.authorUid, hashtags: post.hashtags, tags: post.tags };
   const [isFollowing, setIsFollowing] = useState(false);
   const [linkPreview, setLinkPreview] = useState<any>(null);
   const [channelsList, setChannelsList] = useState<any[]>([]);
@@ -194,6 +204,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
 
     const trackImpression = async () => {
       impressionTracked.current = true;
+      trackEngagement(auth.currentUser?.uid, 'impression', engagementTarget);
       try {
         const viewRef = doc(db, collectionName, post.id, 'views', auth.currentUser!.uid);
         const viewDoc = await getDoc(viewRef);
@@ -346,6 +357,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
         await updateDoc(postRef, { repostsCount: increment(1) });
         setRepostsCount(prev => prev + 1);
         setReposted(true);
+        trackEngagement(auth.currentUser.uid, 'repost', engagementTarget);
         toast.success('Reposted!');
 
         // Notify original author
@@ -427,6 +439,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
             relatedId: post.id
           });
         }
+        trackEngagement(auth.currentUser.uid, 'like', engagementTarget);
       }
       setLiked(!liked);
     } catch (error) {
@@ -448,6 +461,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
           postId: post.id,
           bookmarkedAt: serverTimestamp() 
         });
+        trackEngagement(auth.currentUser.uid, 'bookmark', engagementTarget);
       }
       setBookmarked(!bookmarked);
     } catch (error) {
@@ -782,6 +796,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
         }).catch(console.error);
       }
       
+      trackEngagement(auth.currentUser.uid, 'comment', engagementTarget);
       setNewComment('');
       setReplyTo(null);
     } catch (error) {
@@ -997,7 +1012,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
                         initial={{ opacity: 0, scale: 0.95, y: -10 }}
                         animate={{ opacity: 1, scale: 1, y: 0 }}
                         exit={{ opacity: 0, scale: 0.95, y: -10 }}
-                        className="absolute right-0 mt-2 w-48 bg-white dark:bg-[#0a0a0a] border border-black/10 dark:border-white/10 rounded-2xl shadow-2xl z-50 overflow-hidden backdrop-blur-xl"
+                        className="absolute right-0 mt-2 w-56 bg-white dark:bg-[#0a0a0a] border border-black/10 dark:border-white/10 rounded-2xl shadow-2xl z-50 overflow-hidden backdrop-blur-xl"
                       >
                         {auth.currentUser.uid === post.authorUid ? (
                           <>
@@ -1016,6 +1031,24 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
                           </>
                         ) : (
                           <>
+                            {feedActions && (
+                              <div className="border-b border-black/10 dark:border-white/10">
+                                {[
+                                  { label: 'Why am I seeing this?', icon: HelpCircle, run: feedActions.onWhy },
+                                  { label: 'Show more like this', icon: ThumbsUp, run: feedActions.onShowMore },
+                                  { label: 'Not interested', icon: EyeOff, run: feedActions.onNotInterested },
+                                  { label: `Mute ${authorProfile?.username ? '@' + authorProfile.username : post.authorName}`, icon: VolumeX, run: feedActions.onMute },
+                                ].map(action => (
+                                  <button
+                                    key={action.label}
+                                    onClick={() => { setShowPostMenu(false); action.run(); }}
+                                    className="w-full flex items-center gap-2 px-4 py-3 text-xs font-semibold text-left text-black/70 dark:text-white/70 hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                                  >
+                                    <action.icon size={14} className="shrink-0" /> <span className="truncate">{action.label}</span>
+                                  </button>
+                                ))}
+                              </div>
+                            )}
                             <button 
                               onClick={toggleNotifications}
                               className="w-full flex items-center gap-2 px-4 py-3 text-xs font-bold text-black/70 dark:text-white/70 hover:bg-black/5 dark:hover:bg-white/5 transition-colors"

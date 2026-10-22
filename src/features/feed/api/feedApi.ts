@@ -3,13 +3,22 @@
  * is fed back in to load the next page (see hooks/useFeed).
  */
 import type { FeedItem, FeedPage, SearchParams, ViewerContext } from '../types';
-import { calculateFeedScore, extractSignals, toDate } from '../ranking/score';
+import { engagementOf, reasonLabel, scoreItem, toDate } from '../ranking/score';
 import { rankAndMix } from '../ranking/mix';
 import { fetchPostsByAuthors, fetchPostsSince, fetchRecent, searchPosts, type SourceCursor, type SourceType } from './sources';
 
 const PAGE_SIZE = 15;
 
-const notBlocked = (viewer: ViewerContext) => (item: FeedItem) => !viewer.blockedIds.has(item.data.authorUid);
+const newestOf = (items: FeedItem[]) =>
+  items.length ? Math.max(...items.map(i => toDate(i.data.createdAt).getTime())) : undefined;
+
+/** Drops blocked or muted creators and items the viewer hid. Applies to every tab. */
+const allowed = (viewer: ViewerContext) => {
+  const hidden = new Set(viewer.preferences.hiddenItemIds);
+  const muted = new Set(viewer.preferences.mutedCreatorIds);
+  return (item: FeedItem) =>
+    !hidden.has(item.id) && !viewer.blockedIds.has(item.data.authorUid) && !muted.has(item.data.authorUid);
+};
 
 // ---------------------------------------------------------------- For You
 
@@ -38,13 +47,16 @@ export async function fetchForYouPage(viewer: ViewerContext, cursor: ForYouCurso
   const next: ForYouCursor = { ...cursor };
   for (const r of results) next[r.type] = r.cursor;
 
-  const scored = results
-    .flatMap(r => r.items)
-    .filter(notBlocked(viewer))
-    .map(item => ({ ...item, ...calculateFeedScore(extractSignals(item, viewer)) }));
+  const fetched = results.flatMap(r => r.items);
+  const scored = fetched
+    .filter(allowed(viewer))
+    .map(item => {
+      const { score, reasons } = scoreItem(item, viewer);
+      return { ...item, score, reasons, reason: reasonLabel(reasons) };
+    });
 
   const hasMore = Object.values(next).some(c => c !== null);
-  return { items: rankAndMix(scored), nextCursor: hasMore ? next : undefined };
+  return { items: rankAndMix(scored), nextCursor: hasMore ? next : undefined, newestAt: newestOf(fetched) };
 }
 
 // ---------------------------------------------------------------- Following
@@ -54,11 +66,13 @@ export async function fetchFollowingPage(viewer: ViewerContext, before?: string)
 
   // Include your own posts so the tab reflects what you just shared.
   const authors = [...viewer.followingIds, viewer.uid];
-  const items = (await fetchPostsByAuthors(authors, PAGE_SIZE, before)).filter(notBlocked(viewer));
-  const last = items[items.length - 1];
+  const fetched = await fetchPostsByAuthors(authors, PAGE_SIZE, before);
+  const last = fetched[fetched.length - 1];
   return {
-    items,
-    nextCursor: items.length === PAGE_SIZE && last ? toDate(last.data.createdAt).toISOString() : undefined,
+    items: fetched.filter(allowed(viewer)),
+    // Paginate on what was fetched, not what survived filtering, so hidden posts can't stall paging.
+    nextCursor: fetched.length === PAGE_SIZE && last ? toDate(last.data.createdAt).toISOString() : undefined,
+    newestAt: newestOf(fetched),
   };
 }
 
@@ -73,17 +87,15 @@ const TRENDING_SIZE = 30;
  * steady interaction today beats a bigger one from last week.
  */
 function trendingScore(item: FeedItem, now: number) {
-  const d = item.data;
-  const engagement = (d.likesCount || 0) + 2 * (d.commentsCount || 0) + 3 * (d.repostsCount || 0);
-  const ageHours = (now - toDate(d.createdAt).getTime()) / 3_600_000;
-  return engagement / Math.pow(ageHours + 2, 1.5);
+  const ageHours = (now - toDate(item.data.createdAt).getTime()) / 3_600_000;
+  return engagementOf(item.data) / Math.pow(ageHours + 2, 1.5);
 }
 
 export async function fetchTrendingPage(viewer: ViewerContext): Promise<FeedPage> {
   const since = new Date(Date.now() - TRENDING_WINDOW_DAYS * 86_400_000);
   const now = Date.now();
   const items = (await fetchPostsSince(since, TRENDING_POOL))
-    .filter(notBlocked(viewer))
+    .filter(allowed(viewer))
     .map(item => ({ ...item, score: trendingScore(item, now) }))
     .filter(item => item.score > 0)
     .sort((a, b) => b.score - a.score)
@@ -95,5 +107,5 @@ export async function fetchTrendingPage(viewer: ViewerContext): Promise<FeedPage
 
 export async function fetchSearchPage(viewer: ViewerContext, params: SearchParams, cursor?: SourceCursor): Promise<FeedPage<SourceCursor>> {
   const { items, cursor: next } = await searchPosts(params, PAGE_SIZE, cursor);
-  return { items: items.filter(notBlocked(viewer)), nextCursor: next ?? undefined };
+  return { items: items.filter(allowed(viewer)), nextCursor: next ?? undefined };
 }

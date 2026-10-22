@@ -270,9 +270,22 @@ export interface Database {
           purchased_categories: string[] | null;
           joined_communities: string[] | null;
           interaction_history: Json | null;
+          seen_item_ids: string[] | null;
+          updated_at: string | null;
         };
         Insert: Database['public']['Tables']['user_engagement_profiles']['Row'];
         Update: Partial<Database['public']['Tables']['user_engagement_profiles']['Row']>;
+      };
+      feed_preferences: {
+        Row: {
+          user_id: string;
+          hidden_item_ids: string[] | null;
+          muted_creator_ids: string[] | null;
+          less_topics: string[] | null;
+          updated_at: string | null;
+        };
+        Insert: Partial<Database['public']['Tables']['feed_preferences']['Row']> & { user_id: string };
+        Update: Partial<Database['public']['Tables']['feed_preferences']['Row']>;
       };
       user_blocked_users: {
         Row: {
