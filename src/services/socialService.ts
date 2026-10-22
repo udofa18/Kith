@@ -1,4 +1,6 @@
 import { db } from '../firebase';
+import { getSupabase } from '../supabase';
+import { dualRead, dualWrite } from './db/utils';
 import {
   doc, setDoc, deleteDoc, updateDoc, addDoc, getDocs, collection, query, where, limit, increment, serverTimestamp,
 } from 'firebase/firestore';
@@ -7,17 +9,53 @@ import {
 export async function followUser(myUid: string, targetUid: string): Promise<void> {
   if (myUid === targetUid) return;
   const createdAt = new Date().toISOString();
-  await Promise.all([
-    setDoc(doc(db, 'users', myUid, 'following', targetUid), { createdAt }),
-    setDoc(doc(db, 'users', targetUid, 'followers', myUid), { createdAt }),
-  ]);
+  await dualWrite(
+    () => Promise.all([
+      setDoc(doc(db, 'users', myUid, 'following', targetUid), { createdAt }),
+      setDoc(doc(db, 'users', targetUid, 'followers', myUid), { createdAt }),
+    ]).then(() => undefined),
+    async () => {
+      const sb = getSupabase();
+      const results = await Promise.all([
+        sb.from('user_following').upsert({ user_id: myUid, following_id: targetUid, created_at: createdAt } as never),
+        sb.from('user_followers').upsert({ user_id: targetUid, follower_id: myUid, created_at: createdAt } as never),
+      ]);
+      const error = results.find(r => r.error)?.error;
+      if (error) throw error;
+    },
+    'followUser'
+  );
 }
 
 export async function unfollowUser(myUid: string, targetUid: string): Promise<void> {
-  await Promise.all([
-    deleteDoc(doc(db, 'users', myUid, 'following', targetUid)),
-    deleteDoc(doc(db, 'users', targetUid, 'followers', myUid)),
-  ]);
+  await dualWrite(
+    () => Promise.all([
+      deleteDoc(doc(db, 'users', myUid, 'following', targetUid)),
+      deleteDoc(doc(db, 'users', targetUid, 'followers', myUid)),
+    ]).then(() => undefined),
+    async () => {
+      const sb = getSupabase();
+      const results = await Promise.all([
+        sb.from('user_following').delete().eq('user_id', myUid).eq('following_id', targetUid),
+        sb.from('user_followers').delete().eq('user_id', targetUid).eq('follower_id', myUid),
+      ]);
+      const error = results.find(r => r.error)?.error;
+      if (error) throw error;
+    },
+    'unfollowUser'
+  );
+}
+
+export async function getFollowingIds(uid: string): Promise<string[]> {
+  return dualRead(
+    async () => (await getDocs(collection(db, 'users', uid, 'following'))).docs.map(d => d.id),
+    async () => {
+      const { data, error } = await getSupabase().from('user_following').select('following_id').eq('user_id', uid);
+      if (error) throw error;
+      return (data || []).map(r => (r as { following_id: string }).following_id);
+    },
+    'user_following'
+  );
 }
 
 /** True when a community can be joined in one tap (no approval, payment, or questions). */

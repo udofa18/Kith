@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { auth, db, handleFirestoreError, OperationType } from '../firebase';
-import { doc, updateDoc, increment, setDoc, deleteDoc, collection, query, orderBy, onSnapshot, addDoc, getDoc, arrayUnion, serverTimestamp, where, startAfter, getDocs, limit } from 'firebase/firestore';
+import { doc, updateDoc, increment, setDoc, deleteDoc, collection, query, orderBy, onSnapshot, addDoc, getDoc, arrayUnion, serverTimestamp, where, startAfter, getDocs, limit, writeBatch } from 'firebase/firestore';
+import { useQuery } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'motion/react';
 import { Heart, MessageSquare, Share2, Copy, Check, Gift, Zap, Send, MoreVertical, Edit2, Trash2, Reply, ThumbsUp, Smile, X, UserPlus, UserMinus, Eye, ExternalLink, Bookmark, ChevronRight, Hash, Flag, Bell, BellOff, ShieldAlert, Repeat } from 'lucide-react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -17,6 +18,11 @@ import ReportModal from './ReportModal';
 import { toast } from 'react-hot-toast';
 import { updateDailyStats } from '../lib/stats';
 import VerifiedBadge from './VerifiedBadge';
+import { useCurrentUser } from '../contexts/CurrentUserContext';
+import { useInView } from '../hooks/useInView';
+import { usersRepository } from '../services/db/usersRepository';
+import { followUser, unfollowUser } from '../services/socialService';
+import { queryKeys } from '../lib/queryClient';
 
 function formatCount(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`;
@@ -93,8 +99,17 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
   }, []);
 
   const [commentLikes, setCommentLikes] = useState<Record<string, boolean>>({});
-  const [authorProfile, setAuthorProfile] = useState<any>(null);
-  const [currentUserProfile, setCurrentUserProfile] = useState<any>(null);
+  // Author profiles are cached and shared across cards; the viewer comes from context.
+  const { data: authorProfile } = useQuery({
+    queryKey: queryKeys.user(post.authorUid || ''),
+    queryFn: () => usersRepository.getById(post.authorUid) as Promise<any>,
+    enabled: !!post.authorUid,
+    staleTime: 1000 * 60 * 10,
+  });
+  const currentUserProfile = useCurrentUser();
+
+  // Defer per-card reads and live updates until the card is actually on screen.
+  const { ref: cardRef, inView, seen } = useInView();
   const [isFollowing, setIsFollowing] = useState(false);
   const [linkPreview, setLinkPreview] = useState<any>(null);
   const [channelsList, setChannelsList] = useState<any[]>([]);
@@ -125,7 +140,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
   }, [post.contentType]);
 
   useEffect(() => {
-    if (!post.id) return;
+    if (!post.id || !inView) return;
     const docRef = doc(db, collectionName, post.id);
     const unsub = onSnapshot(docRef, (snapshot) => {
       if (snapshot.exists()) {
@@ -141,7 +156,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
       }
     });
     return () => unsub();
-  }, [post.id, collectionName]);
+  }, [post.id, collectionName, inView]);
 
   useEffect(() => {
     if (auth.currentUser && livePost.poll?.voters?.includes(auth.currentUser.uid)) {
@@ -173,77 +188,32 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
     }
   }, [post.content]);
 
-  // Track impression once per user per post
+  // Count one impression per user per post, once the card has been on screen for a second.
   useEffect(() => {
-    if (!post.id || !auth.currentUser || impressionTracked.current) return;
-    
+    if (!post.id || !auth.currentUser || !inView || impressionTracked.current) return;
+
     const trackImpression = async () => {
+      impressionTracked.current = true;
       try {
-        // Map contentType to collection name
-        const typeMapping: Record<string, string> = {
-          'post': 'posts',
-          'article': 'articles',
-          'challenge': 'challenges',
-          'event': 'events',
-          'product': 'products',
-          'job': 'jobs',
-          'liveStream': 'liveStreams',
-          'poll': 'posts' // Polls are currently stored in posts
-        };
-        const collectionName = typeMapping[post.contentType] || 'posts';
-        
         const viewRef = doc(db, collectionName, post.id, 'views', auth.currentUser!.uid);
-        const viewDoc = await getDoc(viewRef).catch(() => null);
-        
-        if (viewDoc && !viewDoc.exists()) {
-          const docRef = doc(db, collectionName, post.id);
-          const actualDoc = await getDoc(docRef);
-          
-          if (actualDoc.exists()) {
-             await setDoc(viewRef, { viewedAt: serverTimestamp() });
-             // Some items use impressions, some viewsCount. Let's try to be consistent if rule allows.
-             const updateData: any = {};
-             if (post.contentType === 'article') {
-               updateData.viewsCount = increment(1);
-             } else {
-               updateData.impressions = increment(1);
-             }
-             await updateDoc(docRef, updateData).catch(err => {
-               if (err.code === 'not-found') return; // Ignore if doc deleted
-               console.warn("Update impressions failed:", err.message);
-             });
-          }
-        }
-        impressionTracked.current = true;
-      } catch (e: any) { 
-        if (e.code === 'permission-denied') {
-          // Silently fail for permissions on impressions in background
-        } else if (e.code !== 'not-found') {
-          console.error("Impression error:", e);
-        }
+        const viewDoc = await getDoc(viewRef);
+        if (viewDoc.exists()) return;
+        await setDoc(viewRef, { viewedAt: serverTimestamp() });
+        // Articles count `viewsCount`; everything else uses `impressions`.
+        await updateDoc(doc(db, collectionName, post.id), {
+          [post.contentType === 'article' ? 'viewsCount' : 'impressions']: increment(1),
+        });
+      } catch (e: any) {
+        // Background bookkeeping: permission and deleted-post errors are expected and safe to ignore.
+        if (e.code !== 'permission-denied' && e.code !== 'not-found') console.error('Impression error:', e);
       }
     };
-    // Small delay
-    const timer = setTimeout(trackImpression, 2000);
+    const timer = setTimeout(trackImpression, 1000);
     return () => clearTimeout(timer);
-  }, [post.id, auth.currentUser?.uid]);
+  }, [post.id, auth.currentUser?.uid, inView, collectionName]);
 
   useEffect(() => {
-    if (!post.authorUid || !auth.currentUser) return;
-    
-    // Fetch author's latest profile for universal XP and updated name
-    const unsubscribeAuthor = onSnapshot(doc(db, 'users', post.authorUid), (doc) => {
-      if (doc.exists()) {
-        setAuthorProfile(doc.data());
-      }
-    });
-
-    // Fetch current user's profile for their username when commenting
-    const unsubscribeMe = onSnapshot(doc(db, 'users', auth.currentUser.uid), (doc) => {
-      if (doc.exists()) {
-        setCurrentUserProfile(doc.data());
-      }
-    });
+    if (!post.authorUid || !auth.currentUser || !seen) return;
 
     // Check if following
     const followRef = doc(db, 'users', auth.currentUser.uid, 'following', post.authorUid);
@@ -311,11 +281,9 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
     }
 
     return () => {
-      unsubscribeAuthor();
-      unsubscribeMe();
       if (unsubscribeComments) unsubscribeComments();
     };
-  }, [post.authorUid, post.id, auth.currentUser?.uid, showComments]);
+  }, [post.authorUid, post.id, auth.currentUser?.uid, showComments, seen]);
 
   const handleFollow = async () => {
     if (!auth.currentUser) {
@@ -323,17 +291,8 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
       return;
     }
     if (auth.currentUser.uid === post.authorUid) return;
-    const myFollowRef = doc(db, 'users', auth.currentUser.uid, 'following', post.authorUid);
-    const theirFollowerRef = doc(db, 'users', post.authorUid, 'followers', auth.currentUser.uid);
-    
     try {
-      if (isFollowing) {
-        await deleteDoc(myFollowRef);
-        await deleteDoc(theirFollowerRef);
-      } else {
-        await setDoc(myFollowRef, { createdAt: serverTimestamp() });
-        await setDoc(theirFollowerRef, { createdAt: serverTimestamp() });
-      }
+      await (isFollowing ? unfollowUser : followUser)(auth.currentUser.uid, post.authorUid);
       setIsFollowing(!isFollowing);
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `users/${auth.currentUser.uid}/following`);
@@ -441,12 +400,15 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
     const likeRef = doc(db, collectionName, post.id, 'likes', auth.currentUser.uid);
     
     try {
+      const batch = writeBatch(db);
       if (liked) {
-        await deleteDoc(likeRef);
-        await updateDoc(postRef, { likesCount: increment(-1) });
+        batch.delete(likeRef);
+        batch.update(postRef, { likesCount: increment(-1) });
+        await batch.commit();
       } else {
-        await setDoc(likeRef, { createdAt: serverTimestamp(), userId: auth.currentUser.uid, postId: post.id });
-        await updateDoc(postRef, { likesCount: increment(1) });
+        batch.set(likeRef, { createdAt: serverTimestamp(), userId: auth.currentUser.uid, postId: post.id });
+        batch.update(postRef, { likesCount: increment(1) });
+        await batch.commit();
         
         // Track XP in community stats
         if (post.communityId) {
@@ -913,7 +875,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
   };
 
   return (
-    <div className="space-y-1">
+    <div ref={cardRef} className="space-y-1">
       {post.type === 'repost' && (
         <div className="flex items-center gap-2 ml-14 mb-1 text-xs font-bold text-black/40 dark:text-white/40 uppercase tracking-widest">
           <Repeat size={14} />

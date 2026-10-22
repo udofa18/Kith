@@ -1,4 +1,5 @@
 import { Timestamp } from 'firebase/firestore';
+import type { FeedItem, ViewerContext } from '../types';
 
 export interface RankingWeights {
   relationship: number;
@@ -102,8 +103,8 @@ export function calculateFeedScore(
   const now = new Date().getTime();
   const created = signals.createdAt instanceof Timestamp ? signals.createdAt.toMillis() : new Date(signals.createdAt).getTime();
   const hoursOld = (now - created) / (1000 * 60 * 60);
-  // Exponential decay
-  let freshnessScore = Math.exp(-hoursOld / 24); // half life 24h
+  // Exponential decay: ~0.37 after 24h
+  let freshnessScore = Math.exp(-hoursOld / 24);
   freshnessScore = Math.min(1, freshnessScore + signals.engagementVelocity);
 
   // 5. Trust Score
@@ -139,11 +140,64 @@ export function calculateFeedScore(
     negativePenalty;
 
   // Determine Reason
-  let reason = "Recommended for you";
+  let reason = "";
   if (signals.isFollowing) reason = "From creators you follow";
   else if (signals.sharedCommunities > 0) reason = "Popular in your communities";
   else if (signals.matchesInterests) reason = "Matches your interests";
   else if (freshnessScore > 0.8 && engagementScore > 0.5) reason = "Trending now";
 
   return { score: finalScore, reason };
+}
+
+/** Build ranking signals for one item. Signals without a data source yet stay at neutral defaults. */
+export function extractSignals(item: FeedItem, viewer: ViewerContext): RankingSignals {
+  const { interests, profile } = viewer;
+  const data = item.data;
+
+  // Post hashtags are stored as typed ("#React"); interests are normalized slugs ("react").
+  const normalizeTag = (tag: string) => tag.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const followedTags = new Set([...(interests?.hashtags || []), ...(interests?.followedTopics || [])].map(normalizeTag));
+  const hasTagMatch = (tags: string[] = []) => tags.some(tag => followedTags.has(normalizeTag(tag)));
+
+  return {
+    isFollowing: viewer.followingIds.has(data.authorUid),
+    mutualConnections: 0,
+    sharedCommunities: profile?.joinedCommunities.includes(data.communityId) ? 1 : 0,
+    pastInteractionsCount: profile?.interactionHistory.filter(i => i.creatorId === data.authorUid).length || 0,
+    hasDMHistory: false,
+    viewedProfileRecently: false,
+    matchesInterests: !!interests?.categories.includes(data.category),
+    matchesFollowedHashtags: hasTagMatch(data.hashtags || data.tags),
+    matchesTechStack: data.skills?.some((s: string) => interests?.skills.includes(s)) || false,
+    topicRelevance: 0.5,
+    likesCount: (data.likesCount || 0) / 1000,
+    commentsCount: (data.commentsCount || 0) / 500,
+    repostsCount: 0,
+    bookmarksCount: (data.bookmarksCount || 0) / 100,
+    avgDwellTime: 0.5,
+    completionRate: 1,
+    createdAt: toDate(data.createdAt),
+    engagementVelocity: 0,
+    creatorReputation: 0.7,
+    isVerified: false,
+    reportRate: 0,
+    matchesPastLikes: false,
+    matchesPurchases: profile?.purchasedCategories.includes(data.category) || false,
+    matchesAttendedEvents: false,
+    isPromoted: data.isPromoted || false,
+    relevanceToPurchases: 0,
+    isMuted: false,
+    isHidden: false,
+    isReported: false,
+    alreadyViewedCount: 0,
+  };
+}
+
+export function toDate(value: unknown): Date {
+  if (value instanceof Timestamp) return value.toDate();
+  if (value instanceof Date) return value;
+  if (typeof value === 'string' || typeof value === 'number') return new Date(value);
+  const v = value as { seconds?: number } | null;
+  if (v && typeof v.seconds === 'number') return new Date(v.seconds * 1000);
+  return new Date();
 }

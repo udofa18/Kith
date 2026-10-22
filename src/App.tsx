@@ -42,6 +42,7 @@ import AdminPage from './pages/AdminPage';
 import AppSidebar from './components/AppSidebar';
 
 import { LiveSessionProvider } from './contexts/LiveSessionContext';
+import { CurrentUserProvider } from './contexts/CurrentUserContext';
 import FloatingLiveSession from './components/live/FloatingLiveSession';
 
 import LiveSessionWrapper from './LiveSessionWrapper';
@@ -276,8 +277,10 @@ export default function App() {
       <LiveSessionProvider>
         <VoiceProvider>
           <CallProvider>
-            <AppContent user={user} onboardingRequired={onboardingRequired} />
-            <CallInterface />
+            <CurrentUserProvider user={user}>
+              <AppContent user={user} onboardingRequired={onboardingRequired} />
+              <CallInterface />
+            </CurrentUserProvider>
           </CallProvider>
           <Toaster 
           position="bottom-right"
