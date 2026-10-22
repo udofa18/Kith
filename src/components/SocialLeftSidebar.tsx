@@ -113,7 +113,7 @@ export default function SocialLeftSidebar() {
               className="group flex flex-col items-start hover:bg-black/5 dark:hover:bg-white/5 text-black/70 dark:text-white/70 hover:text-black dark:hover:text-white px-3 py-2 transition-all w-full"
             >
               <div className="flex items-center justify-between w-full">
-                <span className="text-[15px] font-bold truncate">
+                <span className="text-[14px] font-bold truncate">
                   {tag.name.startsWith('#') ? tag.name : `#${tag.name}`}
                 </span>
                 <span className="text-[13px] text-black/40 dark:text-white/40 group-hover:text-primary/70 bg-black/5 dark:bg-black/40 px-2 py-0.5 whitespace-nowrap rounded-full">
@@ -148,8 +148,8 @@ export default function SocialLeftSidebar() {
                   <img src={(community.image && community.image.trim() !== '') ? community.image : `https://picsum.photos/seed/${community.id}/100/100`} alt="" className="w-full h-full object-cover" />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="text-[15px] font-bold truncate group-hover:text-primary transition-colors text-black dark:text-white">{community.name}</p>
-                  <p className="text-[13px] text-black/50 dark:text-white/50">{community.memberCount || 0} members</p>
+                  <p className="text-[14px] font-bold truncate group-hover:text-primary transition-colors text-black dark:text-white">{community.name}</p>
+                  <p className="text-[12px] text-black/50 dark:text-white/50">{community.memberCount || 0} members</p>
                 </div>
               </div>
             </button>
@@ -157,10 +157,10 @@ export default function SocialLeftSidebar() {
         </div>
       </div>
 
-      {/* Top Creators */}
+      {/* Top Users */}
       <div className="bg-transparent p-4 border-b border-black/10 dark:border-white/10">
         <h3 className="text-[15px] font-black mb-4 flex items-center gap-2 text-black/40 dark:text-white/40 uppercase tracking-widest">
-          <Award size={16} className="text-yellow-400" /> Top Creators
+          <Award size={16} className="text-yellow-400" /> Top Users
         </h3>
         <div className="space-y-1">
           {topCreators.map(creator => (

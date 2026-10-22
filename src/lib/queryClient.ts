@@ -1,5 +1,6 @@
 import { QueryClient, keepPreviousData } from '@tanstack/react-query';
 import { feedService } from '../services/feedService';
+import { feedQueryOptions } from '../features/feed/hooks/useFeed';
 
 export const STALE = {
   feed: 1000 * 60 * 2,
@@ -11,7 +12,9 @@ export const STALE = {
 
 export const queryKeys = {
   feed: (feedType: string, userId?: string | null, params?: string) =>
-    ['feed', feedType, userId ?? 'anonymous', params ?? ''] as const,
+    ['feed', feedType, userId ?? 'anonymous', params ?? '{}'] as const,
+  feedViewer: (userId?: string | null) => ['feed-viewer', userId ?? 'anonymous'] as const,
+  user: (uid: string) => ['user', uid] as const,
   communities: () => ['communities'] as const,
   community: (id: string) => ['community', id] as const,
   communityChannels: (id: string) => ['community-channels', id] as const,
@@ -37,11 +40,7 @@ export const queryClient = new QueryClient({
 
 export async function prefetchFeedExperienceData(userId?: string | null) {
   await Promise.allSettled([
-    queryClient.prefetchQuery({
-      queryKey: queryKeys.feed('foryou', userId),
-      queryFn: () => feedService.getPersonalizedFeed(userId || 'anonymous'),
-      staleTime: STALE.feed,
-    }),
+    queryClient.prefetchInfiniteQuery(feedQueryOptions(queryClient, 'foryou', userId ?? null)),
     queryClient.prefetchQuery({
       queryKey: queryKeys.communities(),
       queryFn: () => feedService.getCommunities(),

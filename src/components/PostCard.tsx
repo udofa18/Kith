@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { auth, db, handleFirestoreError, OperationType } from '../firebase';
-import { doc, updateDoc, increment, setDoc, deleteDoc, collection, query, orderBy, onSnapshot, addDoc, getDoc, arrayUnion, serverTimestamp, where, startAfter, getDocs, limit } from 'firebase/firestore';
+import { doc, updateDoc, increment, setDoc, deleteDoc, collection, query, orderBy, onSnapshot, addDoc, getDoc, arrayUnion, serverTimestamp, where, startAfter, getDocs, limit, writeBatch } from 'firebase/firestore';
+import { useQuery } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'motion/react';
-import { Heart, MessageSquare, Share2, Copy, Check, Gift, Zap, Send, MoreVertical, Edit2, Trash2, Reply, ThumbsUp, Smile, X, UserPlus, UserMinus, Eye, ExternalLink, Bookmark, ChevronRight, Hash, Flag, Bell, BellOff, ShieldAlert, Repeat } from 'lucide-react';
+import { Heart, MessageSquare, Share2, Copy, Check, Gift, Zap, Send, MoreVertical, Edit2, Trash2, Reply, ThumbsUp, Smile, X, UserPlus, UserMinus, Eye, EyeOff, ExternalLink, Bookmark, ChevronRight, Hash, Flag, Bell, BellOff, ShieldAlert, Repeat, HelpCircle, VolumeX } from 'lucide-react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { atomDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { formatDistanceToNow, format, isSameYear, differenceInSeconds, differenceInMinutes, differenceInHours } from 'date-fns';
@@ -17,8 +18,28 @@ import ReportModal from './ReportModal';
 import { toast } from 'react-hot-toast';
 import { updateDailyStats } from '../lib/stats';
 import VerifiedBadge from './VerifiedBadge';
+import { useCurrentUser } from '../contexts/CurrentUserContext';
+import { useInView } from '../hooks/useInView';
+import { usersRepository } from '../services/db/usersRepository';
+import { followUser, unfollowUser } from '../services/socialService';
+import { trackEngagement } from '../features/feed/signals/tracker';
+import { queryKeys } from '../lib/queryClient';
 
-export default function PostCard({ post, onPostDeleted, isDetailView = false, compact = false }: { post: any, onPostDeleted?: () => void, isDetailView?: boolean, compact?: boolean }) {
+function formatCount(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(n % 1_000 === 0 ? 0 : 1)}k`;
+  return String(n);
+}
+
+/** Feed-only menu actions ("Why am I seeing this?", "Not interested", ...), supplied by FeedList. */
+export interface PostFeedActions {
+  onWhy: () => void;
+  onNotInterested: () => void;
+  onShowMore: () => void;
+  onMute: () => void;
+}
+
+export default function PostCard({ post, onPostDeleted, isDetailView = false, compact = false, feedActions }: { post: any, onPostDeleted?: () => void, isDetailView?: boolean, compact?: boolean, feedActions?: PostFeedActions }) {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [liked, setLiked] = useState(false);
@@ -87,8 +108,18 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
   }, []);
 
   const [commentLikes, setCommentLikes] = useState<Record<string, boolean>>({});
-  const [authorProfile, setAuthorProfile] = useState<any>(null);
-  const [currentUserProfile, setCurrentUserProfile] = useState<any>(null);
+  // Author profiles are cached and shared across cards; the viewer comes from context.
+  const { data: authorProfile } = useQuery({
+    queryKey: queryKeys.user(post.authorUid || ''),
+    queryFn: () => usersRepository.getById(post.authorUid) as Promise<any>,
+    enabled: !!post.authorUid,
+    staleTime: 1000 * 60 * 10,
+  });
+  const currentUserProfile = useCurrentUser();
+
+  // Defer per-card reads and live updates until the card is actually on screen.
+  const { ref: cardRef, inView, seen } = useInView();
+  const engagementTarget = { id: post.id, authorUid: post.authorUid, hashtags: post.hashtags, tags: post.tags };
   const [isFollowing, setIsFollowing] = useState(false);
   const [linkPreview, setLinkPreview] = useState<any>(null);
   const [channelsList, setChannelsList] = useState<any[]>([]);
@@ -119,7 +150,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
   }, [post.contentType]);
 
   useEffect(() => {
-    if (!post.id) return;
+    if (!post.id || !inView) return;
     const docRef = doc(db, collectionName, post.id);
     const unsub = onSnapshot(docRef, (snapshot) => {
       if (snapshot.exists()) {
@@ -135,7 +166,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
       }
     });
     return () => unsub();
-  }, [post.id, collectionName]);
+  }, [post.id, collectionName, inView]);
 
   useEffect(() => {
     if (auth.currentUser && livePost.poll?.voters?.includes(auth.currentUser.uid)) {
@@ -167,77 +198,33 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
     }
   }, [post.content]);
 
-  // Track impression once per user per post
+  // Count one impression per user per post, once the card has been on screen for a second.
   useEffect(() => {
-    if (!post.id || !auth.currentUser || impressionTracked.current) return;
-    
+    if (!post.id || !auth.currentUser || !inView || impressionTracked.current) return;
+
     const trackImpression = async () => {
+      impressionTracked.current = true;
+      trackEngagement(auth.currentUser?.uid, 'impression', engagementTarget);
       try {
-        // Map contentType to collection name
-        const typeMapping: Record<string, string> = {
-          'post': 'posts',
-          'article': 'articles',
-          'challenge': 'challenges',
-          'event': 'events',
-          'product': 'products',
-          'job': 'jobs',
-          'liveStream': 'liveStreams',
-          'poll': 'posts' // Polls are currently stored in posts
-        };
-        const collectionName = typeMapping[post.contentType] || 'posts';
-        
         const viewRef = doc(db, collectionName, post.id, 'views', auth.currentUser!.uid);
-        const viewDoc = await getDoc(viewRef).catch(() => null);
-        
-        if (viewDoc && !viewDoc.exists()) {
-          const docRef = doc(db, collectionName, post.id);
-          const actualDoc = await getDoc(docRef);
-          
-          if (actualDoc.exists()) {
-             await setDoc(viewRef, { viewedAt: serverTimestamp() });
-             // Some items use impressions, some viewsCount. Let's try to be consistent if rule allows.
-             const updateData: any = {};
-             if (post.contentType === 'article') {
-               updateData.viewsCount = increment(1);
-             } else {
-               updateData.impressions = increment(1);
-             }
-             await updateDoc(docRef, updateData).catch(err => {
-               if (err.code === 'not-found') return; // Ignore if doc deleted
-               console.warn("Update impressions failed:", err.message);
-             });
-          }
-        }
-        impressionTracked.current = true;
-      } catch (e: any) { 
-        if (e.code === 'permission-denied') {
-          // Silently fail for permissions on impressions in background
-        } else if (e.code !== 'not-found') {
-          console.error("Impression error:", e);
-        }
+        const viewDoc = await getDoc(viewRef);
+        if (viewDoc.exists()) return;
+        await setDoc(viewRef, { viewedAt: serverTimestamp() });
+        // Articles count `viewsCount`; everything else uses `impressions`.
+        await updateDoc(doc(db, collectionName, post.id), {
+          [post.contentType === 'article' ? 'viewsCount' : 'impressions']: increment(1),
+        });
+      } catch (e: any) {
+        // Background bookkeeping: permission and deleted-post errors are expected and safe to ignore.
+        if (e.code !== 'permission-denied' && e.code !== 'not-found') console.error('Impression error:', e);
       }
     };
-    // Small delay
-    const timer = setTimeout(trackImpression, 2000);
+    const timer = setTimeout(trackImpression, 1000);
     return () => clearTimeout(timer);
-  }, [post.id, auth.currentUser?.uid]);
+  }, [post.id, auth.currentUser?.uid, inView, collectionName]);
 
   useEffect(() => {
-    if (!post.authorUid || !auth.currentUser) return;
-    
-    // Fetch author's latest profile for universal XP and updated name
-    const unsubscribeAuthor = onSnapshot(doc(db, 'users', post.authorUid), (doc) => {
-      if (doc.exists()) {
-        setAuthorProfile(doc.data());
-      }
-    });
-
-    // Fetch current user's profile for their username when commenting
-    const unsubscribeMe = onSnapshot(doc(db, 'users', auth.currentUser.uid), (doc) => {
-      if (doc.exists()) {
-        setCurrentUserProfile(doc.data());
-      }
-    });
+    if (!post.authorUid || !auth.currentUser || !seen) return;
 
     // Check if following
     const followRef = doc(db, 'users', auth.currentUser.uid, 'following', post.authorUid);
@@ -305,11 +292,9 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
     }
 
     return () => {
-      unsubscribeAuthor();
-      unsubscribeMe();
       if (unsubscribeComments) unsubscribeComments();
     };
-  }, [post.authorUid, post.id, auth.currentUser?.uid, showComments]);
+  }, [post.authorUid, post.id, auth.currentUser?.uid, showComments, seen]);
 
   const handleFollow = async () => {
     if (!auth.currentUser) {
@@ -317,17 +302,8 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
       return;
     }
     if (auth.currentUser.uid === post.authorUid) return;
-    const myFollowRef = doc(db, 'users', auth.currentUser.uid, 'following', post.authorUid);
-    const theirFollowerRef = doc(db, 'users', post.authorUid, 'followers', auth.currentUser.uid);
-    
     try {
-      if (isFollowing) {
-        await deleteDoc(myFollowRef);
-        await deleteDoc(theirFollowerRef);
-      } else {
-        await setDoc(myFollowRef, { createdAt: serverTimestamp() });
-        await setDoc(theirFollowerRef, { createdAt: serverTimestamp() });
-      }
+      await (isFollowing ? unfollowUser : followUser)(auth.currentUser.uid, post.authorUid);
       setIsFollowing(!isFollowing);
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `users/${auth.currentUser.uid}/following`);
@@ -381,6 +357,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
         await updateDoc(postRef, { repostsCount: increment(1) });
         setRepostsCount(prev => prev + 1);
         setReposted(true);
+        trackEngagement(auth.currentUser.uid, 'repost', engagementTarget);
         toast.success('Reposted!');
 
         // Notify original author
@@ -435,12 +412,15 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
     const likeRef = doc(db, collectionName, post.id, 'likes', auth.currentUser.uid);
     
     try {
+      const batch = writeBatch(db);
       if (liked) {
-        await deleteDoc(likeRef);
-        await updateDoc(postRef, { likesCount: increment(-1) });
+        batch.delete(likeRef);
+        batch.update(postRef, { likesCount: increment(-1) });
+        await batch.commit();
       } else {
-        await setDoc(likeRef, { createdAt: serverTimestamp(), userId: auth.currentUser.uid, postId: post.id });
-        await updateDoc(postRef, { likesCount: increment(1) });
+        batch.set(likeRef, { createdAt: serverTimestamp(), userId: auth.currentUser.uid, postId: post.id });
+        batch.update(postRef, { likesCount: increment(1) });
+        await batch.commit();
         
         // Track XP in community stats
         if (post.communityId) {
@@ -459,6 +439,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
             relatedId: post.id
           });
         }
+        trackEngagement(auth.currentUser.uid, 'like', engagementTarget);
       }
       setLiked(!liked);
     } catch (error) {
@@ -480,6 +461,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
           postId: post.id,
           bookmarkedAt: serverTimestamp() 
         });
+        trackEngagement(auth.currentUser.uid, 'bookmark', engagementTarget);
       }
       setBookmarked(!bookmarked);
     } catch (error) {
@@ -814,6 +796,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
         }).catch(console.error);
       }
       
+      trackEngagement(auth.currentUser.uid, 'comment', engagementTarget);
       setNewComment('');
       setReplyTo(null);
     } catch (error) {
@@ -907,7 +890,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
   };
 
   return (
-    <div className="space-y-1">
+    <div ref={cardRef} className="space-y-1">
       {post.type === 'repost' && (
         <div className="flex items-center gap-2 ml-14 mb-1 text-xs font-bold text-black/40 dark:text-white/40 uppercase tracking-widest">
           <Repeat size={14} />
@@ -989,14 +972,11 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
             <div className="flex flex-col">
               <div className="flex items-center gap-2">
                 <UserHoverCard userId={post.authorUid}>
-                  <Link to={`/creators/${post.authorUid}`} className={`${compact ? 'text-sm' : ''} text-[15px] font-bold hover:text-primary transition-colors text-black dark:text-white flex items-center gap-1.5`}>
+                  <Link to={`/creators/${post.authorUid}`} className={`${compact ? 'text-sm' : ''} text-[14px] font-bold hover:text-primary transition-colors text-black dark:text-white flex items-center gap-1.5`}>
                     <span>{authorProfile?.displayName || post.authorName}</span>
                     <VerifiedBadge userId={post.authorUid} verified={authorProfile?.verified} />
                   </Link>
                 </UserHoverCard>
-                {authorProfile?.username && (
-                  <span className="text-[15px] text-black/30 dark:text-white/50">@{authorProfile.username}</span>
-                )}
                 <div className="flex items-center gap-1 bg-yellow-400/10 px-2 py-0.5 rounded-full border border-yellow-400/20">
                   <Zap size={10} className="text-yellow-400" />
                   <span className="text-[10px] font-bold text-yellow-400">{authorProfile?.xp || post.authorXp || 0}</span>
@@ -1010,12 +990,12 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
                   </button>
                 )}
               </div>
-              {authorProfile?.bio && (
-                <p className="text-[14px] text-black/40 dark:text-white/60 line-clamp-1 mt-0.5">{authorProfile.bio}</p>
+              {authorProfile?.username && (
+                <span className="text-[14px] text-black/30 dark:text-white/50">@{authorProfile.username}</span>
               )}
             </div>
             <div className="flex items-center gap-3">
-              <span className="text-[15px] text-black/30 dark:text-white/30 font-medium">
+              <span className="text-[11px] text-black/70 dark:text-white/30 font-medium">
                 {formatPostDate(post.createdAt)}
               </span>
               {auth.currentUser && (
@@ -1032,7 +1012,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
                         initial={{ opacity: 0, scale: 0.95, y: -10 }}
                         animate={{ opacity: 1, scale: 1, y: 0 }}
                         exit={{ opacity: 0, scale: 0.95, y: -10 }}
-                        className="absolute right-0 mt-2 w-48 bg-white dark:bg-[#0a0a0a] border border-black/10 dark:border-white/10 rounded-2xl shadow-2xl z-50 overflow-hidden backdrop-blur-xl"
+                        className="absolute right-0 mt-2 w-56 bg-white dark:bg-[#0a0a0a] border border-black/10 dark:border-white/10 rounded-2xl shadow-2xl z-50 overflow-hidden backdrop-blur-xl"
                       >
                         {auth.currentUser.uid === post.authorUid ? (
                           <>
@@ -1051,6 +1031,24 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
                           </>
                         ) : (
                           <>
+                            {feedActions && (
+                              <div className="border-b border-black/10 dark:border-white/10">
+                                {[
+                                  { label: 'Why am I seeing this?', icon: HelpCircle, run: feedActions.onWhy },
+                                  { label: 'Show more like this', icon: ThumbsUp, run: feedActions.onShowMore },
+                                  { label: 'Not interested', icon: EyeOff, run: feedActions.onNotInterested },
+                                  { label: `Mute ${authorProfile?.username ? '@' + authorProfile.username : post.authorName}`, icon: VolumeX, run: feedActions.onMute },
+                                ].map(action => (
+                                  <button
+                                    key={action.label}
+                                    onClick={() => { setShowPostMenu(false); action.run(); }}
+                                    className="w-full flex items-center gap-2 px-4 py-3 text-xs font-semibold text-left text-black/70 dark:text-white/70 hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                                  >
+                                    <action.icon size={14} className="shrink-0" /> <span className="truncate">{action.label}</span>
+                                  </button>
+                                ))}
+                              </div>
+                            )}
                             <button 
                               onClick={toggleNotifications}
                               className="w-full flex items-center gap-2 px-4 py-3 text-xs font-bold text-black/70 dark:text-white/70 hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
@@ -1103,7 +1101,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
               </div>
             </div>
           ) : (
-            <div className={`mt-2 ${compact ? 'text-sm' : 'text-[15px]'} leading-relaxed text-white/90 font-medium whitespace-pre-wrap`}>
+            <div className={`mt-2 ${compact ? 'text-sm' : 'text-[14px]'} leading-relaxed text-white/90 font-medium whitespace-pre-wrap`}>
               {isDetailView ? (
                 renderContent(content)
               ) : (
@@ -1313,14 +1311,14 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
               className={`flex items-center gap-2 text-[13px] font-black uppercase tracking-widest transition-all duration-300 hover:scale-110 active:scale-95 ${liked ? 'text-red-500' : 'text-black/40 dark:text-white/50 hover:text-red-500'}`}
             >
               <Heart size={19} fill={liked ? 'currentColor' : 'none'} className="transition-all" />
-              <span>{livePost.likesCount || 0}</span>
+              <span>{formatCount(livePost.likesCount || 0)}</span>
             </button>
             <button 
               onClick={() => setShowComments(!showComments)}
               className={`flex items-center gap-2 text-[13px] font-black uppercase tracking-widest transition-all duration-300 hover:scale-110 active:scale-95 ${showComments ? 'text-blue-500' : 'text-black/40 dark:text-white/50 hover:text-blue-500'}`}
             >
               <MessageSquare size={19} />
-              <span>{livePost.commentsCount || 0}</span>
+              <span>{formatCount(livePost.commentsCount || 0)}</span>
             </button>
             <div className="relative" ref={repostMenuRef}>
               <button 
@@ -1328,7 +1326,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
                 className={`flex items-center gap-2 text-[13px] font-black uppercase tracking-widest transition-all duration-300 hover:scale-110 active:scale-95 ${reposted ? 'text-green-500' : 'text-black/40 dark:text-white/50 hover:text-green-500'}`}
               >
                 <Repeat size={19} className={reposting ? 'animate-spin' : ''} />
-                <span>{repostsCount}</span>
+                <span>{formatCount(repostsCount)}</span>
               </button>
               <AnimatePresence>
                 {showRepostMenu && (
@@ -1364,7 +1362,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
             </button>
             <div className="flex items-center gap-2 text-[13px] font-black uppercase tracking-widest text-black/40 dark:text-white/50">
               <Eye size={19} />
-              <span>{post.impressions || 0}</span>
+              <span>{formatCount(livePost.impressions || 0)}</span>
             </div>
             <button className="flex items-center gap-2 text-[13px] font-black uppercase tracking-widest text-black/40 dark:text-white/50 hover:text-green-500 transition-all duration-300 hover:scale-110 active:scale-95">
               <Share2 size={19} />
@@ -1380,7 +1378,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
               className="flex items-center gap-1.5 text-[11px] font-black uppercase tracking-[0.1em] text-white hover:text-white bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 transition-all duration-300 hover:scale-[1.05] active:scale-95 ml-auto border border-transparent shadow-md shadow-amber-500/10 px-3.5 py-1.5 rounded-full cursor-pointer"
               title="Gift XP"
             >
-              <Gift size={15} className="text-white" />
+              <Gift size={18} className="text-white" />
               <span>Gift XP</span>
             </button>
           </div>
@@ -1458,7 +1456,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
                         }
                       }}
                       placeholder={replyTo ? `Reply to @${replyTo.authorUsername || replyTo.authorName}...` : "Add a comment..."}
-                      className="w-full bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-full px-6 py-3 text-[15px] outline-none focus:border-primary pr-24 resize-none min-h-[48px] max-h-[120px] font-bold tracking-tight"
+                      className="w-full bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-full px-6 py-3 text-[14px] outline-none focus:border-primary pr-24 resize-none min-h-[48px] max-h-[120px] font-bold tracking-tight"
                       rows={1}
                     />
                     <div className="absolute right-3 bottom-0 top-0 flex items-center gap-3">
@@ -1511,16 +1509,16 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
                       <div className="flex items-center justify-between mb-1">
                         <div className="flex items-center gap-2">
                           <UserHoverCard userId={comment.authorUid}>
-                            <Link to={`/creators/${comment.authorUid}`} className="text-[15px] font-bold hover:text-primary transition-colors text-black dark:text-white flex items-center gap-1.5">
+                            <Link to={`/creators/${comment.authorUid}`} className="text-[14px] font-bold hover:text-primary transition-colors text-black dark:text-white flex items-center gap-1.5">
                               <span>{comment.authorName}</span>
                               <VerifiedBadge userId={comment.authorUid} />
                             </Link>
                           </UserHoverCard>
                           {comment.authorUsername && (
-                            <span className="text-[15px] text-black/30 dark:text-white/30">@{comment.authorUsername}</span>
+                            <span className="text-[14px] text-black/30 dark:text-white/30">@{comment.authorUsername}</span>
                           )}
-                          <span className="text-[15px] text-black/20 dark:text-white/20">·</span>
-                          <span className="text-[15px] text-black/30 dark:text-white/30">
+                          <span className="text-[14px] text-black/20 dark:text-white/20">·</span>
+                          <span className="text-[14px] text-black/30 dark:text-white/30">
                             {formatPostDate(comment.createdAt)}
                           </span>
                         </div>
@@ -1533,7 +1531,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
                           </button>
                         )}
                       </div>
-                      <p className="text-[15px] text-black/80 dark:text-white/80 leading-relaxed font-medium">
+                      <p className="text-[14px] text-black/80 dark:text-white/80 leading-relaxed font-medium">
                         {comment.content.split(/(@\w+)/g).map((part: string, i: number) => 
                           part.startsWith('@') ? (
                             <span key={i} className="text-primary font-bold hover:underline cursor-pointer" onClick={() => navigate(`/creators/${part.slice(1)}`)}>{part}</span>
@@ -1594,18 +1592,18 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center justify-between mb-1">
                                   <div className="flex items-center gap-2">
-                                    <span className="text-[15px] font-bold text-black dark:text-white flex items-center gap-1.5">
+                                    <span className="text-[14px] font-bold text-black dark:text-white flex items-center gap-1.5">
                                       <span>{reply.authorName}</span>
                                       <VerifiedBadge userId={reply.authorUid} />
                                     </span>
-                                    {reply.authorUsername && <span className="text-[15px] text-black/30 dark:text-white/30">@{reply.authorUsername}</span>}
-                                    <span className="text-[15px] text-black/20 dark:text-white/20">·</span>
-                                    <span className="text-[15px] text-black/30 dark:text-white/30">
+                                    {reply.authorUsername && <span className="text-[14px] text-black/30 dark:text-white/30">@{reply.authorUsername}</span>}
+                                    <span className="text-[14px] text-black/20 dark:text-white/20">·</span>
+                                    <span className="text-[14px] text-black/30 dark:text-white/30">
                                       {formatPostDate(reply.createdAt)}
                                     </span>
                                   </div>
                                 </div>
-                                <p className="text-[15px] text-black/70 dark:text-white/70 leading-relaxed font-medium">
+                                <p className="text-[14px] text-black/70 dark:text-white/70 leading-relaxed font-medium">
                                   {reply.content.split(/(@\w+)/g).map((part: string, i: number) => 
                                     part.startsWith('@') ? (
                                       <span key={i} className="text-primary font-bold hover:underline cursor-pointer" onClick={() => navigate(`/creators/${part.slice(1)}`)}>{part}</span>

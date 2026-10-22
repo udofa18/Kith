@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { doc, getDoc, collection, query, where, onSnapshot, orderBy, deleteDoc, setDoc, addDoc, serverTimestamp, increment, updateDoc, collectionGroup, getDocs } from 'firebase/firestore';
 import { db, auth, handleFirestoreError, OperationType } from '../firebase';
+import { followUser, unfollowUser } from '../services/socialService';
 import { 
   Github, 
   Globe, 
@@ -265,17 +266,8 @@ export default function CreatorProfile() {
 
   const handleFollow = async () => {
     if (!auth.currentUser || auth.currentUser.uid === id) return;
-    const myFollowRef = doc(db, 'users', auth.currentUser.uid, 'following', id!);
-    const theirFollowerRef = doc(db, 'users', id!, 'followers', auth.currentUser.uid);
-    
     try {
-      if (isFollowing) {
-        await deleteDoc(myFollowRef);
-        await deleteDoc(theirFollowerRef);
-      } else {
-        await setDoc(myFollowRef, { createdAt: new Date().toISOString() });
-        await setDoc(theirFollowerRef, { createdAt: new Date().toISOString() });
-      }
+      await (isFollowing ? unfollowUser : followUser)(auth.currentUser.uid, id!);
       setIsFollowing(!isFollowing);
     } catch (error) {
       console.error(error);

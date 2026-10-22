@@ -74,13 +74,12 @@ export default function SidebarCreatorItem({ creator }: SidebarCreatorItemProps)
           />
         </div>
         <div className="flex-1 min-w-0">
-          <p className="text-[15px] font-bold truncate text-black dark:text-white group-hover:text-primary transition-colors flex items-center gap-1">
+          <p className="text-[14px] font-bold truncate text-black dark:text-white group-hover:text-primary transition-colors flex items-center gap-1">
             <span>{creator.displayName || 'Creator'}</span>
             <VerifiedBadge verified={creator.verified} />
           </p>
           <p className="text-[13px] text-black/50 dark:text-white/50 flex items-center gap-1 font-medium">
-            <Zap size={10} className="text-yellow-400" />
-            <span className="text-yellow-400 font-bold">{creator.xp || 0} XP</span>
+            <span>@{creator.username}</span>
           </p>
         </div>
       </Link>

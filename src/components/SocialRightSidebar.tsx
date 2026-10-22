@@ -81,7 +81,7 @@ export default function SocialRightSidebar() {
                   
                   <div className="min-w-0 flex-1">
                     <div className="flex items-start justify-between gap-2 mb-1">
-                      <p className="text-[15px] font-bold line-clamp-2 leading-tight group-hover:text-primary transition-colors text-black dark:text-white">{event.title}</p>
+                      <p className="text-[14px] font-bold line-clamp-2 leading-tight group-hover:text-primary transition-colors text-black dark:text-white">{event.title}</p>
                       
                       {/* Status Badge */}
                       {isLive ? (
@@ -101,7 +101,7 @@ export default function SocialRightSidebar() {
                     </div>
                     
                     <div className="space-y-0.5">
-                      <p className="text-[13px] text-black/50 dark:text-white/50 flex items-center gap-1.5 font-bold uppercase tracking-wider">
+                      <p className="text-[11px] text-black/50 dark:text-white/50 flex items-center gap-1.5 font-bold uppercase tracking-wider">
                         <Clock size={10} className="text-purple-400/50" />
                         {formatDate(event.startDate, 'MMM d, HH:mm')}
                       </p>

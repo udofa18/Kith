@@ -7,3 +7,5 @@ coverage/
 .env*
 !.env.example
 .antigravity/
+data/firestore-export/
+data/transformed/

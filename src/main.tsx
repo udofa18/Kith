@@ -31,3 +31,7 @@ createRoot(document.getElementById('root')!).render(
     </ErrorBoundary>
   </StrictMode>,
 );
+
+<button>
+  Click me
+</button>
