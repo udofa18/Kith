@@ -257,10 +257,10 @@ export class FeedService {
     const data = item.data;
     const itemCreatorId = data.authorUid || data.creatorUid || data.hostId;
     
-    const hasTagMatch = (tags: string[] = []) => {
-      if (!interests) return false;
-      return tags.some(tag => interests.hashtags.includes(tag) || interests.followedTopics.includes(tag));
-    };
+    // Post hashtags are stored as typed ("#React"); interests are normalized slugs ("react").
+    const normalizeTag = (tag: string) => tag.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const followedTags = new Set([...(interests?.hashtags || []), ...(interests?.followedTopics || [])].map(normalizeTag));
+    const hasTagMatch = (tags: string[] = []) => tags.some(tag => followedTags.has(normalizeTag(tag)));
 
     const hasCategoryMatch = (category: string) => {
       if (!interests) return false;

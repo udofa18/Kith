@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { db, auth, handleFirestoreError, OperationType } from '../firebase';
 import { collection, query, orderBy, onSnapshot, limit, where, collectionGroup, startAfter, getDocs, QueryDocumentSnapshot } from 'firebase/firestore';
 import PostEditor from '../components/PostEditor';
+import GettingStartedCard from '../components/GettingStartedCard';
 import PostCard from '../components/PostCard';
 import { motion } from 'motion/react';
 import { TrendingUp, Clock, Award, Users, MessageSquare, Bell, Search as SearchIcon, Globe, Calendar, ChevronRight, DollarSign, FileText, Zap, Heart, MapPin, Layers, Briefcase } from 'lucide-react';
@@ -24,6 +25,7 @@ import SocialRightSidebar from '../components/SocialRightSidebar';
 
 export default function SocialFeed() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const editorRef = useRef<HTMLDivElement>(null);
   const [posts, setPosts] = useState<any[]>([]);
   const [lastVisible, setLastVisible] = useState<QueryDocumentSnapshot | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -396,6 +398,14 @@ export default function SocialFeed() {
 
               {['foryou', 'following', 'trending'].includes(feedType) && !searchParams.get('search') && (
                 auth.currentUser ? (
+                  <div ref={editorRef}>
+                  <GettingStartedCard
+                    uid={auth.currentUser.uid}
+                    onWritePost={() => {
+                      editorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                      editorRef.current?.querySelector<HTMLElement>('textarea, [contenteditable="true"]')?.focus();
+                    }}
+                  />
                   <PostEditor
                     quotedPostId={searchParams.get('quote')}
                     onCancelQuote={() => {
@@ -413,6 +423,7 @@ export default function SocialFeed() {
                       });
                     }}
                   />
+                  </div>
                 ) : (
                   <div className="bg-transparent p-10 border-b border-black/10 dark:border-white/10 text-center space-y-6">
                     <div className="w-20 h-20 bg-primary/10 flex items-center justify-center mx-auto border border-primary/20">

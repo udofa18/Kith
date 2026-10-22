@@ -1,5 +1,5 @@
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactElement } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth, db } from './firebase';
 import { doc, getDoc, onSnapshot } from 'firebase/firestore';
@@ -56,139 +56,76 @@ function JoinRedirect() {
   return <Navigate to={`/feed?invite=${inviteCode}`} replace />;
 }
 
+function ProductRedirect() {
+  const { id } = useParams();
+  return <Navigate to={`/products/${id}`} replace />;
+}
+
+function RequireAuth({ user, children }: { user: any, children: ReactElement }) {
+  const location = useLocation();
+  return user ? children : <Navigate to="/login" state={{ from: location }} replace />;
+}
+
 function AppRoutes({ user, onboardingRequired }: { user: any, onboardingRequired: boolean }) {
   const location = useLocation();
+  const isOnboardingPath = location.pathname === '/onboarding';
 
-  // Redirect to onboarding if required and not already there
-  if (user && onboardingRequired && location.pathname !== '/onboarding') {
+  // Signed-in users finish onboarding before anything else, and can't revisit it afterwards.
+  if (user && onboardingRequired && !isOnboardingPath) {
     return <Navigate to="/onboarding" replace />;
   }
-
-  // Redirect unauthenticated users to login if they try to access protected routes
-  const publicRoutes = ['/', '/login', '/explore', '/feed', '/events', '/articles', '/challenges'];
-  const isPublicParameterized = 
-    location.pathname.startsWith('/creators/') || 
-    location.pathname.startsWith('/components/') || 
-    location.pathname.startsWith('/post/') || 
-    location.pathname.startsWith('/article/') || 
-    location.pathname.startsWith('/events/') || 
-    location.pathname.startsWith('/live/') || 
-    location.pathname.startsWith('/challenges/');
-
-  if (!user && !publicRoutes.includes(location.pathname) && !isPublicParameterized) {
-    return <Navigate to="/login" state={{ from: location }} replace />;
+  if (user && !onboardingRequired && isOnboardingPath) {
+    return <Navigate to="/feed" replace />;
   }
 
-  // Redirect authenticated users away from login page
+  // Send signed-in users back to where they were headed before login.
   if (user && location.pathname === '/login') {
-    return <Navigate to={onboardingRequired ? "/onboarding" : "/feed"} replace />;
+    const from = (location.state as { from?: Location } | null)?.from?.pathname;
+    return <Navigate to={from && from !== '/login' ? from : '/feed'} replace />;
   }
+
+  const isAdmin = user && (user.role === 'admin' || user.email === 'danieludofa452@gmail.com');
+  const priv = (element: ReactElement) => <RequireAuth user={user}>{element}</RequireAuth>;
 
   return (
     <Routes>
+      {/* Public */}
       <Route path="/" element={<LandingPage />} />
       <Route path="/login" element={<AuthPage />} />
       <Route path="/marketplace" element={<MarketplacePage />} />
       <Route path="/explore" element={<Navigate to="/marketplace" replace />} />
       <Route path="/products/:id" element={<ComponentDetails />} />
-      <Route path="/components/:id" element={<Navigate to="/products/:id" replace />} />
+      <Route path="/components/:id" element={<ProductRedirect />} />
       <Route path="/creators/:id" element={<CreatorProfile />} />
-      <Route 
-        path="/profile" 
-        element={user && !onboardingRequired ? <Navigate to={`/creators/${user.uid}`} replace /> : <Navigate to={user ? "/onboarding" : "/"} />} 
-      />
       <Route path="/success" element={<SuccessPage />} />
-      <Route 
-        path="/feed" 
-        element={user && onboardingRequired ? <Navigate to="/onboarding" /> : <SocialFeed />} 
-      />
-      <Route 
-        path="/post/:id" 
-        element={user && onboardingRequired ? <Navigate to="/onboarding" /> : <PostDetails />} 
-      />
-      <Route 
-        path="/challenges" 
-        element={user && onboardingRequired ? <Navigate to="/onboarding" /> : <Challenges />} 
-      />
-      <Route 
-        path="/create-challenge" 
-        element={user && !onboardingRequired ? <CreateChallenge /> : <Navigate to={user ? "/onboarding" : "/"} />} 
-      />
-      <Route 
-        path="/edit-challenge/:challengeId" 
-        element={user && !onboardingRequired ? <CreateChallenge /> : <Navigate to={user ? "/onboarding" : "/"} />} 
-      />
-      <Route 
-        path="/challenges/:challengeId" 
-        element={user && onboardingRequired ? <Navigate to="/onboarding" /> : <ChallengeDetails />} 
-      />
-      <Route 
-        path="/challenges/:challengeId/submissions" 
-        element={user && !onboardingRequired ? <ChallengeSubmissions /> : <Navigate to={user ? "/onboarding" : "/"} />} 
-      />
-      <Route 
-        path="/events" 
-        element={user && onboardingRequired ? <Navigate to="/onboarding" /> : <EventsPage />} 
-      />
-      <Route 
-        path="/events/:eventId" 
-        element={user && onboardingRequired ? <Navigate to="/onboarding" /> : <EventDetails />} 
-      />
-      <Route 
-        path="/events/:eventId/live" 
-        element={user && !onboardingRequired ? <LiveSession /> : <Navigate to={user ? "/onboarding" : "/"} />} 
-      />
-      <Route 
-        path="/live/:eventId" 
-        element={<LiveSession />} 
-      />
-
-      <Route 
-        path="/articles" 
-        element={user && onboardingRequired ? <Navigate to="/onboarding" /> : <ArticlesPage />} 
-      />
-      <Route 
-        path="/write" 
-        element={user && !onboardingRequired ? <ArticleWrite /> : <Navigate to={user ? "/onboarding" : "/login"} />} 
-      />
-      <Route 
-        path="/write/:articleId" 
-        element={user && !onboardingRequired ? <ArticleWrite /> : <Navigate to={user ? "/onboarding" : "/login"} />} 
-      />
-      <Route 
-        path="/article/:articleId" 
-        element={<ArticleView />} 
-      />
-      
-      <Route 
-        path="/onboarding" 
-        element={user ? <Onboarding /> : <Navigate to="/" />} 
-      />
-      
-      <Route 
-        path="/upload" 
-        element={user && !onboardingRequired ? <UploadComponent /> : <Navigate to={user ? "/onboarding" : "/"} />} 
-      />
-
-      <Route 
-        path="/edit/:id" 
-        element={user && !onboardingRequired ? <UploadComponent /> : <Navigate to={user ? "/onboarding" : "/"} />} 
-      />
-      
-      <Route 
-        path="/dashboard" 
-        element={user && !onboardingRequired ? <Dashboard /> : <Navigate to={user ? "/onboarding" : "/"} />} 
-      />
-      <Route 
-        path="/settings" 
-        element={user && !onboardingRequired ? <SettingsPage /> : <Navigate to={user ? "/onboarding" : "/"} />} 
-      />
-      <Route 
-        path="/admin" 
-        element={user && !onboardingRequired && (user.role === 'admin' || user.email === 'danieludofa452@gmail.com') ? <AdminPage user={user} /> : <Navigate to={user ? "/feed" : "/"} />} 
-      />
+      <Route path="/feed" element={<SocialFeed />} />
+      <Route path="/post/:id" element={<PostDetails />} />
+      <Route path="/challenges" element={<Challenges />} />
+      <Route path="/challenges/:challengeId" element={<ChallengeDetails />} />
+      <Route path="/events" element={<EventsPage />} />
+      <Route path="/events/:eventId" element={<EventDetails />} />
+      <Route path="/live/:eventId" element={<LiveSession />} />
+      <Route path="/articles" element={<ArticlesPage />} />
+      <Route path="/article/:articleId" element={<ArticleView />} />
       <Route path="/community/:communityId" element={<CommunityRedirect />} />
       <Route path="/join/:inviteCode" element={<JoinRedirect />} />
+
+      {/* Signed-in only */}
+      <Route path="/onboarding" element={priv(<Onboarding user={user} />)} />
+      <Route path="/profile" element={priv(<Navigate to={`/creators/${user?.uid}`} replace />)} />
+      <Route path="/create-challenge" element={priv(<CreateChallenge />)} />
+      <Route path="/edit-challenge/:challengeId" element={priv(<CreateChallenge />)} />
+      <Route path="/challenges/:challengeId/submissions" element={priv(<ChallengeSubmissions />)} />
+      <Route path="/events/:eventId/live" element={priv(<LiveSession />)} />
+      <Route path="/write" element={priv(<ArticleWrite />)} />
+      <Route path="/write/:articleId" element={priv(<ArticleWrite />)} />
+      <Route path="/upload" element={priv(<UploadComponent />)} />
+      <Route path="/edit/:id" element={priv(<UploadComponent />)} />
+      <Route path="/dashboard" element={priv(<Dashboard />)} />
+      <Route path="/settings" element={priv(<SettingsPage />)} />
+      <Route path="/admin" element={priv(isAdmin ? <AdminPage user={user} /> : <Navigate to="/feed" replace />)} />
+
+      <Route path="*" element={<Navigate to={user ? '/feed' : '/'} replace />} />
     </Routes>
   );
 }
@@ -329,7 +266,7 @@ export default function App() {
   if (loading) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="animate-pulse text-primary font-mono">INITIALIZING_SYSTEM...</div>
+        <div className="w-8 h-8 rounded-full border-2 border-primary/30 border-t-primary animate-spin" aria-label="Loading" />
       </div>
     );
   }

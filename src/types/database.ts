@@ -23,6 +23,7 @@ export interface Database {
           github_url: string | null;
           experience_level: string | null;
           user_type: string | null;
+          account_type: string | null;
           intent: string[] | null;
           interests: string[] | null;
           onboarding_step: number | null;

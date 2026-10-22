@@ -1,17 +1,34 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Mail, Lock, User, Github, ArrowRight, ArrowLeft, CheckCircle2, Loader2, Sparkles } from 'lucide-react';
+import { Mail, Lock, User, Github, ArrowRight, ArrowLeft, Loader2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { AuthService } from '../lib/auth-service';
 import LinkAccountModal from '../components/LinkAccountModal';
 import { AuthCredential } from 'firebase/auth';
 import KithLogo from '../components/KithLogo';
+import { toast } from 'react-hot-toast';
+
+const AUTH_ERRORS: Record<string, string> = {
+  'auth/invalid-credential': 'Incorrect email or password.',
+  'auth/wrong-password': 'Incorrect email or password.',
+  'auth/user-not-found': 'No account found with that email.',
+  'auth/email-already-in-use': 'An account with this email already exists. Try signing in.',
+  'auth/weak-password': 'Password must be at least 6 characters.',
+  'auth/invalid-email': 'Enter a valid email address.',
+  'auth/too-many-requests': 'Too many attempts. Please wait a moment and try again.',
+  'auth/popup-blocked': 'Your browser blocked the sign-in window. Allow pop-ups and try again.',
+  'auth/network-request-failed': 'Network error. Check your connection.',
+};
+
+// Closing the provider popup is a choice, not an error.
+const SILENT_ERRORS = new Set(['auth/popup-closed-by-user', 'auth/cancelled-popup-request']);
+
+const describeAuthError = (err: any) => AUTH_ERRORS[err?.code] || err?.message || 'Something went wrong. Please try again.';
 
 export default function AuthPage() {
   const [mode, setMode] = useState<'login' | 'signup'>('login');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
   const navigate = useNavigate();
 
   // Form state
@@ -36,10 +53,7 @@ export default function AuthPage() {
       return;
     }
     
-    if (result.type === 'SUCCESS') {
-      setSuccess('Redirecting to system...');
-      setTimeout(() => navigate('/feed'), 1500);
-    }
+    // On SUCCESS the auth listener in App redirects to onboarding or the page the user came from.
   };
 
   const handleSocialLogin = async (provider: 'google' | 'github') => {
@@ -51,7 +65,7 @@ export default function AuthPage() {
         : await AuthService.loginWithGithub();
       await handleAuthResult(result);
     } catch (err: any) {
-      setError(err.message);
+      if (!SILENT_ERRORS.has(err?.code)) setError(describeAuthError(err));
     } finally {
       setLoading(false);
     }
@@ -63,15 +77,13 @@ export default function AuthPage() {
     setError(null);
     try {
       if (mode === 'signup') {
-        const user = await AuthService.signupWithEmail(email, password, name);
-        setSuccess('Account created! Please verify your email.');
-        setTimeout(() => navigate('/onboarding'), 2000);
+        await AuthService.signupWithEmail(email, password, name);
+        toast.success('Account created. Check your inbox to verify your email.');
       } else {
         await AuthService.loginWithEmail(email, password);
-        navigate('/feed');
       }
     } catch (err: any) {
-      setError(err.message);
+      setError(describeAuthError(err));
     } finally {
       setLoading(false);
     }
@@ -83,7 +95,7 @@ export default function AuthPage() {
       <div className="absolute inset-0 z-0">
         <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] rounded-full bg-primary/20 blur-[120px] animate-pulse" />
         <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] rounded-full bg-purple-500/10 blur-[120px]" />
-      </div>      {/* Floating Back to Home Link */}
+      </div>      {/* Floating Back Link */}
       <div className="absolute top-4 left-4 md:top-8 md:left-8 z-20">
         <button
           onClick={() => navigate('/')}
@@ -110,12 +122,12 @@ export default function AuthPage() {
               <KithLogo size={80} className="relative z-10 drop-shadow-[0_0_10px_rgba(236,72,153,0.4)]" />
             </div>
             <h1 className="text-3xl font-bold tracking-tight mb-2">
-              {mode === 'login' ? 'Authentication' : 'Initiate Protocol'}
+              {mode === 'login' ? 'Welcome back' : 'Create your account'}
             </h1>
             <p className="text-white/40 text-sm">
-              {mode === 'login' 
-                ? 'Resume your pulse connection' 
-                : 'Begin your sovereign journey'}
+              {mode === 'login'
+                ? 'Sign in to continue to Kith'
+                : 'Join creators building, sharing, and selling on Kith'}
             </p>
           </div>
 
@@ -146,7 +158,7 @@ export default function AuthPage() {
 
           <div className="flex items-center gap-4 mb-8">
             <div className="h-px flex-1 bg-white/10" />
-            <span className="text-[10px] uppercase tracking-widest text-white/20 font-bold">Or Email</span>
+            <span className="text-xs text-white/30">or continue with email</span>
             <div className="h-px flex-1 bg-white/10" />
           </div>
 
@@ -163,7 +175,8 @@ export default function AuthPage() {
                     <User className="absolute left-4 top-1/2 -translate-y-1/2 text-white/20 group-focus-within:text-primary transition-colors" size={18} />
                     <input 
                       type="text" 
-                      placeholder="Full Name"
+                      placeholder="Full name"
+                      autoComplete="name"
                       value={name}
                       onChange={(e) => setName(e.target.value)}
                       required
@@ -178,7 +191,8 @@ export default function AuthPage() {
               <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-white/20 group-focus-within:text-primary transition-colors" size={18} />
               <input 
                 type="email" 
-                placeholder="Email Address"
+                placeholder="Email address"
+                autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
@@ -190,7 +204,9 @@ export default function AuthPage() {
               <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-white/20 group-focus-within:text-primary transition-colors" size={18} />
               <input 
                 type="password" 
-                placeholder="Password"
+                placeholder={mode === 'signup' ? 'Password (6+ characters)' : 'Password'}
+                autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+                minLength={6}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
@@ -207,7 +223,7 @@ export default function AuthPage() {
                 <Loader2 className="animate-spin" size={20} />
               ) : (
                 <>
-                  {mode === 'login' ? 'Enter System' : 'Deploy Identity'}
+                  {mode === 'login' ? 'Sign in' : 'Create account'}
                   <ArrowRight size={18} className="group-hover:translate-x-1 transition-transform" />
                 </>
               )}
@@ -224,31 +240,14 @@ export default function AuthPage() {
             </motion.div>
           )}
 
-          {success && (
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              className="mt-6 p-4 bg-green-500/10 border border-green-500/20 rounded-2xl text-green-400 text-xs flex items-center justify-center gap-2 font-medium"
-            >
-              <CheckCircle2 size={16} /> {success}
-            </motion.div>
-          )}
-
           <div className="mt-10 text-center">
-            <button 
-              onClick={() => setMode(mode === 'login' ? 'signup' : 'login')}
-              className="text-xs font-bold text-white/30 hover:text-primary transition-colors uppercase tracking-widest"
+            <button
+              onClick={() => { setMode(mode === 'login' ? 'signup' : 'login'); setError(null); }}
+              className="text-sm text-white/40 hover:text-white transition-colors"
             >
-              {mode === 'login' ? "Don't have an account? Create One" : "Already have an account? Sign In"}
+              {mode === 'login' ? <>New to Kith? <span className="text-primary font-semibold">Create an account</span></> : <>Already have an account? <span className="text-primary font-semibold">Sign in</span></>}
             </button>
           </div>
-        </div>
-
-        {/* Brand Footer */}
-        <div className="mt-8 text-center space-y-4">
-          <p className="text-[10px] text-white/20 uppercase tracking-[0.3em] font-bold">
-            Powered by Kith System
-          </p>
         </div>
       </motion.div>
 
@@ -259,10 +258,9 @@ export default function AuthPage() {
         email={linkData?.email || ''}
         existingProviders={linkData?.providers || []}
         pendingCredential={linkData?.pendingCredential!}
-        onSuccess={(user) => {
+        onSuccess={() => {
           setLinkData(null);
-          setSuccess('Accounts linked successfully! Redirecting...');
-          setTimeout(() => navigate('/feed'), 1500);
+          toast.success('Accounts linked');
         }}
       />
     </div>

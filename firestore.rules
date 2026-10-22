@@ -156,7 +156,7 @@ service cloud.firestore {
         'language', 'timezone', 'packageManager', 'cliFramework', 'providers',
         'onboardingStep', 'theme', 'notif_emailPerformance', 'notif_emailSecurity',
         'notif_pushDMs', 'notif_pushSales', 'notif_pushTrends', 'badges', 'layout', 'focusMode', 'updatedAt',
-        'status', 'verified', 'referredBy'
+        'status', 'verified', 'referredBy', 'accountType'
       ];
       let allFields = requiredFields.concat(optionalFields);
 

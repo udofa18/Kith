@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { Link, useNavigate } from 'react-router-dom';
 import { doc, getDoc, collection, onSnapshot, query, setDoc, deleteDoc, addDoc, getDocs, serverTimestamp, increment, updateDoc } from 'firebase/firestore';
 import { db, auth, handleFirestoreError, OperationType } from '../firebase';
+import { followUser, unfollowUser } from '../services/socialService';
 import { motion, AnimatePresence } from 'motion/react';
 import { UserPlus, UserMinus, MessageSquare, Zap, MapPin, X, Send, Flag } from 'lucide-react';
 import ReportModal from './ReportModal';
@@ -119,17 +120,8 @@ export default function UserHoverCard({ userId, children, communityId }: UserHov
     e.preventDefault();
     e.stopPropagation();
     if (!auth.currentUser || auth.currentUser.uid === userId) return;
-    const myFollowRef = doc(db, 'users', auth.currentUser.uid, 'following', userId);
-    const theirFollowerRef = doc(db, 'users', userId, 'followers', auth.currentUser.uid);
-    
     try {
-      if (isFollowing) {
-        await deleteDoc(myFollowRef);
-        await deleteDoc(theirFollowerRef);
-      } else {
-        await setDoc(myFollowRef, { createdAt: new Date().toISOString() });
-        await setDoc(theirFollowerRef, { createdAt: new Date().toISOString() });
-      }
+      await (isFollowing ? unfollowUser : followUser)(auth.currentUser.uid, userId);
       setIsFollowing(!isFollowing);
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `users/${auth.currentUser.uid}/following`);

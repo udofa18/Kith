@@ -103,13 +103,4 @@ export class AuthService {
       providerData: user.providerData,
     });
   }
-
-  /** @deprecated Use syncUser — kept for backward compatibility */
-  static async syncUserToFirestore(user: any) {
-    return this.syncUser(user);
-  }
-
-  static async completeOnboarding(uid: string, data: { username: string; interests: string[] }) {
-    await usersRepository.completeOnboarding(uid, data);
-  }
 }

@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { X, Users, Calendar, Globe, Lock, Shield, Zap, UserPlus, UserMinus, Loader2, Plus } from 'lucide-react';
 import { formatDate } from '../lib/utils';
 import { toast } from 'react-hot-toast';
+import { joinCommunity } from '../services/socialService';
 
 export default function CommunityDetailsModal({ isOpen, onClose, communityId, onJoinSuccess, inviteCode }: { 
   isOpen: boolean, 
@@ -202,26 +203,11 @@ export default function CommunityDetailsModal({ isOpen, onClose, communityId, on
             throw err;
           }
       } else {
-          const memberRef = doc(db, 'communities', communityId, 'members', auth.currentUser.uid);
           try {
-            await setDoc(memberRef, {
-              userId: auth.currentUser.uid,
-              role: 'member',
-              joinedAt: serverTimestamp(),
-              onboardingAnswers: answers
-            });
+            await joinCommunity(auth.currentUser.uid, auth.currentUser.displayName, community, { onboardingAnswers: answers });
           } catch (err) {
             handleFirestoreError(err, OperationType.WRITE, `communities/${communityId}/members/${auth.currentUser.uid}`);
             throw err;
-          }
-
-          try {
-            await updateDoc(doc(db, 'communities', communityId), {
-              memberCount: increment(1)
-            });
-          } catch (err) {
-            // Community update failed, but they are already a member. Gracefully continue.
-            console.error("Failed to update community member count:", err);
           }
           
           setIsMember(true);
@@ -275,71 +261,6 @@ export default function CommunityDetailsModal({ isOpen, onClose, communityId, on
             }
           }
 
-          // Send join notification to general channel/configured welcome channel
-          try {
-            const welcomeConfig = community.welcomeConfig;
-            if (welcomeConfig?.enabled) {
-              const targetChannelId = welcomeConfig.channelId;
-              if (targetChannelId) {
-                const messagesRef = collection(db, 'communities', communityId, 'channels', targetChannelId, 'messages');
-                
-                // Parse variable in message
-                let welcomeText = (welcomeConfig.enabled && welcomeConfig.message) ? welcomeConfig.message : `{username} just joined the community!`;
-                
-                welcomeText = welcomeText
-                  .replace(/\{username\}/g, `${auth.currentUser.displayName || 'A new user'}`)
-                  .replace(/\{community\}/g, community.name || 'the community');
-
-                await addDoc(messagesRef, {
-                  content: welcomeText,
-                  authorUid: 'system-bot',
-                  authorName: 'System Bot',
-                  authorPhoto: 'https://api.dicebear.com/7.x/bottts/svg?seed=system-bot',
-                  createdAt: serverTimestamp(),
-                  type: 'welcome',
-                  isBot: true,
-                  buttons: welcomeConfig?.enabled ? (welcomeConfig.buttons || []) : []
-                });
-                
-                await updateDoc(doc(db, 'communities', communityId, 'channels', targetChannelId), {
-                  lastMessage: `${auth.currentUser.displayName || 'A new user'} joined`,
-                  lastMessageAt: serverTimestamp(),
-                  messageCount: increment(1)
-                });
-              }
-            } else {
-              // Fallback to legacy or simple notification (Force System Bot)
-              const channelsRef = collection(db, 'communities', communityId, 'channels');
-              const q = query(channelsRef, where('name', '==', 'general'), limit(1));
-              const channelSnap = await getDocs(q);
-              
-              if (!channelSnap.empty) {
-                const generalChannel = channelSnap.docs[0];
-                const messagesRef = collection(db, 'communities', communityId, 'channels', generalChannel.id, 'messages');
-                const welcomeText = `${auth.currentUser.displayName || 'A new user'} just joined the community!`;
-
-                await addDoc(messagesRef, {
-                  content: welcomeText,
-                  authorUid: 'system-bot',
-                  authorName: 'System Bot',
-                  authorPhoto: 'https://api.dicebear.com/7.x/bottts/svg?seed=system-bot',
-                  createdAt: serverTimestamp(),
-                  type: 'welcome',
-                  isBot: true
-                });
-                
-                await updateDoc(doc(db, 'communities', communityId, 'channels', generalChannel.id), {
-                   lastMessage: `${auth.currentUser.displayName || 'A new user'} joined`,
-                   lastMessageAt: serverTimestamp(),
-                   messageCount: increment(1)
-                });
-              }
-            }
-          } catch (err) {
-            console.error("Error sending join notification:", err);
-            // Don't throw here as the join was successful
-          }
-    
           if (onJoinSuccess) onJoinSuccess();
       }
     } catch (error) {

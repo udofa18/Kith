@@ -1,8 +1,30 @@
-import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, getDocs, setDoc, serverTimestamp, increment, collection, query, where, limit } from 'firebase/firestore';
 import { db } from '../../firebase';
 import { getSupabase } from '../../supabase';
 import { dualWrite, dualRead } from './utils';
 import { firestoreUserToRow, supabaseUserToApp } from '../../lib/db-mappers';
+import type { UserInterestsInput } from '../../lib/onboarding-topics';
+
+export const ONBOARDING_XP_BONUS = 250;
+
+export interface OnboardingProfile {
+  username: string;
+  displayName: string;
+  bio: string;
+  profileImage: string;
+  accountType: 'personal' | 'brand';
+}
+
+type OnboardingFields = OnboardingProfile & { skills: string[] };
+
+const PROFILE_COLUMNS: Record<keyof OnboardingFields, string> = {
+  username: 'username',
+  displayName: 'display_name',
+  bio: 'bio',
+  profileImage: 'profile_image',
+  accountType: 'account_type',
+  skills: 'skills',
+};
 
 export interface SyncUserInput {
   uid: string;
@@ -80,24 +102,74 @@ export class UsersRepository {
     );
   }
 
-  async completeOnboarding(uid: string, data: { username: string; interests: string[] }): Promise<void> {
+  async isUsernameAvailable(username: string, uid: string): Promise<boolean> {
+    return dualRead(
+      async () => {
+        const snap = await getDocs(query(collection(db, 'users'), where('username', '==', username), limit(2)));
+        return snap.docs.every((d) => d.id === uid);
+      },
+      async () => {
+        const { data, error } = await getSupabase().from('users').select('id').eq('username', username).limit(2);
+        if (error) throw error;
+        return (data || []).every((row) => (row as { id: string }).id === uid);
+      },
+      'users'
+    );
+  }
+
+  /** Persist a partial onboarding profile plus the step reached, so a refresh resumes in place. */
+  async saveOnboardingProgress(uid: string, step: number, profile: Partial<OnboardingFields> = {}): Promise<void> {
+    const row: Record<string, unknown> = { onboarding_step: step, updated_at: new Date().toISOString() };
+    for (const [key, column] of Object.entries(PROFILE_COLUMNS)) {
+      const value = profile[key as keyof OnboardingFields];
+      if (value !== undefined) row[column] = value;
+    }
+
+    await dualWrite(
+      () => setDoc(doc(db, 'users', uid), { ...profile, onboardingStep: step, updatedAt: serverTimestamp() }, { merge: true }),
+      async () => {
+        const { error } = await getSupabase().from('users').update(row as never).eq('id', uid);
+        if (error) throw error;
+      },
+      'saveOnboardingProgress'
+    );
+  }
+
+  /** Write the interests document FeedService reads for ranking. */
+  async saveInterests(uid: string, interests: UserInterestsInput): Promise<void> {
+    await dualWrite(
+      () => setDoc(doc(db, 'userInterests', uid), { ...interests, updatedAt: serverTimestamp() }),
+      async () => {
+        const { error } = await getSupabase().from('user_interests').upsert({
+          user_id: uid,
+          categories: interests.categories,
+          skills: interests.skills,
+          hashtags: interests.hashtags,
+          followed_topics: interests.followedTopics,
+        } as never);
+        if (error) throw error;
+      },
+      'saveInterests'
+    );
+  }
+
+  /** Mark onboarding done and grant the one-time XP bonus (skipped if already completed). */
+  async completeOnboarding(uid: string, step: number): Promise<void> {
+    const existing = await this.getById(uid);
+    if (existing?.onboardingCompleted) return;
+    const xp = ((existing?.xp as number) ?? 0) + ONBOARDING_XP_BONUS;
+
     await dualWrite(
       () =>
         setDoc(
           doc(db, 'users', uid),
-          { ...data, onboardingCompleted: true, xp: 250 },
+          { onboardingCompleted: true, onboardingStep: step, xp: increment(ONBOARDING_XP_BONUS), updatedAt: serverTimestamp() },
           { merge: true }
         ),
       async () => {
         const { error } = await getSupabase()
           .from('users')
-          .update({
-            username: data.username,
-            interests: data.interests,
-            onboarding_completed: true,
-            xp: 250,
-            updated_at: new Date().toISOString(),
-          })
+          .update({ onboarding_completed: true, onboarding_step: step, xp, updated_at: new Date().toISOString() } as never)
           .eq('id', uid);
         if (error) throw error;
       },
