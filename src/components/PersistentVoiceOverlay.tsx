@@ -9,6 +9,7 @@ import {
   useTracks
 } from '@livekit/components-react';
 import { Track } from 'livekit-client';
+import Avatar from './ui/Avatar';
 import { auth, db } from '../firebase';
 import { doc, deleteDoc } from 'firebase/firestore';
 
@@ -40,86 +41,41 @@ export default function PersistentVoiceOverlay({ onReturn }: PersistentVoiceOver
 }
 
 function OverlayContent({ session, onReturn, onLeave }: any) {
-  const { localParticipant } = useLocalParticipant();
+  const { localParticipant, isMicrophoneEnabled } = useLocalParticipant();
   const participants = useParticipants();
-  const tracks = useTracks([{ source: Track.Source.Microphone, withPlaceholder: false }]);
+  const avatarOf = (p: any) => { try { return JSON.parse(p.metadata || '{}').avatar || ''; } catch { return ''; } };
 
-  // We only show the overlay if we are NOT on the voice channel page
-  // The logic for "if currently viewing" will be handled by the parent App state
-  
   return (
     <motion.div
-      initial={{ opacity: 0, y: 20, scale: 0.9 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, scale: 0.9 }}
-      className="fixed bottom-6 right-6 z-[9999] bg-[#0A0A0A]/90 backdrop-blur-3xl border border-white/10 rounded-[2rem] p-4 shadow-2xl w-72 flex flex-col gap-4 overflow-hidden"
+      drag
+      dragMomentum={false}
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: 20 }}
+      className="keep-dark fixed bottom-24 right-4 sm:bottom-6 sm:right-6 z-[90] flex items-center gap-2 p-2 pl-3 rounded-full bg-neutral-900/95 backdrop-blur-xl border border-white/10 shadow-2xl text-white cursor-grab active:cursor-grabbing"
     >
-      <div className="flex items-center justify-between">
-        <div 
-          onClick={() => onReturn(session.communityId, session.channelId)}
-          className="flex items-center gap-3 cursor-pointer group"
-        >
-          <div className="w-10 h-10 rounded-xl bg-green-500/10 flex items-center justify-center text-green-500 group-hover:scale-110 transition-transform">
-            <Volume2 size={20} />
-          </div>
-          <div className="flex flex-col min-w-0">
-            <span className="text-xs font-black text-white truncate">{session.channelName}</span>
-            <div className="flex items-center gap-1.5 overflow-hidden">
-               <div className="flex -space-x-1">
-                 {participants.slice(0, 3).map(p => (
-                   <img 
-                    key={p.identity} 
-                    src={p.metadata ? JSON.parse(p.metadata).avatar : `https://api.dicebear.com/7.x/avataaars/svg?seed=${p.identity}`}
-                    className="w-4 h-4 rounded-full border border-black"
-                    alt=""
-                   />
-                 ))}
-               </div>
-               <span className="text-[10px] text-white/40 font-bold truncate">
-                 {participants.length} connected
-               </span>
-            </div>
-          </div>
-        </div>
-
-        <button 
-          onClick={() => onReturn(session.communityId, session.channelId)}
-          className="p-2 text-white/40 hover:text-white transition-colors"
-        >
-          <Maximize2 size={16} />
-        </button>
-      </div>
-
-      <div className="h-px bg-white/5" />
-
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <button 
-            onClick={() => localParticipant.setMicrophoneEnabled(!localParticipant.isMicrophoneEnabled)}
-            className={`p-3 rounded-xl transition-all ${
-              !localParticipant.isMicrophoneEnabled 
-                ? 'bg-red-500/20 text-red-500' 
-                : 'bg-white/5 text-white hover:bg-white/10'
-            }`}
-          >
-            {localParticipant.isMicrophoneEnabled ? <Mic size={18} /> : <MicOff size={18} />}
-          </button>
-          
-          <div className="flex flex-col">
-            <span className="text-[10px] uppercase tracking-widest text-white/20 font-black">Audio Status</span>
-            <span className={`text-[10px] font-bold ${localParticipant.isMicrophoneEnabled ? 'text-green-500' : 'text-red-500'}`}>
-              {localParticipant.isMicrophoneEnabled ? 'Voice Active' : 'Muted'}
-            </span>
-          </div>
-        </div>
-
-        <button 
-          onClick={onLeave}
-          className="p-3 bg-red-500 text-white rounded-xl hover:bg-red-600 transition-colors shadow-lg active:scale-95"
-        >
-          <PhoneOff size={18} />
-        </button>
-      </div>
+      <button onClick={() => onReturn(session.communityId, session.channelId)} className="flex items-center gap-2.5 min-w-0 text-left" title="Back to the room">
+        <span className="relative flex -space-x-2">
+          {participants.slice(0, 3).map(p => (
+            <span key={p.identity} className="rounded-full ring-2 ring-neutral-900"><Avatar src={avatarOf(p)} seed={p.identity} size={28} /></span>
+          ))}
+        </span>
+        <span className="min-w-0">
+          <span className="flex items-center gap-1 text-sm font-semibold truncate max-w-[140px]"><Volume2 size={13} className="text-green-400 shrink-0" />{session.channelName}</span>
+          <span className="block text-xs text-white/60">{participants.length} in the room</span>
+        </span>
+      </button>
+      <button
+        onClick={() => localParticipant.setMicrophoneEnabled(!isMicrophoneEnabled)}
+        aria-label={isMicrophoneEnabled ? 'Mute' : 'Unmute'}
+        className={`ml-1 w-9 h-9 rounded-full flex items-center justify-center ${isMicrophoneEnabled ? 'bg-white/10 hover:bg-white/20' : 'bg-white'}`}
+        style={isMicrophoneEnabled ? undefined : { color: '#111' }}
+      >
+        {isMicrophoneEnabled ? <Mic size={16} /> : <MicOff size={16} />}
+      </button>
+      <button onClick={onLeave} aria-label="Leave room" className="w-9 h-9 rounded-full bg-red-500 hover:bg-red-600 flex items-center justify-center">
+        <PhoneOff size={16} />
+      </button>
     </motion.div>
   );
 }

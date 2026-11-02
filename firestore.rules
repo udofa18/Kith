@@ -86,7 +86,7 @@ service cloud.firestore {
 
     function isValidPost(data) {
       let requiredFields = ['authorUid', 'authorName', 'content', 'likesCount', 'commentsCount', 'createdAt'];
-      let optionalFields = ['authorPhoto', 'authorXp', 'authorUsername', 'codeSnippet', 'language', 'media', 'poll', 'githubLink', 'hashtags', 'xpValue', 'impressions', 'communityId', 'channelId', 'visibility', 'updatedAt', 'type', 'originalPostId', 'repostsCount'];
+      let optionalFields = ['authorPhoto', 'authorXp', 'authorUsername', 'codeSnippet', 'language', 'media', 'poll', 'githubLink', 'hashtags', 'xpValue', 'impressions', 'communityId', 'channelId', 'visibility', 'updatedAt', 'type', 'originalPostId', 'repostsCount', 'kind', 'shipDay', 'project', 'searchTokens'];
       let allFields = requiredFields.concat(optionalFields);
 
       return data.keys().hasAll(requiredFields) &&
@@ -101,6 +101,11 @@ service cloud.firestore {
              (!('createdAt' in data) || (data.createdAt is string || data.createdAt is timestamp)) &&
              (!('updatedAt' in data) || data.updatedAt is timestamp || data.updatedAt is string) &&
              (!('visibility' in data) || data.visibility in ['public', 'community']) &&
+             (!('kind' in data) || data.kind in ['shiplog', 'feedback']) &&
+             (!('shipDay' in data) || data.shipDay is int) &&
+             (!('project' in data) || (data.project is string && data.project.size() <= 80)) &&
+             (!('searchTokens' in data) || (data.searchTokens is list && data.searchTokens.size() <= 450)) &&
+             (!('hashtags' in data) || (data.hashtags is list && data.hashtags.size() <= 20)) &&
              (!('authorPhoto' in data) || data.authorPhoto == null || data.authorPhoto is string) &&
              (!('authorUsername' in data) || data.authorUsername is string) &&
              (!('authorXp' in data) || data.authorXp is number) &&
@@ -156,7 +161,7 @@ service cloud.firestore {
         'language', 'timezone', 'packageManager', 'cliFramework', 'providers',
         'onboardingStep', 'theme', 'notif_emailPerformance', 'notif_emailSecurity',
         'notif_pushDMs', 'notif_pushSales', 'notif_pushTrends', 'badges', 'layout', 'focusMode', 'updatedAt',
-        'status', 'verified', 'referredBy', 'accountType'
+        'status', 'verified', 'referredBy', 'accountType', 'streak', 'statusUntil', 'bannerImage', 'lastActiveAt'
       ];
       let allFields = requiredFields.concat(optionalFields);
 
@@ -269,11 +274,44 @@ service cloud.firestore {
     // Rules
     // ===============================================================
 
-    function isValidConversation(data) {
-      return data.participants is list && 
+    // ---- Direct messages -------------------------------------------------
+    function otherParticipant(participants) {
+      return participants[0] == request.auth.uid ? participants[1] : participants[0];
+    }
+
+    function followsEachOther(a, b) {
+      return exists(/databases/$(database)/documents/users/$(a)/following/$(b)) &&
+             exists(/databases/$(database)/documents/users/$(b)/following/$(a));
+    }
+
+    function hasBlocked(owner, uid) {
+      return exists(/databases/$(database)/documents/users/$(owner)/blockedUsers/$(uid));
+    }
+
+    // New chats start as a request, unless both people follow each other.
+    function isValidConversation(conversationId, data) {
+      return data.participants is list &&
              data.participants.size() == 2 &&
              request.auth.uid in data.participants &&
-             data.lastMessageAt is timestamp;
+             data.participants[0] != data.participants[1] &&
+             conversationId in [data.participants[0] + '_' + data.participants[1], data.participants[1] + '_' + data.participants[0]] &&
+             data.lastMessageAt is timestamp &&
+             !hasBlocked(otherParticipant(data.participants), request.auth.uid) &&
+             ((data.get('status', '') == 'pending' && data.get('requestedBy', '') == request.auth.uid) ||
+              (data.get('status', '') == 'accepted' && followsEachOther(data.participants[0], data.participants[1])));
+    }
+
+    // Only the person who received a request can accept or decline it. Either side can
+    // upgrade a chat to accepted once they follow each other.
+    function isValidConversationUpdate() {
+      let before = resource.data.get('status', 'accepted');
+      let after = request.resource.data.get('status', 'accepted');
+      let requester = resource.data.get('requestedBy', '');
+      return request.resource.data.get('requestedBy', '') == requester && (
+               after == before ||
+               (requester != request.auth.uid && before in ['pending', 'declined'] && after in ['accepted', 'declined']) ||
+               (after == 'accepted' && followsEachOther(resource.data.participants[0], resource.data.participants[1]))
+             );
     }
 
     function isValidNestedMessage(data) {
@@ -283,14 +321,14 @@ service cloud.firestore {
              data.conversationId is string;
     }
 
+    // getAfter: the conversation may be created in the same batch as its first message.
     function canSendConversationMessage(conversationId) {
-      let convPath = /databases/$(database)/documents/conversations/$(conversationId);
-      return exists(convPath) &&
-             request.auth.uid in get(convPath).data.participants &&
+      let conv = getAfter(/databases/$(database)/documents/conversations/$(conversationId)).data;
+      return request.auth.uid in conv.participants &&
+             !hasBlocked(otherParticipant(conv.participants), request.auth.uid) &&
              (
-               !('status' in get(convPath).data) ||
-               get(convPath).data.status == 'accepted' ||
-               (get(convPath).data.status == 'pending' && get(convPath).data.requestedBy == request.auth.uid)
+               conv.get('status', 'accepted') == 'accepted' ||
+               (conv.status == 'pending' && conv.requestedBy == request.auth.uid)
              );
     }
 
@@ -306,20 +344,27 @@ service cloud.firestore {
 
     function isValidCommunity(data) {
       let requiredFields = ['name', 'description', 'creatorId', 'createdAt', 'memberCount'];
-      let optionalFields = ['image', 'backdrop', 'isPrivate', 'category', 'tags', 'isPaid', 'price', 'rules', 'stats', 'website', 'socials', 'welcomeMessage', 'membershipControl', 'xpMultiplier', 'updatedAt'];
+      let optionalFields = ['image', 'backdrop', 'isPrivate', 'category', 'tags', 'isPaid', 'price', 'fee', 'rules', 'stats', 'website', 'socials', 'welcomeMessage', 'membershipControl', 'xpMultiplier', 'updatedAt'];
       let allFields = requiredFields.concat(optionalFields);
 
       return data.keys().hasAll(requiredFields) &&
              data.keys().size() <= allFields.size() &&
              (!('name' in data) || (data.name is string && data.name.size() > 0 && data.name.size() < 100)) &&
              (!('description' in data) || (data.description is string && data.description.size() < 2000)) &&
-             (!('creatorId' in data) || data.creatorId == request.auth.uid) &&
+             (!('creatorId' in data) || data.creatorId == request.auth.uid ||
+               (resource != null && (data.creatorId == resource.data.creatorId || resource.data.creatorId == request.auth.uid))) &&
              (!('memberCount' in data) || data.memberCount is number) &&
              (!('createdAt' in data) || (data.createdAt is string || data.createdAt is timestamp)) &&
              (!('image' in data) || data.image is string) &&
              (!('backdrop' in data) || data.backdrop is string) &&
              (!('isPaid' in data) || data.isPaid is bool) &&
              (!('price' in data) || data.price is number) &&
+             // Joining fee (see src/lib/communityPricing.ts). XP one-time only until card payments ship.
+             (!('fee' in data) || data.fee == null || (
+               data.fee is map && data.fee.keys().hasOnly(['amount', 'currency', 'interval']) &&
+               data.fee.amount is number && data.fee.amount > 0 && data.fee.amount <= 10000 &&
+               data.fee.currency == 'xp' && data.fee.interval == 'once'
+             )) &&
              (!('website' in data) || data.website == "" || isValidUrl(data.website)) &&
              (!('socials' in data) || data.socials is map) &&
              (!('welcomeMessage' in data) || data.welcomeMessage is string) &&
@@ -349,7 +394,7 @@ service cloud.firestore {
 
     function isValidRole(data) {
       let requiredFields = ['name', 'permissions', 'order'];
-      let optionalFields = ['id', 'color', 'isSystem', 'createdAt', 'updatedAt'];
+      let optionalFields = ['id', 'color', 'isSystem', 'createdAt', 'updatedAt', 'description', 'mentionable', 'hoisted'];
       let allFields = requiredFields.concat(optionalFields);
       return data.keys().hasAll(requiredFields) &&
              data.keys().size() <= allFields.size() &&
@@ -359,13 +404,8 @@ service cloud.firestore {
     }
 
     function hasPermission(communityId, permission) {
-      return isAtLeastModerator(communityId) || (
-        exists(/databases/$(database)/documents/communities/$(communityId)/members/$(request.auth.uid)) && (
-          get(/databases/$(database)/documents/communities/$(communityId)/members/$(request.auth.uid)).data.get('permissions', []).hasAny([permission]) ||
-          // Fallback check for legacy moderator/admin roles if permissions array is missing
-          (permission == 'moderate_chat' && isAtLeastModerator(communityId))
-        )
-      );
+      return isCommunityAdmin(communityId) || hasMemberPerm(communityId, permission) ||
+             (amMember(communityId) && myMember(communityId).role == 'moderator');
     }
 
     function isValidCategory(data) {
@@ -380,7 +420,7 @@ service cloud.firestore {
 
     function isValidChannel(data) {
       let requiredFields = ['name', 'type', 'createdAt'];
-      let optionalFields = ['description', 'isPremium', 'isFrozen', 'order', 'permissions', 'voiceConfig', 'isLocked', 'isHidden', 'premiumRoles', 'scheduledAt', 'updatedAt', 'messageCount', 'lastMessage', 'lastMessageAuthor', 'lastMessageAt', 'creatorId', 'owners', 'categoryId', 'allowedRoles'];
+      let optionalFields = ['description', 'isPremium', 'isFrozen', 'order', 'permissions', 'voiceConfig', 'isLocked', 'isHidden', 'premiumRoles', 'scheduledAt', 'updatedAt', 'messageCount', 'lastMessage', 'lastMessageAuthor', 'lastMessageAt', 'creatorId', 'owners', 'categoryId', 'allowedRoles', 'postRoles'];
       return data.keys().hasAll(requiredFields) &&
              data.type in ['feed', 'chat', 'code', 'resources', 'announcements', 'voice', 'live', 'text'] &&
              (data.createdAt is string || data.createdAt is timestamp) &&
@@ -395,15 +435,24 @@ service cloud.firestore {
              (!('isFrozen' in data) || data.isFrozen is bool) &&
              (!('premiumRoles' in data) || data.premiumRoles is list) &&
              (!('allowedRoles' in data) || data.allowedRoles is list) &&
+             (!('postRoles' in data) || data.postRoles is list) &&
              (!('scheduledAt' in data) || data.scheduledAt == null || data.scheduledAt is timestamp);
     }
 
-    function isValidChannelMessage(data) {
+    // The welcome bot is posted by the joining member's client, so a bot message must be a
+    // welcome whose link buttons are exactly the ones the admins configured (no fake bot links).
+    function isValidBotMessage(communityId, data) {
+      return data.get('type', '') == 'welcome' &&
+             (data.get('buttons', []).size() == 0 ||
+              data.buttons == get(/databases/$(database)/documents/communities/$(communityId)).data.get('welcomeConfig', {}).get('buttons', []));
+    }
+
+    function isValidChannelMessage(communityId, data) {
       let requiredFields = ['authorUid', 'content', 'createdAt'];
       
       return data.keys().hasAll(requiredFields) &&
-             (!('authorUid' in data) || data.authorUid == request.auth.uid || data.authorUid == 'system-bot' || isAdmin()) &&
-             (!('content' in data) || (data.content is string && (data.content.size() >= 0))) &&
+             (!('authorUid' in data) || data.authorUid == request.auth.uid || (data.authorUid == 'system-bot' && isValidBotMessage(communityId, data)) || isAdmin()) &&
+             (!('content' in data) || (data.content is string && data.content.size() <= 4000)) &&
              (!('createdAt' in data) || (data.createdAt is string || data.createdAt is timestamp)) &&
              (!('isBot' in data) || data.isBot is bool) &&
              (!('poll' in data) || (
@@ -451,20 +500,169 @@ service cloud.firestore {
       return isAdmin() || (isAuthenticated() && exists(/databases/$(database)/documents/communities/$(communityId)/members/$(request.auth.uid)));
     }
 
+    function memberDocPath(communityId, uid) {
+      return /databases/$(database)/documents/communities/$(communityId)/members/$(uid);
+    }
+
+    function myMember(communityId) {
+      return get(memberDocPath(communityId, request.auth.uid)).data;
+    }
+
+    function amMember(communityId) {
+      return isAuthenticated() && exists(memberDocPath(communityId, request.auth.uid));
+    }
+
+    function isCommunityOwner(communityId) {
+      return amMember(communityId) && myMember(communityId).role == 'owner';
+    }
+
+    // Owners and admins only. Holding a permission such as moderate_chat does NOT make someone an admin.
     function isCommunityAdmin(communityId) {
-      return isAdmin() || (isAuthenticated() && 
-             exists(/databases/$(database)/documents/communities/$(communityId)/members/$(request.auth.uid)) && (
-               get(/databases/$(database)/documents/communities/$(communityId)/members/$(request.auth.uid)).data.role in ['owner', 'admin'] ||
-               get(/databases/$(database)/documents/communities/$(communityId)/members/$(request.auth.uid)).data.get('permissions', []).hasAny(['moderate_chat'])
-             ));
+      return isAdmin() || (amMember(communityId) && myMember(communityId).role in ['owner', 'admin']);
+    }
+
+    function hasMemberPerm(communityId, permission) {
+      return amMember(communityId) && myMember(communityId).get('permissions', []).hasAny([permission]);
     }
 
     function isAtLeastModerator(communityId) {
-      return isAdmin() || (isAuthenticated() && 
-             exists(/databases/$(database)/documents/communities/$(communityId)/members/$(request.auth.uid)) && (
-               get(/databases/$(database)/documents/communities/$(communityId)/members/$(request.auth.uid)).data.role in ['owner', 'admin', 'moderator'] ||
-               get(/databases/$(database)/documents/communities/$(communityId)/members/$(request.auth.uid)).data.get('permissions', []).hasAny(['moderate_chat'])
+      return isCommunityAdmin(communityId) || (amMember(communityId) && (
+               myMember(communityId).role == 'moderator' ||
+               myMember(communityId).get('permissions', []).hasAny(['moderate_chat'])
              ));
+    }
+
+    // Hierarchy: lower number = higher rank. Owners and admins outrank every custom role.
+    function rankOf(data) {
+      return data.get('role', 'member') == 'owner' ? -2 :
+             (data.get('role', 'member') == 'admin' ? -1 : data.get('rank', 9999));
+    }
+
+    function myRank(communityId) {
+      return isAdmin() ? -3 : rankOf(myMember(communityId));
+    }
+
+    function rankOfUser(communityId, uid) {
+      return exists(memberDocPath(communityId, uid)) ? rankOf(get(memberDocPath(communityId, uid)).data) : 9999;
+    }
+
+    function outranks(communityId, uid) {
+      return isAdmin() || (amMember(communityId) && myRank(communityId) < rankOfUser(communityId, uid));
+    }
+
+    // Non-admins may only hand out permissions they hold themselves, plus the everyday ones that
+    // carry no moderation power (so auto-roles can still be applied by whoever approves a join).
+    function grantsOnlyOwn(communityId, perms) {
+      return isCommunityAdmin(communityId) ||
+             perms.toSet().difference(
+               myMember(communityId).get('permissions', []).toSet()
+                 .union(['post_messages', 'create_threads', 'upload_files', 'start_voice'].toSet())
+             ).size() == 0;
+    }
+
+    function isBanned(communityId, uid) {
+      return exists(/databases/$(database)/documents/communities/$(communityId)/bans/$(uid)) && (
+               get(/databases/$(database)/documents/communities/$(communityId)/bans/$(uid)).data.get('expiresAt', null) == null ||
+               get(/databases/$(database)/documents/communities/$(communityId)/bans/$(uid)).data.expiresAt > request.time
+             );
+    }
+
+    function isTimedOut(communityId) {
+      return amMember(communityId) &&
+             myMember(communityId).get('timeoutUntil', null) != null &&
+             myMember(communityId).timeoutUntil > request.time;
+    }
+
+    function hasAnyRole(communityId, roleIds) {
+      return amMember(communityId) && myMember(communityId).get('customRoles', []).hasAny(roleIds);
+    }
+
+    // One load of the channel and of the member keeps this hot path inside the expression budget.
+    // Mirrors canAccessChannel + isLockedChannel for members, plus timeouts and per-channel post roles.
+    function canPostMessage(communityId, channelId) {
+      let ch = get(/databases/$(database)/documents/communities/$(communityId)/channels/$(channelId)).data;
+      let actor = get(memberDocPath(communityId, request.auth.uid)).data;
+      let roles = actor.get('customRoles', []);
+      return !(actor.get('timeoutUntil', null) != null && actor.timeoutUntil > request.time) && (
+        actor.role in ['owner', 'admin', 'moderator'] ||
+        actor.get('permissions', []).hasAny(['moderate_chat']) || (
+          ch.get('isHidden', false) == false &&
+          ch.get('isLocked', false) == false &&
+          (ch.get('scheduledAt', null) == null || ch.scheduledAt <= request.time) &&
+          // Channels marked premium by the create-channel flow carry `allowedRoles` and no `premiumRoles`;
+          // the allowedRoles check below is what gates them.
+          (ch.get('isPremium', false) == false || roles.hasAny(ch.get('premiumRoles', [])) ||
+           (ch.get('premiumRoles', []).size() == 0 && ch.get('allowedRoles', []).size() > 0)) &&
+          (ch.get('allowedRoles', []).size() == 0 || roles.hasAny(ch.allowedRoles)) &&
+          (ch.get('postRoles', []).size() == 0 || roles.hasAny(ch.postRoles))
+        )
+      );
+    }
+
+    // The checks below load the acting member once (`let actor`) because every extra get() and
+    // function call counts against the 1000-expression budget per request.
+    function canUpdateMember(communityId, userId) {
+      let actor = get(memberDocPath(communityId, request.auth.uid)).data;
+      let next = incoming();
+      let changed = next.diff(existing()).affectedKeys();
+      let isSelf = request.auth.uid == userId;
+      let aRank = rankOf(actor);
+      let actorPerms = actor.get('permissions', []);
+      return
+        // Members edit their own profile fields, never their role, permissions, rank or timeout.
+        (isSelf && next.role == existing().role && isValidCommunityMember(next) &&
+         !changed.hasAny(['role', 'permissions', 'customRoles', 'rank', 'timeoutUntil', 'timeoutReason'])) ||
+        (isSelf && changed.hasOnly(['xp', 'lastActive', 'metadata'])) ||
+        // The owner may change anything (including transferring ownership).
+        actor.role == 'owner' ||
+        // Everyone else can only act on members ranked below them.
+        (!isSelf && aRank < rankOf(existing()) && (
+          // Admins can't mint owners or admins.
+          (actor.role == 'admin' && !(next.role in ['owner', 'admin'])) ||
+          // Role managers assign roles below their own rank, with permissions they hold (or everyday ones).
+          (actorPerms.hasAny(['manage_roles']) &&
+           changed.hasOnly(['customRoles', 'permissions', 'rank']) &&
+           next.get('rank', 9999) > aRank &&
+           next.get('permissions', []).toSet().difference(actorPerms.toSet().union(['post_messages', 'create_threads', 'upload_files', 'start_voice'].toSet())).size() == 0) ||
+          // Moderators time out members ranked below them.
+          ((actor.role in ['admin', 'moderator'] || actorPerms.hasAny(['moderate_chat'])) &&
+           changed.hasOnly(['timeoutUntil', 'timeoutReason']))
+        ));
+    }
+
+    function canRemoveMember(communityId) {
+      let actor = get(memberDocPath(communityId, request.auth.uid)).data;
+      return actor.role == 'owner' ||
+             ((actor.role == 'admin' || actor.get('permissions', []).hasAny(['manage_members'])) &&
+              rankOf(actor) < rankOf(existing()));
+    }
+
+    // Role managers only touch roles ranked below them and can't hand out permissions they lack.
+    function canManageRoleDoc(communityId, oldOrder, newOrder, perms) {
+      let actor = get(memberDocPath(communityId, request.auth.uid)).data;
+      let actorPerms = actor.get('permissions', []);
+      return actor.role in ['owner', 'admin'] ||
+             (actorPerms.hasAny(['manage_roles']) &&
+              oldOrder > rankOf(actor) && newOrder > rankOf(actor) &&
+              perms.toSet().difference(actorPerms.toSet().union(['post_messages', 'create_threads', 'upload_files', 'start_voice'].toSet())).size() == 0);
+    }
+
+    function isValidBan(data, uid) {
+      return data.keys().hasAll(['userId', 'bannedBy', 'createdAt']) &&
+             data.keys().hasOnly(['userId', 'name', 'avatar', 'reason', 'bannedBy', 'bannedByName', 'createdAt', 'expiresAt']) &&
+             data.userId == uid && data.bannedBy == request.auth.uid &&
+             data.createdAt == request.time &&
+             (!('reason' in data) || (data.reason is string && data.reason.size() <= 300)) &&
+             (!('expiresAt' in data) || data.expiresAt == null || (data.expiresAt is timestamp && data.expiresAt > request.time));
+    }
+
+    function isValidAuditEntry(data) {
+      return data.keys().hasAll(['action', 'actorId', 'createdAt']) &&
+             data.keys().hasOnly(['action', 'actorId', 'actorName', 'targetId', 'targetName', 'details', 'createdAt']) &&
+             data.action is string && data.action.size() <= 60 &&
+             data.actorId == request.auth.uid &&
+             data.createdAt == request.time &&
+             (!('details' in data) || (data.details is string && data.details.size() <= 500));
     }
 
     function canAccessChannel(communityId, channelId) {
@@ -474,8 +672,10 @@ service cloud.firestore {
           get(/databases/$(database)/documents/communities/$(communityId)/channels/$(channelId)).data.get('isHidden', false) == false &&
           (get(/databases/$(database)/documents/communities/$(communityId)/channels/$(channelId)).data.get('scheduledAt', null) == null || 
            get(/databases/$(database)/documents/communities/$(communityId)/channels/$(channelId)).data.scheduledAt <= request.time) && (
-            (get(/databases/$(database)/documents/communities/$(communityId)/channels/$(channelId)).data.get('isPremium', false) == false || (isCommunityMember(communityId) && hasPremiumAccess(communityId, get(/databases/$(database)/documents/communities/$(communityId)/channels/$(channelId)).data.get('premiumRoles', [])))) &&
-            (isCommunityMember(communityId) || get(/databases/$(database)/documents/communities/$(communityId)).data.get('membershipControl', {}).get('accessType', 'public') == 'public')
+            (get(/databases/$(database)/documents/communities/$(communityId)/channels/$(channelId)).data.get('isPremium', false) == false || (get(/databases/$(database)/documents/communities/$(communityId)/channels/$(channelId)).data.get('premiumRoles', []).size() == 0 && get(/databases/$(database)/documents/communities/$(communityId)/channels/$(channelId)).data.get('allowedRoles', []).size() > 0) || (isCommunityMember(communityId) && hasPremiumAccess(communityId, get(/databases/$(database)/documents/communities/$(communityId)/channels/$(channelId)).data.get('premiumRoles', [])))) &&
+            (isCommunityMember(communityId) || get(/databases/$(database)/documents/communities/$(communityId)).data.get('membershipControl', {}).get('accessType', 'public') == 'public') &&
+            (get(/databases/$(database)/documents/communities/$(communityId)/channels/$(channelId)).data.get('allowedRoles', []).size() == 0 ||
+             hasAnyRole(communityId, get(/databases/$(database)/documents/communities/$(communityId)/channels/$(channelId)).data.allowedRoles))
           )
         )
       );
@@ -515,9 +715,15 @@ service cloud.firestore {
              (!('lastUsed' in data) || (data.lastUsed is string || data.lastUsed is timestamp));
     }
 
+    // A poll vote: only `votes` changes, and only the voter's own key in it.
+    function isOwnVote() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['votes']) &&
+             request.resource.data.votes.diff(resource.data.get('votes', {})).affectedKeys().hasOnly([request.auth.uid]);
+    }
+
     function isValidLiveStream(data) {
       let requiredFields = ['communityId', 'channelId', 'hostId', 'status', 'type'];
-      let optionalFields = ['id', 'title', 'description', 'thumbnail', 'price', 'viewerCount', 'startTime', 'endTime', 'activePollId', 'spotlightParticipantId', 'isRecording', 'replayUrl'];
+      let optionalFields = ['id', 'title', 'description', 'thumbnail', 'price', 'viewerCount', 'startTime', 'endTime', 'lastSeenAt', 'hostName', 'hostPhoto', 'activePollId', 'spotlightParticipantId', 'isRecording', 'replayUrl'];
       let allFields = requiredFields.concat(optionalFields);
       
       return data.keys().hasAll(requiredFields) &&
@@ -540,8 +746,8 @@ service cloud.firestore {
              (!('communityId' in data) || data.communityId is string) &&
              (!('creatorId' in data) || data.creatorId == request.auth.uid) &&
              (!('code' in data) || data.code is string) &&
-             (!('rewardXp' in data) || data.rewardXp is number) &&
-             (!('maxUses' in data) || data.maxUses is number) &&
+             (!('rewardXp' in data) || (data.rewardXp is number && data.rewardXp >= 0 && data.rewardXp <= 500)) &&
+             (!('maxUses' in data) || (data.maxUses is number && data.maxUses >= 0 && data.maxUses <= 10000)) &&
              (!('uses' in data) || data.uses is number) &&
              (!('createdAt' in data) || (data.createdAt is timestamp || data.createdAt is string)) &&
              (!('expiresAt' in data) || data.expiresAt is string);
@@ -610,6 +816,13 @@ service cloud.firestore {
                     isValidUser(request.resource.data) && 
                     (!('role' in request.resource.data) || request.resource.data.role == 'user' || isAdmin());
       allow update: if (isAuthenticated() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['xp'])) ||
+                    // Presence heartbeat for "Active now" in messages.
+                    (isOwner(userId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastActiveAt']) &&
+                     request.resource.data.lastActiveAt is timestamp) ||
+                    // Marks when the user's latest status expires (see features/status).
+                    (isOwner(userId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['statusUntil']) &&
+                     request.resource.data.statusUntil is timestamp &&
+                     request.resource.data.statusUntil <= request.time + duration.value(25, 'h')) ||
                     (isOwner(userId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['theme', 'updatedAt'])) ||
                     (((isOwner(userId) || isAdmin()) && 
                     isValidUser(request.resource.data) &&
@@ -743,7 +956,8 @@ service cloud.firestore {
 
       match /polls/{pollId} {
         allow read: if isRegisteredForEvent(eventId) || isEventHost(eventId);
-        allow create, update: if isEventHost(eventId) || (isRegisteredForEvent(eventId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['voters', 'options']));
+        allow create, update: if isEventHost(eventId) || (isRegisteredForEvent(eventId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['voters', 'options'])) ||
+                              (isRegisteredForEvent(eventId) && isOwnVote());
       }
 
       match /questions/{questionId} {
@@ -802,12 +1016,21 @@ service cloud.firestore {
       match /members/{userId} {
         allow read: if true;
         allow create: if isAuthenticated() && (
-          // Admin/Moderator can add anyone
-          isAtLeastModerator(communityId) ||
-          // User can join themselves IF it's public and no approval required
+          // Admins may add anyone; moderators (approving join requests) may only add plain members
+          // holding permissions they hold themselves.
+          isCommunityAdmin(communityId) ||
+          (isAtLeastModerator(communityId) && incoming().role == 'member' &&
+           grantsOnlyOwn(communityId, incoming().get('permissions', [])) &&
+           !('rank' in incoming()) && !('timeoutUntil' in incoming())) ||
+          // Joining yourself: always as a plain member with no roles, permissions, rank or timeout.
           (
-            isOwner(userId) && 
+            isOwner(userId) &&
+            !isBanned(communityId, userId) &&
             isValidCommunityMember(request.resource.data) &&
+            incoming().role == 'member' &&
+            incoming().get('permissions', []).size() == 0 &&
+            incoming().get('customRoles', []).size() == 0 &&
+            !('rank' in incoming()) && !('timeoutUntil' in incoming()) &&
             (!get(/databases/$(database)/documents/communities/$(communityId)).data.get(['membershipControl', 'approvalRequired'], false)) &&
             get(/databases/$(database)/documents/communities/$(communityId)).data.get(['membershipControl', 'accessType'], 'public') == 'public' &&
             get(/databases/$(database)/documents/communities/$(communityId)).data.get('isPrivate', false) == false
@@ -815,14 +1038,9 @@ service cloud.firestore {
           // Initial creator joining
           (isOwner(userId) && get(/databases/$(database)/documents/communities/$(communityId)).data.creatorId == request.auth.uid)
         );
-        allow update: if isAuthenticated() && (
-          isAdmin() ||
-          (isOwner(userId) && request.resource.data.role == resource.data.role && isValidCommunityMember(request.resource.data)) ||
-          (exists(/databases/$(database)/documents/communities/$(communityId)/members/$(request.auth.uid)) && 
-           get(/databases/$(database)/documents/communities/$(communityId)/members/$(request.auth.uid)).data.role in ['owner', 'admin']) ||
-          (isOwner(userId) && incoming().diff(existing()).affectedKeys().hasOnly(['xp', 'lastActive', 'metadata']))
-        );
-        allow delete: if isAuthenticated() && (isOwner(userId) || isAtLeastModerator(communityId));
+        allow update: if isAuthenticated() && (isAdmin() || canUpdateMember(communityId, userId));
+        // Leaving, or removing someone ranked below you (needs admin or manage_members).
+        allow delete: if isAuthenticated() && (isOwner(userId) || isAdmin() || canRemoveMember(communityId));
 
         match /channelStats/{channelId} {
           allow read, write: if isOwner(userId);
@@ -832,6 +1050,7 @@ service cloud.firestore {
         allow read: if isAuthenticated() && (isAtLeastModerator(communityId) || resource.data.userId == request.auth.uid);
         allow create: if isAuthenticated() && 
                       !exists(/databases/$(database)/documents/communities/$(communityId)/members/$(request.auth.uid)) &&
+                      !isBanned(communityId, request.auth.uid) &&
                       isValidJoinRequest(incoming());
         allow update: if isAuthenticated() && (
                       (isAtLeastModerator(communityId) && incoming().diff(existing()).affectedKeys().hasOnly(['status'])) ||
@@ -842,13 +1061,39 @@ service cloud.firestore {
 
       match /roles/{roleId} {
         allow read: if true;
-        allow create: if isCommunityAdmin(communityId) && isValidRole(incoming());
-        allow update: if isCommunityAdmin(communityId) && isValidRole(incoming());
-        allow delete: if isCommunityAdmin(communityId);
+        // Admins manage every role. Role managers only manage roles ranked below them, and can't
+        // give a role permissions they don't hold or move a role above themselves.
+        allow create: if isValidRole(incoming()) &&
+          (isAdmin() || canManageRoleDoc(communityId, incoming().order, incoming().order, incoming().permissions));
+        allow update: if isValidRole(incoming()) &&
+          (isAdmin() || canManageRoleDoc(communityId, existing().order, incoming().order, incoming().permissions));
+        allow delete: if isAdmin() || canManageRoleDoc(communityId, existing().order, existing().order, []);
+      }
+
+      match /bans/{userId} {
+        allow read: if isAuthenticated() && (isAtLeastModerator(communityId) || isOwner(userId));
+        allow create: if (isCommunityAdmin(communityId) || hasMemberPerm(communityId, 'manage_members')) &&
+                      userId != request.auth.uid &&
+                      userId != get(/databases/$(database)/documents/communities/$(communityId)).data.creatorId &&
+                      outranks(communityId, userId) && isValidBan(incoming(), userId);
+        allow update: if false;
+        allow delete: if isCommunityAdmin(communityId) || hasMemberPerm(communityId, 'manage_members');
+      }
+
+      // Append-only: entries can't be edited or removed, and must name the real actor.
+      match /auditLog/{entryId} {
+        allow read: if isAtLeastModerator(communityId);
+        allow create: if isAuthenticated() && (
+                        isAtLeastModerator(communityId) ||
+                        hasMemberPerm(communityId, 'manage_roles') ||
+                        hasMemberPerm(communityId, 'manage_members')
+                      ) && isValidAuditEntry(incoming());
+        allow update, delete: if false;
       }
 
       match /dailyStats/{date} {
-        allow read: if isCommunityAdmin(communityId);
+        // Moderators see the Analytics tab, so they can read the numbers behind it.
+        allow read: if isAtLeastModerator(communityId);
         allow write: if isCommunityMember(communityId) && isValidDailyStats(incoming());
       }
 
@@ -889,20 +1134,19 @@ service cloud.firestore {
 
         match /messages/{messageId} {
           allow read: if canAccessChannel(communityId, channelId);
-          allow create: if isVerified() && isCommunityMember(communityId) && 
-                         (isAdmin() || (canAccessChannel(communityId, channelId) && !isLockedChannel(communityId, channelId))) && 
+          allow create: if isVerified() && (isAdmin() || (amMember(communityId) && canPostMessage(communityId, channelId))) && 
                          incoming().keys().hasAll(['authorUid', 'content', 'createdAt']) && 
-                         isValidChannelMessage(incoming());
+                         isValidChannelMessage(communityId, incoming());
           allow update: if isVerified() && (
              (isAtLeastModerator(communityId) || (isCommunityMember(communityId) && !isLockedChannel(communityId, channelId) && canAccessChannel(communityId, channelId))) && (
                (resource.data.authorUid == request.auth.uid && 
                 incoming().diff(existing()).affectedKeys().hasOnly(['content', 'updatedAt', 'isEdited', 'codeSnippet', 'language', 'attachments', 'poll']) &&
-                isValidChannelMessage(incoming())) ||
+                isValidChannelMessage(communityId, incoming())) ||
                (incoming().diff(existing()).affectedKeys().hasOnly(['reactions'])) ||
                (incoming().diff(existing()).affectedKeys().hasOnly(['poll'])) ||
                (isAtLeastModerator(communityId) && 
                 incoming().diff(existing()).affectedKeys().hasOnly(['isPinned', 'pinnedAt']) &&
-                isValidChannelMessage(incoming()))
+                isValidChannelMessage(communityId, incoming()))
              )
           );
           allow delete: if isVerified() && (resource.data.authorUid == request.auth.uid || isAtLeastModerator(communityId) || hasPermission(communityId, 'moderate_chat'));
@@ -910,7 +1154,8 @@ service cloud.firestore {
         
         match /liveStreams/{streamId} {
           allow read: if true;
-          allow create: if isVerified() && isCommunityAdmin(communityId) && isValidLiveStream(request.resource.data);
+          allow create: if isVerified() && (isCommunityAdmin(communityId) || hasPermission(communityId, 'host_stream')) &&
+                        request.resource.data.hostId == request.auth.uid && isValidLiveStream(request.resource.data);
           allow update: if isVerified() && (
             (resource.data.hostId == request.auth.uid && isValidLiveStream(request.resource.data)) ||
             (isCommunityAdmin(communityId) && isValidLiveStream(request.resource.data)) ||
@@ -920,8 +1165,8 @@ service cloud.firestore {
 
           match /chat/{messageId} {
             allow read: if true;
-            allow create: if isVerified() && isCommunityMember(communityId);
-            allow delete: if isVerified() && (resource.data.userId == request.auth.uid || isCommunityAdmin(communityId) || get(/databases/$(database)/documents/communities/$(communityId)/channels/$(channelId)/liveStreams/$(streamId)).data.hostId == request.auth.uid);
+            allow create: if isVerified() && isCommunityMember(communityId) && !isTimedOut(communityId);
+            allow delete: if isVerified() && (resource.data.userId == request.auth.uid || isAtLeastModerator(communityId) || get(/databases/$(database)/documents/communities/$(communityId)/channels/$(channelId)/liveStreams/$(streamId)).data.hostId == request.auth.uid);
           }
 
           match /actions/{actionId} {
@@ -932,19 +1177,23 @@ service cloud.firestore {
           match /polls/{pollId} {
             allow read: if true;
             allow create, update: if isVerified() && (get(/databases/$(database)/documents/communities/$(communityId)/channels/$(channelId)/liveStreams/$(streamId)).data.hostId == request.auth.uid || isCommunityAdmin(communityId));
+            // Viewers vote by setting only their own entry in `votes`.
+            allow update: if isCommunityMember(communityId) && isOwnVote();
           }
 
           match /questions/{questionId} {
             allow read: if true;
             allow create: if isVerified() && isCommunityMember(communityId);
-            allow update: if isVerified() && (resource.data.userId == request.auth.uid || isCommunityAdmin(communityId) || get(/databases/$(database)/documents/communities/$(communityId)/channels/$(channelId)/liveStreams/$(streamId)).data.hostId == request.auth.uid);
+            allow update: if isVerified() && (resource.data.userId == request.auth.uid || isAtLeastModerator(communityId) || get(/databases/$(database)/documents/communities/$(communityId)/channels/$(channelId)/liveStreams/$(streamId)).data.hostId == request.auth.uid) ||
+                          (isCommunityMember(communityId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['upvotes']));
             allow delete: if isVerified() && (resource.data.userId == request.auth.uid || isCommunityAdmin(communityId));
           }
         }
 
         match /voiceParticipants/{userId} {
           allow read: if isAuthenticated();
-          allow create, update: if isAuthenticated() && isOwner(userId) && isCommunityMember(communityId) && (hasPermission(communityId, 'start_voice') || isAtLeastModerator(communityId));
+          // Any member can drop into a voice room (locked rooms are enforced by the app).
+          allow create, update: if isAuthenticated() && isOwner(userId) && isCommunityMember(communityId);
           allow delete: if isAuthenticated() && (isOwner(userId) || isCommunityAdmin(communityId) || hasPermission(communityId, 'moderate_chat'));
         }
       }
@@ -975,19 +1224,29 @@ service cloud.firestore {
 
     match /conversations/{conversationId} {
       allow read: if isAuthenticated() && (resource == null || request.auth.uid in resource.data.participants);
-      allow create: if isAuthenticated() && isValidConversation(request.resource.data);
+      allow create: if isAuthenticated() && isValidConversation(conversationId, request.resource.data);
       allow update: if isAuthenticated() && request.auth.uid in resource.data.participants &&
-                    request.resource.data.participants == resource.data.participants;
+                    request.resource.data.participants == resource.data.participants &&
+                    request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastMessage', 'lastMessageAt', 'lastSenderId', 'unreadCount', 'favouritedBy', 'mutedBy', 'readAt', 'typing', 'status']) &&
+                    isValidConversationUpdate();
 
       match /messages/{messageId} {
-        allow read: if isAuthenticated() && 
-                      (!exists(/databases/$(database)/documents/conversations/$(conversationId)) || 
-                       request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants);
+        allow read: if isAuthenticated() &&
+                      request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants;
         allow create: if isAuthenticated() &&
                       canSendConversationMessage(conversationId) &&
-                      isValidNestedMessage(request.resource.data);
-        allow update, delete: if isAuthenticated() &&
-                              request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants;
+                      isValidNestedMessage(request.resource.data) &&
+                      request.resource.data.conversationId == conversationId;
+        allow update: if isAuthenticated() &&
+                      request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants && (
+                        // Only the sender can edit what they wrote.
+                        (resource.data.senderId == request.auth.uid &&
+                         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['content', 'isEdited', 'editedAt']) &&
+                         request.resource.data.content is string && request.resource.data.content.size() > 0 && request.resource.data.content.size() < 5000) ||
+                        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions']) ||
+                        (resource.data.get('receiverId', '') == request.auth.uid && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']))
+                      );
+        allow delete: if isAuthenticated() && resource.data.senderId == request.auth.uid;
       }
     }
 
@@ -998,7 +1257,7 @@ service cloud.firestore {
                     isValidPost(request.resource.data);
       allow update: if isAdmin() ||
                     (isAuthenticated() && resource.data.authorUid == request.auth.uid && 
-                     incoming().diff(existing()).affectedKeys().hasOnly(['content', 'codeSnippet', 'language', 'media', 'poll', 'githubLink', 'hashtags', 'updatedAt']) &&
+                     incoming().diff(existing()).affectedKeys().hasOnly(['content', 'codeSnippet', 'language', 'media', 'poll', 'githubLink', 'hashtags', 'searchTokens', 'updatedAt']) &&
                      isValidPost(request.resource.data)) ||
                     (isAuthenticated() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['impressions'])) ||
                     (isAuthenticated() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likesCount', 'commentsCount', 'repostsCount', 'poll']));
@@ -1019,7 +1278,11 @@ service cloud.firestore {
         allow update: if (isAuthenticated() && resource.data.authorUid == request.auth.uid && 
                       incoming().diff(existing()).affectedKeys().hasOnly(['content', 'updatedAt']) &&
                       isValidComment(request.resource.data)) ||
-                      (isAuthenticated() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likesCount', 'repliesCount']));
+                      (isAuthenticated() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likesCount', 'repliesCount'])) ||
+                      // Feedback requests: only the post's author can mark a comment helpful.
+                      (isAuthenticated() && get(/databases/$(database)/documents/posts/$(postId)).data.authorUid == request.auth.uid &&
+                       request.resource.data.diff(resource.data).affectedKeys().hasOnly(['helpful']) &&
+                       request.resource.data.helpful is bool);
         allow delete: if isAuthenticated() && (resource.data.authorUid == request.auth.uid || get(/databases/$(database)/documents/posts/$(postId)).data.authorUid == request.auth.uid);
 
         match /likes/{userId} {
@@ -1031,6 +1294,35 @@ service cloud.firestore {
       match /likes/{userId} {
         allow read: if true;
         allow write: if isOwner(userId);
+      }
+    }
+
+    // 24-hour statuses, visible to the author and their followers only.
+    match /statuses/{statusId} {
+      function canSeeStatus(data) {
+        return isAuthenticated() && (data.authorUid == request.auth.uid ||
+          exists(/databases/$(database)/documents/users/$(data.authorUid)/followers/$(request.auth.uid)));
+      }
+
+      allow read: if canSeeStatus(resource.data);
+      allow create: if isAuthenticated() &&
+                    request.resource.data.authorUid == request.auth.uid &&
+                    request.resource.data.keys().hasAll(['authorUid', 'authorName', 'type', 'createdAt', 'expiresAt']) &&
+                    request.resource.data.keys().hasOnly(['authorUid', 'authorName', 'authorUsername', 'authorPhoto', 'type', 'mediaUrl', 'text', 'background', 'createdAt', 'expiresAt']) &&
+                    request.resource.data.type in ['image', 'video', 'text'] &&
+                    request.resource.data.expiresAt is timestamp &&
+                    request.resource.data.expiresAt > request.time &&
+                    request.resource.data.expiresAt <= request.time + duration.value(25, 'h') &&
+                    (!('text' in request.resource.data) || (request.resource.data.text is string && request.resource.data.text.size() <= 700)) &&
+                    (request.resource.data.type == 'text' ? request.resource.data.text.size() > 0 : request.resource.data.mediaUrl is string);
+      allow delete: if isAuthenticated() && resource.data.authorUid == request.auth.uid;
+
+      match /views/{viewerId} {
+        allow create: if isOwner(viewerId) &&
+                      request.resource.data.keys().hasOnly(['viewedAt']) &&
+                      canSeeStatus(get(/databases/$(database)/documents/statuses/$(statusId)).data);
+        allow read: if isAuthenticated() &&
+                    (request.auth.uid == viewerId || get(/databases/$(database)/documents/statuses/$(statusId)).data.authorUid == request.auth.uid);
       }
     }
 
@@ -1167,9 +1459,9 @@ service cloud.firestore {
       allow create: if isAuthenticated() && isValidCallSession(request.resource.data);
       allow update: if isAuthenticated() && (
         (request.auth.uid in resource.data.participantIds && 
-         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['participants', 'status', 'endedAt'])) ||
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['participants', 'status', 'endedAt', 'answeredAt'])) ||
         (resource.data.callerId == request.auth.uid && 
-         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'endedAt', 'participants']))
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'endedAt', 'participants', 'answeredAt']))
       );
       allow delete: if false;
     }

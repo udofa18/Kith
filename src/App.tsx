@@ -40,12 +40,14 @@ import AdminPage from './pages/AdminPage';
 
 // Components
 import AppSidebar from './components/AppSidebar';
+import ComposeFab from './components/ComposeDialog';
 
 import { LiveSessionProvider } from './contexts/LiveSessionContext';
 import { CurrentUserProvider } from './contexts/CurrentUserContext';
 import FloatingLiveSession from './components/live/FloatingLiveSession';
 
 import LiveSessionWrapper from './LiveSessionWrapper';
+import { usePresence } from './features/messages/usePresence';
 
 function CommunityRedirect() {
   const { communityId } = useParams();
@@ -146,8 +148,9 @@ function AppContent({ user, onboardingRequired }: { user: any, onboardingRequire
   const showSidebar = !isLandingPage && !isLoginPage && !isOnboardingPage && !isLivePage;
 
   const queryParams = new URLSearchParams(location.search);
-  const currentCommunityId = queryParams.get('community');
-  const currentChannelId = queryParams.get('channel');
+  // The community view keeps the open channel in the URL (?view=community&id=…&channelId=…).
+  const currentCommunityId = queryParams.get('view') === 'community' ? queryParams.get('id') : null;
+  const currentChannelId = queryParams.get('channelId');
   
   const isViewingVoiceChannel = activeSession && 
     currentCommunityId === activeSession.communityId && 
@@ -167,6 +170,9 @@ function AppContent({ user, onboardingRequired }: { user: any, onboardingRequire
       </main>
       {activeSession && !isViewingVoiceChannel && (
         <PersistentVoiceOverlay onReturn={handleReturnToVoice} />
+      )}
+      {user && !onboardingRequired && showSidebar && (
+        <ComposeFab hidden={!!activeSession && !isViewingVoiceChannel} />
       )}
     </div>
   );
@@ -193,6 +199,7 @@ export default function App() {
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [onboardingRequired, setOnboardingRequired] = useState(false);
+  usePresence(user?.uid);
 
   useEffect(() => {
     // Add audio unlock listeners

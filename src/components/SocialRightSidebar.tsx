@@ -1,193 +1,162 @@
-import { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { Calendar, Clock, Zap, DollarSign, Layers, FileText } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
+import { Check, Flame, TrendingUp } from 'lucide-react';
 import { feedService } from '../services/feedService';
 import { queryKeys, STALE } from '../lib/queryClient';
 import { formatDate } from '../lib/utils';
+import { useCurrentUser } from '../contexts/CurrentUserContext';
+import { activeStreak, recentDays, shippedToday } from '../features/shiplog/streak';
+import RailSection, { RailEmpty, RailRow } from './ui/RailSection';
+import Avatar from './ui/Avatar';
+import { RailSkeleton } from './SocialLeftSidebar';
 
+/** Activity rail: your streak, what's coming up, open challenges, recent articles. */
 export default function SocialRightSidebar() {
-  const sidebarRef = useRef<HTMLDivElement>(null);
-  const [sidebarTop, setSidebarTop] = useState(24);
+  const user = useCurrentUser();
+  return (
+    <aside className="hidden xl:flex flex-col gap-4 w-80 shrink-0 order-3 sticky top-0 self-start max-h-screen overflow-y-auto no-scrollbar py-4">
+      {user && <StreakCard streak={user.streak} />}
+      <UpcomingEvents />
+      <Challenges />
+      <Articles />
+    </aside>
+  );
+}
 
-  const { data: upcomingEvents = [] } = useQuery({
+function StreakCard({ streak }: { streak: any }) {
+  const current = activeStreak(streak);
+  const done = shippedToday(streak);
+  const days = recentDays(streak, 7);
+
+  return (
+    <section className="rounded-2xl border border-black/10 dark:border-white/10 bg-white/60 dark:bg-white/2 p-4">
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <p className="text-[15px] font-bold flex items-center gap-1.5">
+            <Flame size={16} className="text-primary" />
+            {current > 0 ? `${current}-day streak` : 'Start a streak'}
+          </p>
+          <p className="text-xs text-black/50 dark:text-white/50">
+            {current > 0 ? `Longest: ${streak?.longest ?? current} days` : 'Share a progress update each day you move something forward.'}
+          </p>
+        </div>
+      </div>
+
+      <ol className="flex justify-between mb-4" aria-label="Last 7 days">
+        {days.map(d => (
+          <li key={d.key} className="flex flex-col items-center gap-1">
+            <span
+              className={`w-7 h-7 rounded-full flex items-center justify-center ${d.shipped ? 'bg-primary text-white' : 'bg-black/5 dark:bg-white/10'}`}
+              title={d.key}
+            >
+              {d.shipped && <Check size={13} />}
+            </span>
+            <span className="text-[11px] text-black/40 dark:text-white/40">
+              {new Date(`${d.key}T00:00`).toLocaleDateString(undefined, { weekday: 'narrow' })}
+            </span>
+          </li>
+        ))}
+      </ol>
+
+      {done ? (
+        <p className="text-sm text-center text-black/60 dark:text-white/60">You shared progress today. Nice work.</p>
+      ) : (
+        <Link
+          to="/feed?compose=shiplog"
+          className="flex items-center justify-center gap-2 w-full py-2 rounded-full bg-primary text-white text-sm font-semibold hover:bg-primary/90 transition-colors"
+        >
+          <TrendingUp size={14} /> Share today's progress
+        </Link>
+      )}
+    </section>
+  );
+}
+
+function UpcomingEvents() {
+  const { data, isLoading } = useQuery({
     queryKey: queryKeys.upcomingEvents(),
-    queryFn: () => feedService.getUpcomingEvents(5),
+    queryFn: () => feedService.getUpcomingEvents(4),
     staleTime: STALE.sidebar,
   });
+  const upcoming = data?.upcoming ?? [];
 
-  const { data: featuredArticles = [] } = useQuery({
-    queryKey: queryKeys.featuredArticles(),
-    queryFn: () => feedService.getFeaturedArticles(5),
-    staleTime: STALE.sidebar,
-  });
+  return (
+    <RailSection title="Upcoming events" action={{ label: 'All events', to: '/events' }}>
+      {isLoading ? <RailSkeleton rows={3} avatar /> : upcoming.length === 0 ? <RailEmpty>No upcoming events.</RailEmpty> : upcoming.map((event: any) => (
+        <RailRow key={event.id} to={`/events/${event.id}`}>
+          <div className="w-10 shrink-0 text-center rounded-lg bg-primary/10 text-primary py-1">
+            <p className="text-[10px] font-semibold uppercase leading-none">{formatDate(event.startMs, 'MMM')}</p>
+            <p className="text-base font-bold leading-tight">{formatDate(event.startMs, 'd')}</p>
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold line-clamp-2 leading-snug">{event.title}</p>
+            <p className="text-xs text-black/50 dark:text-white/50">{formatDate(event.startMs, 'EEE, h:mm a')}</p>
+          </div>
+        </RailRow>
+      ))}
+    </RailSection>
+  );
+}
 
-  const { data: featuredChallenges = [] } = useQuery({
+function timeLeft(deadline?: number): string {
+  if (!deadline) return 'Open';
+  const ms = deadline - Date.now();
+  const days = Math.floor(ms / 86_400_000);
+  if (days >= 1) return `${days}d left`;
+  const hours = Math.floor(ms / 3_600_000);
+  return hours >= 1 ? `${hours}h left` : 'Closing soon';
+}
+
+function Challenges() {
+  const { data: challenges = [], isLoading } = useQuery({
     queryKey: queryKeys.featuredChallenges(),
     queryFn: () => feedService.getFeaturedChallenges(3),
     staleTime: STALE.sidebar,
   });
 
-  useEffect(() => {
-    const updateTop = () => {
-      const vh = window.innerHeight;
-      if (sidebarRef.current) {
-        const h = sidebarRef.current.offsetHeight;
-        setSidebarTop(h > vh - 48 ? vh - h - 24 : 24);
-      }
-    };
+  return (
+    <RailSection title="Open challenges" action={{ label: 'All', to: '/challenges' }}>
+      {isLoading ? <RailSkeleton rows={3} avatar /> : challenges.length === 0 ? <RailEmpty>No open challenges.</RailEmpty> : challenges.map((c: any) => (
+        <RailRow key={c.id} to={`/challenges/${c.id}`}>
+          <Avatar src={c.image} seed={c.id} size={36} square />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold truncate">{c.title}</p>
+            <p className="text-xs text-black/50 dark:text-white/50">
+              {c.rewardPool?.cashAmount ? `$${Number(c.rewardPool.cashAmount).toLocaleString()} · ` : ''}
+              {timeLeft(c.deadlines?.submissionEnd)}
+            </p>
+          </div>
+        </RailRow>
+      ))}
+    </RailSection>
+  );
+}
 
-    const ob = new ResizeObserver(updateTop);
-    if (sidebarRef.current) ob.observe(sidebarRef.current);
-    window.addEventListener('resize', updateTop);
-    updateTop();
-
-    return () => {
-      ob.disconnect();
-      window.removeEventListener('resize', updateTop);
-    };
-  }, [upcomingEvents, featuredArticles, featuredChallenges]);
+function Articles() {
+  const { data: articles = [], isLoading } = useQuery({
+    queryKey: queryKeys.featuredArticles(),
+    queryFn: () => feedService.getFeaturedArticles(3),
+    staleTime: STALE.sidebar,
+  });
 
   return (
-    <aside 
-      ref={sidebarRef}
-      style={{ top: `${sidebarTop}px` }}
-      className="hidden xl:block w-80 space-y-0 pt-6 sticky h-fit order-3 shrink-0 border-l border-black/10 dark:border-white/10 no-scrollbar"
-    >
-      {/* Upcoming Events */}
-      <div className="bg-transparent p-4 border-b border-black/10 dark:border-white/10">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-[15px] font-black flex items-center gap-2 text-black/40 dark:text-white/40 uppercase tracking-widest">
-            <Calendar size={16} className="text-purple-400" /> Events
-          </h3>
-          <Link to="/events" className="text-[10px] text-primary hover:underline font-black uppercase tracking-widest">View All</Link>
-        </div>
-        <div className="space-y-4">
-          {upcomingEvents.map(event => {
-            const toMs = (d: any) => d?.toMillis ? d.toMillis() : d?.seconds ? d.seconds * 1000 : new Date(d).getTime();
-            const now = Date.now();
-            const start = toMs(event.startDate);
-            const end = toMs(event.endDate);
-            const isLive = start < now && end > now;
-            const isEnded = end <= now;
-            // If not live and not ended, it's upcoming
-            
-            return (
-              <Link key={event.id} to={`/events/${event.id}`} className="block group hover:bg-black/5 dark:hover:bg-white/5 p-2 transition-all">
-                <div className="flex gap-3">
-                  <div className="w-12 h-12 bg-black/5 dark:bg-white/5 overflow-hidden shrink-0 border border-black/10 dark:border-white/10 relative rounded-full">
-                    <img src={(event.banner && event.banner.trim() !== '') ? event.banner : `https://picsum.photos/seed/${event.id}/100/100`} alt="" className="w-full h-full object-cover" />
-                  </div>
-                  
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-start justify-between gap-2 mb-1">
-                      <p className="text-[14px] font-bold line-clamp-2 leading-tight group-hover:text-primary transition-colors text-black dark:text-white">{event.title}</p>
-                      
-                      {/* Status Badge */}
-                      {isLive ? (
-                        <span className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-500/15 text-red-500 text-[10px] font-black uppercase tracking-wider border border-red-500/20">
-                          <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse"></span>
-                          Live
-                        </span>
-                      ) : isEnded ? (
-                        <span className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-black/5 dark:bg-white/10 text-black/40 dark:text-white/40 text-[10px] font-black uppercase tracking-wider border border-black/5 dark:border-white/5">
-                          Ended
-                        </span>
-                      ) : (
-                        <span className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gradient-to-r from-blue-500/15 to-purple-500/15 text-blue-500 dark:text-blue-400 text-[10px] font-black uppercase tracking-wider border border-blue-500/20 dark:border-blue-400/20">
-                          Upcoming
-                        </span>
-                      )}
-                    </div>
-                    
-                    <div className="space-y-0.5">
-                      <p className="text-[11px] text-black/50 dark:text-white/50 flex items-center gap-1.5 font-bold uppercase tracking-wider">
-                        <Clock size={10} className="text-purple-400/50" />
-                        {formatDate(event.startDate, 'MMM d, HH:mm')}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </Link>
-            );
-          })}
-          {upcomingEvents.length === 0 && <p className="text-xs text-black/40 dark:text-white/40 text-center py-2">No upcoming events</p>}
-        </div>
-      </div>
-      
-      {/* Featured Challenges */}
-      <div className="bg-transparent border-b border-black/10 dark:border-white/10">
-        <div className="p-4 border-b border-black/5 dark:border-white/5 flex items-center justify-between">
-          <h3 className="text-[15px] font-black flex items-center gap-2 text-black/40 dark:text-white/40 uppercase tracking-widest">
-            <Zap size={16} className="text-yellow-400" /> Challenges
-          </h3>
-          <Link to="/challenges" className="text-[10px] text-primary hover:underline font-black uppercase tracking-widest">View All</Link>
-        </div>
-        <div className="space-y-1 p-2">
-          {featuredChallenges.map(challenge => {
-            const difference = challenge.deadlines?.submissionEnd ? challenge.deadlines.submissionEnd - Date.now() : 0;
-            let dueText = 'Ended';
-            if (difference > 0) {
-              const days = Math.floor(difference / (1000 * 60 * 60 * 24));
-              const hours = Math.floor((difference / (1000 * 60 * 60)) % 24);
-              if (days > 0) dueText = `${days}d left`;
-              else if (hours > 0) dueText = `${hours}h left`;
-              else dueText = 'Due soon';
-            }
-            
-            return (
-              <Link key={challenge.id} to={`/challenges/${challenge.id}`} className="flex items-center gap-3 group hover:bg-black/5 dark:hover:bg-white/5 p-2 transition-all">
-                <div className="w-10 h-10 flex-shrink-0 flex items-center justify-center overflow-hidden border border-black/10 dark:border-white/10 bg-gradient-to-br from-blue-500 to-primary rounded-full">
-                  {challenge.image ? (
-                    <img src={challenge.image} alt={challenge.title} className="w-full h-full object-cover" />
-                  ) : (
-                    <Layers className="text-white shadow-sm" size={16} />
-                  )}
-                </div>
-                <div className="flex flex-col min-w-0 flex-1">
-                  <h4 className="font-bold text-[15px] leading-tight text-black dark:text-white/90 group-hover:text-primary transition-colors truncate">
-                    {challenge.title}
-                  </h4>
-                  <div className="flex items-center gap-1.5 text-[13px] font-black uppercase tracking-wider mt-1 text-black/40 dark:text-white/40">
-                    <span className="text-[#00ff88] flex items-center gap-0.5">
-                      <DollarSign size={8}/> {challenge.rewardPool?.cashAmount || 0}
-                    </span>
-                    <span>|</span>
-                    <span>{dueText}</span>
-                  </div>
-                </div>
-              </Link>
-            )})}
-          {featuredChallenges.length === 0 && <p className="text-xs text-black/40 dark:text-white/40 text-center py-2">No active challenges</p>}
-        </div>
-      </div>
-
-      {/* Featured Articles */}
-      <div className="bg-transparent border-b border-black/10 dark:border-white/10 pb-4">
-        <div className="p-4 border-b border-black/5 dark:border-white/5 flex items-center justify-between">
-          <h3 className="text-[15px] font-black flex items-center gap-2 text-black/40 dark:text-white/40 uppercase tracking-widest">
-            <FileText size={16} className="text-blue-400" /> Articles
-          </h3>
-          <Link to="/articles" className="text-[10px] text-primary hover:underline font-black uppercase tracking-widest">View All</Link>
-        </div>
-        <div className="p-4 space-y-4">
-          {featuredArticles.map(article => (
-            <Link key={article.id} to={`/article/${article.id}`} className="block group">
-              <div className="w-full h-32 bg-black/5 dark:bg-white/5 overflow-hidden border border-black/10 dark:border-white/5 mb-2 rounded-2xl">
-                {article.coverImage ? (
-                  <img src={article.coverImage} alt={article.title} className="w-full h-full object-cover" />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center">
-                    <FileText size={24} className="text-black/10 dark:text-white/10" />
-                  </div>
-                )}
-              </div>
-              <h4 className="font-bold text-[15px] leading-tight text-black dark:text-white group-hover:text-primary transition-colors line-clamp-2">{article.title}</h4>
-            </Link>
-          ))}
-          {featuredArticles.length === 0 && <p className="text-xs text-black/40 dark:text-white/40 text-center py-2">No articles found</p>}
-        </div>
-      </div>
-    </aside>
+    <RailSection title="Recent articles" action={{ label: 'All', to: '/articles' }}>
+      {isLoading ? <RailSkeleton rows={3} /> : articles.length === 0 ? <RailEmpty>No articles yet.</RailEmpty> : articles.map((a: any) => (
+        <RailRow key={a.id} to={`/article/${a.id}`}>
+          {a.coverImage && (
+            <img
+              src={a.coverImage}
+              alt=""
+              className="w-14 h-10 rounded-lg object-cover shrink-0 bg-black/5 dark:bg-white/10"
+              onError={e => { e.currentTarget.style.display = 'none'; }}
+            />
+          )}
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold line-clamp-2 leading-snug">{a.title}</p>
+            {a.authorName && <p className="text-xs text-black/50 dark:text-white/50 truncate">{a.authorName}</p>}
+          </div>
+        </RailRow>
+      ))}
+    </RailSection>
   );
 }

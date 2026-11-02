@@ -1,8 +1,11 @@
-import { useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowUp, Flame, Inbox, MessageSquare, Search as SearchIcon, Users } from 'lucide-react';
-import PostEditor from '../../../components/PostEditor';
+import PostEditor, { type PostKind } from '../../../components/PostEditor';
+import { SearchBox } from '../../../components/SocialLeftSidebar';
+import SearchExtras from '../../search/SearchExtras';
+import StatusTray from '../../status/StatusTray';
 import GettingStartedCard from '../../../components/GettingStartedCard';
 import { useCurrentUser } from '../../../contexts/CurrentUserContext';
 import { queryKeys } from '../../../lib/queryClient';
@@ -13,6 +16,9 @@ import type { FeedTab, SearchParams } from '../types';
 import FeedTabs from './FeedTabs';
 import FeedList from './FeedList';
 import FeedEmpty from './FeedEmpty';
+import PageHeader from '../../../components/ui/PageHeader';
+import LiveNowRow from './LiveNowRow';
+import AwayDigest from './AwayDigest';
 
 export function tabFromParams(params: URLSearchParams): FeedTab {
   const view = params.get('view');
@@ -64,6 +70,20 @@ export default function FeedPage() {
   };
 
   const setTab = (next: FeedTab) => setSearchParams({ view: next });
+
+  // `?compose=shiplog|feedback` (e.g. from the streak card) opens the composer in that mode.
+  const composeParam = searchParams.get('compose');
+  const composeKind: PostKind | undefined = composeParam === 'shiplog' || composeParam === 'feedback' ? composeParam : undefined;
+  useEffect(() => {
+    if (!composeKind || !uid) return;
+    const t = setTimeout(focusComposer, 50);
+    setSearchParams(prev => {
+      const p = new URLSearchParams(prev);
+      p.delete('compose');
+      return p;
+    }, { replace: true });
+    return () => clearTimeout(t);
+  }, [composeKind, uid]);
   const clearQuote = () => setSearchParams(prev => {
     const p = new URLSearchParams(prev);
     p.delete('quote');
@@ -87,7 +107,7 @@ export default function FeedPage() {
       </div>
       <p className="font-semibold mb-1">Join the conversation</p>
       <p className="text-sm text-black/50 dark:text-white/50 max-w-sm mx-auto mb-5">
-        Sign in to share what you're building and follow other creators.
+        Sign in to share with the community and follow people you like.
       </p>
       <Link
         to="/login"
@@ -102,14 +122,17 @@ export default function FeedPage() {
   return (
     <div ref={rootRef}>
       {tab === 'search' ? (
-        <div className="px-6 py-5 border-b border-black/10 dark:border-white/10">
-          <h2 className="text-lg font-bold flex items-center gap-2">
-            <SearchIcon className="text-primary" size={20} />
-            {hashtag ? `#${hashtag.replace(/^#/, '')}` : `Results for “${search}”`}
-          </h2>
-        </div>
+        <>
+          <PageHeader
+            title={hashtag ? `#${hashtag.replace(/^#/, '')}` : `“${search}”`}
+            subtitle={hashtag ? 'Posts with this tag' : 'Search results'}
+          />
+          <div className="lg:hidden px-4 pt-3 pb-1"><SearchBox /></div>
+          {search && !hashtag && <SearchExtras term={search} />}
+        </>
       ) : (
         <>
+          <div className="lg:hidden px-4 pt-3 pb-1"><SearchBox /></div>
           <FeedTabs active={tab} onChange={setTab} />
           {hasNewPosts && (
             <div className="sticky top-[52px] z-20 h-0 flex justify-center">
@@ -121,10 +144,17 @@ export default function FeedPage() {
               </button>
             </div>
           )}
+          {(tab === 'foryou' || tab === 'following') && (<>{uid && <StatusTray />}<LiveNowRow /></>)}
           {uid ? (
             <div ref={editorRef}>
+              {tab === 'foryou' && <AwayDigest uid={uid} />}
               <GettingStartedCard uid={uid} onWritePost={focusComposer} />
-              <PostEditor quotedPostId={searchParams.get('quote')} onCancelQuote={clearQuote} onPostCreated={onPostCreated} />
+              <PostEditor
+                quotedPostId={searchParams.get('quote')}
+                onCancelQuote={clearQuote}
+                onPostCreated={onPostCreated}
+                initialKind={composeKind}
+              />
             </div>
           ) : signInPrompt}
         </>
@@ -141,7 +171,7 @@ export default function FeedPage() {
           isFetchingNextPage={feed.isFetchingNextPage}
           fetchNextPage={feed.fetchNextPage}
           refetch={feed.refetch}
-          empty={<EmptyState tab={tab} followsAnyone={(viewer?.followingIds.size ?? 0) > 0} query={hashtag || search} onGoTrending={() => setTab('trending')} />}
+          empty={<EmptyState tab={tab} followsAnyone={(viewer?.followingIds.size ?? 0) > 0} query={hashtag ? `#${hashtag.replace(/^#/, "")}` : search} onGoTrending={() => setTab('trending')} />}
         />
       )}
     </div>
@@ -173,7 +203,7 @@ function EmptyState({ tab, followsAnyone, query, onGoTrending }: {
     case 'trending':
       return <FeedEmpty icon={Flame} title="Nothing trending yet" body="Posts with likes and comments this week will show up here." />;
     case 'search':
-      return <FeedEmpty icon={SearchIcon} title="No results" body={`No posts match “${query}”.`} />;
+      return <FeedEmpty icon={SearchIcon} title="No posts found" body={`Nothing matches “${query}” yet. Try a shorter word or a different spelling.`} />;
     default:
       return <FeedEmpty icon={Inbox} title="Nothing here yet" body="Be the first to share something." />;
   }

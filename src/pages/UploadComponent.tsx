@@ -4,7 +4,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { db, auth, storage, OperationType, handleFirestoreError } from '../firebase';
 import { collection, addDoc, doc, getDoc, updateDoc } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { generateProductDescription } from "../services/geminiService";
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   AlertCircle, 
@@ -34,7 +34,6 @@ import {
 } from 'lucide-react';
 import ProductLivePreview from '../components/ProductLivePreview';
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 
 const STEPS = [
   { id: 'basics', title: 'Basics', icon: <Layers size={18} /> },
@@ -201,16 +200,13 @@ export default function UploadComponent() {
     }
     setIsAiGenerating(true);
     try {
-      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-      const prompt = `Write a high-converting, professional, and punchy product description for a digital asset in a marketplace.
-      Product Title: ${formData.title}
-      Tagline: ${formData.tagline}
-      Category: ${formData.productType}
-      Include: What's included, why it's valuable, and a call to action. Keep it under 200 words. Format with markdown.`;
-      
-      const result = await model.generateContent(prompt);
-      const response = await result.response;
-      setFormData({ ...formData, description: response.text() });
+      const description = await generateProductDescription({
+        title: formData.title,
+        tagline: formData.tagline,
+        category: formData.productType,
+      });
+      if (!description) throw new Error('Empty response');
+      setFormData({ ...formData, description });
     } catch (err) {
       console.error(err);
       setError('AI generation failed. Please try again.');

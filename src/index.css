@@ -257,6 +257,20 @@ html.light .bg-black\/60 { background-color: rgba(255, 255, 255, 0.8) !important
 html.light .bg-black\/50 { background-color: rgba(255, 255, 255, 0.7) !important; }
 html.light .bg-black\/40 { background-color: rgba(255, 255, 255, 0.6) !important; }
 
+/* Always-dark surfaces (status viewer and composer): opt out of the light-mode overrides above. */
+html.light .keep-dark .text-white,
+html.light .keep-dark .hover\:text-white:hover { color: #ffffff !important; }
+html.light .keep-dark .text-white\/50 { color: rgba(255, 255, 255, 0.5) !important; }
+html.light .keep-dark .text-white\/60 { color: rgba(255, 255, 255, 0.6) !important; }
+html.light .keep-dark .text-white\/70 { color: rgba(255, 255, 255, 0.7) !important; }
+html.light .keep-dark .bg-black { background-color: #000000 !important; }
+html.light .keep-dark .bg-black\/40 { background-color: rgba(0, 0, 0, 0.4) !important; }
+html.light .keep-dark .bg-black\/50 { background-color: rgba(0, 0, 0, 0.5) !important; }
+html.light .keep-dark .bg-white\/10 { background-color: rgba(255, 255, 255, 0.1) !important; }
+html.light .keep-dark .bg-white\/20 { background-color: rgba(255, 255, 255, 0.2) !important; }
+html.light .keep-dark .hover\:bg-white\/20:hover { background-color: rgba(255, 255, 255, 0.2) !important; }
+html.light .keep-dark .border-white\/30 { border-color: rgba(255, 255, 255, 0.3) !important; }
+
 /* Glass overrides */
 html.light .glass {
   background-color: rgba(255, 255, 255, 0.7) !important;

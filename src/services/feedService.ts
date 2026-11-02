@@ -12,8 +12,12 @@ import { dualRead } from './db/utils';
 export class FeedService {
   constructor(private firestore: Firestore) {}
 
+  /** Largest communities by member count. */
   async getTrendingCommunities(count: number = 5): Promise<any[]> {
-    return contentRepository.queryCollection('communities', 'communities', { limit: count });
+    return contentRepository.queryCollection('communities', 'communities', {
+      orderBy: { field: 'memberCount', desc: true },
+      limit: count,
+    });
   }
 
   async getTrendingTags(count: number = 5): Promise<any[]> {
@@ -29,17 +33,33 @@ export class FeedService {
           .order('count', { ascending: false })
           .limit(count);
         if (error) throw error;
-        return (data || []).map(row => ({ id: row.id, tag: row.tag, count: row.count }));
+        return (data || []).map(row => ({ id: row.id, name: row.tag, count: row.count }));
       },
       'hashtags'
     );
   }
 
-  async getUpcomingEvents(count: number = 5): Promise<any[]> {
-    return contentRepository.queryCollection('events', 'events', {
+  /**
+   * Public events split into happening now and upcoming (soonest first); ended events are dropped.
+   * Dates are stored inconsistently (ISO strings, Timestamps, snake_case in Postgres), so we
+   * scan recent events and sort client-side rather than relying on a date index.
+   */
+  async getUpcomingEvents(count: number = 5): Promise<{ live: any[]; upcoming: any[] }> {
+    const events = await contentRepository.queryCollection('events', 'events', {
       filters: [{ field: 'visibility', op: 'eq', value: 'public' }],
-      limit: count,
+      orderBy: { field: 'createdAt', desc: true },
+      limit: 40,
     });
+    const now = Date.now();
+    const withTimes = events.map(e => ({
+      ...e,
+      startMs: toMillis(e.startDate ?? e.start_date),
+      endMs: toMillis(e.endDate ?? e.end_date),
+    }));
+    return {
+      live: withTimes.filter(e => e.startMs <= now && e.endMs > now).slice(0, count),
+      upcoming: withTimes.filter(e => e.startMs > now).sort((a, b) => a.startMs - b.startMs).slice(0, count),
+    };
   }
 
   async getFeaturedArticles(count: number = 5): Promise<any[]> {
@@ -50,11 +70,18 @@ export class FeedService {
     });
   }
 
+  /** Active challenges still accepting submissions, closing soonest first. */
   async getFeaturedChallenges(count: number = 3): Promise<any[]> {
-    return contentRepository.queryCollection('challenges', 'challenges', {
+    const challenges = await contentRepository.queryCollection('challenges', 'challenges', {
       filters: [{ field: 'status', op: 'eq', value: 'active' }],
-      limit: count,
+      limit: 20,
     });
+    const now = Date.now();
+    const deadline = (c: any) => toMillis(c.deadlines?.submissionEnd);
+    return challenges
+      .filter(c => !deadline(c) || deadline(c) > now)
+      .sort((a, b) => (deadline(a) || Infinity) - (deadline(b) || Infinity))
+      .slice(0, count);
   }
 
   async getTopCreators(count: number = 5): Promise<any[]> {
@@ -66,6 +93,16 @@ export class FeedService {
       orderBy: { field: 'createdAt', desc: true },
     });
   }
+}
+
+/** Accepts Firestore Timestamps, {seconds}, ISO strings, or epoch ms. Returns 0 when missing. */
+function toMillis(value: any): number {
+  if (!value) return 0;
+  if (typeof value === 'number') return value;
+  if (typeof value.toMillis === 'function') return value.toMillis();
+  if (typeof value.seconds === 'number') return value.seconds * 1000;
+  const ms = new Date(value).getTime();
+  return Number.isNaN(ms) ? 0 : ms;
 }
 
 export const feedService = new FeedService(db);

@@ -1,157 +1,129 @@
-import { useState, useEffect } from 'react';
-import { collection, query, where, orderBy, onSnapshot } from 'firebase/firestore';
-import { db, auth } from '../firebase';
-import { motion, AnimatePresence } from 'motion/react';
-import { Calendar, Plus, Clock, Users, ArrowRight } from 'lucide-react';
-import { formatDate } from '../lib/utils';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { collection, doc, getDoc, onSnapshot, orderBy, query, where } from 'firebase/firestore';
+import { Calendar, Check, Clock, MapPin, Plus, Users, Video } from 'lucide-react';
+import { auth, db } from '../firebase';
+import { formatDate } from '../lib/utils';
 import CreateEventModal from './CreateEventModal';
 
-interface CommunityEventsProps {
+interface Props {
   communityId: string;
   isAdmin: boolean;
   isMember: boolean;
+  /** Admins can always create; others need the create-events permission. */
+  canCreate?: boolean;
 }
 
-export default function CommunityEvents({ communityId, isAdmin, isMember }: CommunityEventsProps) {
+const toMs = (v: any): number | null => {
+  const d = v?.toDate ? v.toDate() : v ? new Date(v) : null;
+  return d && !isNaN(d.getTime()) ? d.getTime() : null;
+};
+
+export default function CommunityEvents({ communityId, isAdmin, isMember, canCreate = isAdmin }: Props) {
   const [events, setEvents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [tab, setTab] = useState<'upcoming' | 'past'>('upcoming');
+  const [registered, setRegistered] = useState<Set<string>>(new Set());
+  const [showCreate, setShowCreate] = useState(false);
+  const uid = auth.currentUser?.uid;
 
   useEffect(() => {
-    if (!communityId) return;
-
-    let q;
-    if (isMember) {
-      // Members can see both public and community-only events
-      q = query(
-        collection(db, 'events'),
-        where('communityId', '==', communityId),
-        where('visibility', 'in', ['public', 'community']),
-        orderBy('startDate', 'asc')
-      );
-    } else {
-      // Non-members can only see public events
-      q = query(
-        collection(db, 'events'),
-        where('communityId', '==', communityId),
-        where('visibility', '==', 'public'),
-        orderBy('startDate', 'asc')
-      );
-    }
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const fetchedEvents = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      setEvents(fetchedEvents);
-      setLoading(false);
-    }, (error) => {
-      console.error("Error fetching community events:", error);
-      setLoading(false);
-    });
-
-    return () => unsubscribe();
+    // Members see public and members-only events; everyone else only public ones.
+    const visibility = isMember ? where('visibility', 'in', ['public', 'community']) : where('visibility', '==', 'public');
+    return onSnapshot(
+      query(collection(db, 'events'), where('communityId', '==', communityId), visibility, orderBy('startDate', 'asc')),
+      snap => { setEvents(snap.docs.map(d => ({ id: d.id, ...d.data() }))); setLoading(false); },
+      err => { console.error('Error fetching community events:', err); setLoading(false); },
+    );
   }, [communityId, isMember]);
 
+  const now = Date.now();
+  const { upcoming, past } = useMemo(() => {
+    const isPast = (e: any) => e.status === 'ended' || (e.status !== 'live' && (toMs(e.endDate) ?? toMs(e.startDate) ?? 0) < now);
+    return {
+      upcoming: events.filter(e => !isPast(e)).sort((a, b) => (a.status === 'live' ? -1 : 0) - (b.status === 'live' ? -1 : 0) || (toMs(a.startDate) ?? 0) - (toMs(b.startDate) ?? 0)),
+      past: events.filter(isPast).sort((a, b) => (toMs(b.startDate) ?? 0) - (toMs(a.startDate) ?? 0)),
+    };
+  }, [events, now]);
+
+  // Which upcoming events is the signed-in person already registered for?
+  useEffect(() => {
+    if (!uid || !isMember) return;
+    let cancelled = false;
+    Promise.all(upcoming.map(e => getDoc(doc(db, 'events', e.id, 'registrations', uid)).then(s => (s.exists() ? e.id : null)).catch(() => null)))
+      .then(ids => { if (!cancelled) setRegistered(new Set(ids.filter(Boolean) as string[])); });
+    return () => { cancelled = true; };
+  }, [uid, isMember, upcoming.map(e => e.id).join()]);
+
+  const list = tab === 'upcoming' ? upcoming : past;
+
   return (
-    <div className="space-y-8">
-      <div className="flex items-center justify-between">
+    <div className="max-w-4xl mx-auto space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-2xl font-bold text-foreground">Community Events</h2>
-          <p className="text-foreground/40 text-sm mt-1">Exclusive meetups, workshops and sessions for this community.</p>
+          <h2 className="text-xl font-semibold">Events</h2>
+          <p className="text-sm text-foreground/55">Meetups, workshops and sessions for this community.</p>
         </div>
-        {isAdmin && (
-          <button 
-            onClick={() => setShowCreateModal(true)}
-            className="flex items-center gap-2 bg-primary text-primary-foreground px-6 py-2.5 rounded-xl font-bold shadow-[0_0_20px_rgba(0,242,255,0.2)] hover:scale-105 transition-all"
-          >
-            <Plus size={18} /> Create Event
-          </button>
+        {canCreate && isMember && (
+          <button onClick={() => setShowCreate(true)} className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-primary text-white text-sm font-medium"><Plus size={15} />New event</button>
         )}
       </div>
 
+      <div className="flex gap-2" role="tablist">
+        {([['upcoming', 'Upcoming', upcoming.length], ['past', 'Past', past.length]] as const).map(([id, label, n]) => (
+          <button key={id} role="tab" aria-selected={tab === id} onClick={() => setTab(id)}
+            className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${tab === id ? 'bg-primary text-white' : 'bg-foreground/5 text-foreground/70 hover:bg-foreground/10'}`}>
+            {label}<span className="ml-1.5 opacity-70">{n}</span>
+          </button>
+        ))}
+      </div>
+
       {loading ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {[1, 2, 3].map(i => (
-            <div key={i} className="h-48 glass rounded-2xl animate-pulse" />
-          ))}
-        </div>
-      ) : events.length > 0 ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {events.map((event) => (
-            <Link key={event.id} to={`/events/${event.id}`}>
-              <div className="glass rounded-2xl overflow-hidden group hover:border-primary/50 transition-all flex flex-col h-full bg-background border border-foreground/10 hover:shadow-[0_0_20px_rgba(0,242,255,0.1)]">
-                <div className="aspect-[16/9] w-full relative shrink-0">
-                  <img 
-                    src={(event.banner && event.banner.trim() !== '') ? event.banner : `https://picsum.photos/seed/${event.id}/600/300`} 
-                    alt={event.title}
-                    className="w-full h-full object-cover group-hover:scale-105 transition-all duration-500"
-                    referrerPolicy="no-referrer"
-                  />
-                  <div className="absolute top-2 right-2">
-                    <span className={`px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider ${
-                      event.visibility === 'public' ? 'bg-green-500 text-white' : 'bg-primary text-primary-foreground'
-                    }`}>
-                      {event.visibility === 'public' ? 'Public' : 'Members Only'}
-                    </span>
-                  </div>
-                  {event.isPaid && (
-                    <div className="absolute bottom-2 left-2">
-                      <span className="px-1.5 py-0.5 bg-black/60 backdrop-blur-md text-yellow-500 rounded text-[8px] font-bold">
-                        ${event.price}
-                      </span>
-                    </div>
-                  )}
-                </div>
-                <div className="p-4 flex flex-col flex-1">
-                  <h3 className="text-sm font-bold mb-2 group-hover:text-primary transition-colors line-clamp-1 text-foreground">{event.title}</h3>
-                  <div className="mt-auto space-y-2">
-                    <div className="flex items-center gap-3 text-[10px] text-foreground/50">
-                      <div className="flex items-center gap-1">
-                        <Calendar size={12} className="text-primary" />
-                        {formatDate(event.startDate, 'MMM d')}
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <Clock size={12} className="text-primary" />
-                        {formatDate(event.startDate, 'h:mm a')}
-                      </div>
-                    </div>
-                    <div className="flex items-center justify-between pt-2 border-t border-foreground/10">
-                      <div className="flex items-center gap-1 text-[10px] text-foreground/40">
-                        <Users size={12} />
-                        {event.attendeeCount || 0}
-                      </div>
-                      <ArrowRight size={12} className="text-foreground/20 group-hover:text-primary group-hover:translate-x-1 transition-all" />
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </Link>
-          ))}
+        <div className="space-y-3">{[1, 2, 3].map(i => <div key={i} className="h-24 rounded-xl bg-foreground/5 animate-pulse" />)}</div>
+      ) : list.length === 0 ? (
+        <div className="py-16 flex flex-col items-center gap-2 rounded-xl border border-dashed border-foreground/15 text-foreground/50 text-center px-4">
+          <Calendar size={30} />
+          <p className="text-sm">{tab === 'upcoming' ? 'No upcoming events.' : 'No past events.'}</p>
+          {tab === 'upcoming' && canCreate && isMember && <button onClick={() => setShowCreate(true)} className="text-sm font-medium text-primary hover:underline">Schedule the first one</button>}
         </div>
       ) : (
-        <div className="text-center py-20 bg-background rounded-3xl border-2 border-dashed border-foreground/10">
-          <Calendar size={48} className="mx-auto mb-4 text-foreground/10" />
-          <h3 className="text-xl font-bold mb-2 text-foreground">No events scheduled</h3>
-          <p className="text-foreground/40 mb-6">Stay tuned for upcoming workshops and meetups!</p>
-          {isAdmin && (
-            <button 
-              onClick={() => setShowCreateModal(true)}
-              className="text-primary font-bold hover:underline"
-            >
-              Schedule the first event
-            </button>
-          )}
-        </div>
+        <ul className="space-y-3">
+          {list.map(e => {
+            const start = toMs(e.startDate);
+            const live = e.status === 'live';
+            const going = registered.has(e.id);
+            const full = e.maxAttendees > 0 && (e.attendeeCount || 0) >= e.maxAttendees;
+            return (
+              <li key={e.id}>
+                <Link to={`/events/${e.id}`} className="flex gap-4 p-3 sm:p-4 rounded-xl border border-foreground/10 hover:border-primary/40 hover:bg-foreground/[0.02] transition-colors">
+                  <div className="w-14 shrink-0 text-center rounded-lg bg-foreground/5 py-2 self-start">
+                    <p className="text-xs font-semibold text-primary uppercase">{start ? formatDate(start, 'MMM') : ''}</p>
+                    <p className="text-xl font-semibold leading-tight">{start ? formatDate(start, 'd') : '–'}</p>
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="font-semibold truncate">{e.title}</h3>
+                      {live && <span className="px-2 py-0.5 rounded-full bg-red-500 text-white text-xs font-semibold">Live now</span>}
+                      {going && <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-500/15 text-green-700 dark:text-green-400 text-xs font-medium"><Check size={11} />You're going</span>}
+                      {e.visibility === 'community' && <span className="px-2 py-0.5 rounded-full bg-foreground/10 text-foreground/60 text-xs">Members only</span>}
+                    </div>
+                    <p className="mt-1 text-sm text-foreground/60 flex flex-wrap items-center gap-x-4 gap-y-1">
+                      {start && <span className="flex items-center gap-1"><Clock size={13} />{formatDate(start, 'EEE, h:mm a')}</span>}
+                      <span className="flex items-center gap-1">{e.isOffline ? <><MapPin size={13} />{e.locationName || 'In person'}</> : <><Video size={13} />Online</>}</span>
+                      <span className="flex items-center gap-1"><Users size={13} />{e.attendeeCount || 0}{e.maxAttendees > 0 ? ` / ${e.maxAttendees}` : ''} going{full && ' · Full'}</span>
+                      {e.isPaid && <span className="text-amber-600 dark:text-amber-400 font-medium">${e.price}</span>}
+                    </p>
+                    {e.description && <p className="mt-1.5 text-sm text-foreground/50 line-clamp-1">{e.description}</p>}
+                  </div>
+                  {e.banner?.trim() && <img src={e.banner} alt="" referrerPolicy="no-referrer" className="hidden sm:block w-28 h-20 rounded-lg object-cover self-center shrink-0" />}
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
       )}
 
-      <CreateEventModal 
-        isOpen={showCreateModal} 
-        onClose={() => setShowCreateModal(false)} 
-        communityId={communityId}
-      />
+      <CreateEventModal isOpen={showCreate} onClose={() => setShowCreate(false)} communityId={communityId} />
     </div>
   );
 }

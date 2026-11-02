@@ -1,12 +1,12 @@
-import { useState } from 'react';
-import { Volume2, Loader2, Lock } from 'lucide-react';
-import { motion } from 'motion/react';
+import { useEffect, useState } from 'react';
+import { collection, deleteDoc, doc, onSnapshot, setDoc } from 'firebase/firestore';
+import { Headphones, Loader2, Lock, Mic, Volume2 } from 'lucide-react';
+import { toast } from 'react-hot-toast';
 import { CommunityChannel } from '../types/community';
 import { auth, db } from '../firebase';
-import { doc, setDoc, deleteDoc } from 'firebase/firestore';
-import VoiceRoom from './VoiceRoom';
-import { toast } from 'react-hot-toast';
 import { useVoice } from '../contexts/VoiceContext';
+import VoiceRoom from './VoiceRoom';
+import Avatar from './ui/Avatar';
 
 interface VoiceChannelViewProps {
   communityId: string;
@@ -16,62 +16,58 @@ interface VoiceChannelViewProps {
   myPermissions?: string[];
 }
 
-export default function VoiceChannelView({ 
-  communityId, 
-  channel, 
-  currentUserProfile, 
-  isAdmin,
-  myPermissions = []
-}: VoiceChannelViewProps) {
+/** Presence entries older than this are leftovers from a closed tab. */
+const STALE_MS = 4 * 60 * 60 * 1000;
+
+/** A voice room: who's in it, and a Join button. Once joined, the room itself. */
+export default function VoiceChannelView({ communityId, channel, currentUserProfile, isAdmin }: VoiceChannelViewProps) {
   const { activeSession, joinVoice, leaveVoice } = useVoice();
   const [loading, setLoading] = useState(false);
+  const [present, setPresent] = useState<any[]>([]);
 
-  const isCurrentVoiceActive = activeSession?.channelId === channel.id;
+  const inThisRoom = activeSession?.channelId === channel.id;
+  const inAnotherRoom = !!activeSession && !inThisRoom;
   const serverUrl = import.meta.env.VITE_LIVEKIT_URL;
-  const canVoice = isAdmin || myPermissions.includes('start_voice');
   const isLocked = (channel as any).isLocked && !isAdmin;
+  const isMember = !!currentUserProfile;
 
-  const handleJoin = async () => {
-    if (!auth.currentUser) {
-      toast.error('You must be signed in to join voice channels');
-      return;
-    }
+  useEffect(() => onSnapshot(collection(db, 'communities', communityId, 'channels', channel.id, 'voiceParticipants'), snap => {
+    const now = Date.now();
+    setPresent(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter((p: any) => now - new Date(p.joinedAt || 0).getTime() < STALE_MS));
+  }, () => setPresent([])), [communityId, channel.id]);
 
-    if (isLocked || !canVoice) {
-      toast.error(isLocked ? 'This voice channel is locked.' : 'You don\'t have permission to join voice channels.');
-      return;
-    }
-
-    if (!currentUserProfile) {
-      toast.error('You must join this community to enter the voice channel');
-      return;
-    }
+  const join = async () => {
+    const user = auth.currentUser;
+    if (!user) return toast.error('Sign in to join voice rooms');
+    if (!isMember) return toast.error('Join the community to use voice rooms');
+    if (isLocked) return toast.error('This room is locked');
+    if (!serverUrl) return toast.error("Voice rooms aren't set up on this site yet");
 
     setLoading(true);
     try {
-      const response = await fetch('/api/livekit-token', {
+      const res = await fetch('/api/livekit-token', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await user.getIdToken()}` },
         body: JSON.stringify({
-          eventId: channel.id,
-          userId: auth.currentUser?.uid,
-          username: currentUserProfile.username || currentUserProfile.displayName,
-          photoURL: currentUserProfile.profileImage || currentUserProfile.photoURL
+          eventId: `voice_${communityId}_${channel.id}`,
+          username: currentUserProfile.displayName || currentUserProfile.username || 'Member',
+          photoURL: currentUserProfile.profileImage || currentUserProfile.photoURL || '',
         }),
       });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Couldn't join the room");
 
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error);
+      // Leaving another room first keeps presence accurate.
+      if (activeSession) await leavePresence(activeSession.communityId, activeSession.channelId);
 
-      // Register presence in Firestore
-      await setDoc(doc(db, 'communities', communityId, 'channels', channel.id, 'voiceParticipants', auth.currentUser!.uid), {
-        userId: auth.currentUser!.uid,
-        userName: currentUserProfile.username || currentUserProfile.displayName,
-        userPhoto: currentUserProfile.profileImage || currentUserProfile.photoURL,
+      await setDoc(doc(db, 'communities', communityId, 'channels', channel.id, 'voiceParticipants', user.uid), {
+        userId: user.uid,
+        userName: currentUserProfile.displayName || currentUserProfile.username || 'Member',
+        userPhoto: currentUserProfile.profileImage || currentUserProfile.photoURL || '',
         role: 'member',
         joinedAt: new Date().toISOString(),
         isMuted: false,
-        handRaised: false
+        handRaised: false,
       });
 
       joinVoice({
@@ -80,75 +76,76 @@ export default function VoiceChannelView({
         channelName: channel.name,
         token: data.token,
         serverUrl,
-        mode: (channel.voiceConfig?.mode as any) || 'open'
+        mode: (channel.voiceConfig?.mode as any) || 'open',
       });
     } catch (error: any) {
-      console.error('Failed to join voice:', error);
-      toast.error(error.message || 'Failed to join voice channel');
+      toast.error(error.message || "Couldn't join the room");
     } finally {
       setLoading(false);
     }
   };
 
-  const handleLeave = async () => {
-    try {
-      if (auth.currentUser) {
-        await deleteDoc(doc(db, 'communities', communityId, 'channels', channel.id, 'voiceParticipants', auth.currentUser.uid));
-      }
-    } catch (error) {
-      console.error('Error cleaning up presence:', error);
-    }
+  const leave = async () => {
+    await leavePresence(communityId, channel.id);
     leaveVoice();
   };
 
-  if (isCurrentVoiceActive && activeSession?.token && serverUrl) {
+  if (inThisRoom && activeSession?.token && serverUrl) {
     return (
-      <VoiceRoom 
+      <VoiceRoom
         communityId={communityId}
         channelId={channel.id}
+        channelName={channel.name}
         token={activeSession.token}
         serverUrl={serverUrl}
         mode={activeSession.mode}
-        onLeave={handleLeave}
+        onLeave={leave}
       />
     );
   }
 
   return (
-    <div className="flex-1 flex flex-col items-center justify-center bg-background p-8 text-center h-full">
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="max-w-md w-full p-8 rounded-[3rem] bg-foreground/5 border border-foreground/10 dark:bg-white/5 dark:border-white/10 backdrop-blur-3xl shadow-2xl space-y-6"
-      >
-        <div className="w-20 h-20 rounded-[2rem] bg-green-500/20 text-green-500 flex items-center justify-center mx-auto neon-glow">
-          <Volume2 size={40} />
-        </div>
-        
-        <div className="space-y-1">
-          <h2 className="text-2xl font-black text-foreground">{channel.name}</h2>
-          <p className="text-foreground/40 text-sm leading-relaxed">
-            {channel.description || 'Drop in and chat with other members of the community in real-time.'}
-          </p>
+    <div className="flex-1 overflow-y-auto flex items-center justify-center p-6">
+      <div className="max-w-sm w-full text-center">
+        <span className="mx-auto w-16 h-16 rounded-2xl bg-green-500/10 text-green-600 dark:text-green-400 flex items-center justify-center"><Volume2 size={30} /></span>
+        <h2 className="mt-4 text-2xl font-bold">{channel.name}</h2>
+        <p className="mt-1 text-foreground/60">{channel.description || 'Drop in and talk. Leave whenever you like.'}</p>
+
+        <div className="mt-6 p-4 rounded-2xl border border-foreground/10">
+          {present.length > 0 ? (
+            <>
+              <div className="flex justify-center -space-x-2">
+                {present.slice(0, 6).map(p => (
+                  <span key={p.id} className="rounded-full ring-2 ring-background"><Avatar src={p.userPhoto} seed={p.id} size={40} /></span>
+                ))}
+              </div>
+              <p className="mt-2 text-sm text-foreground/70">
+                {present.length === 1 ? `${present[0].userName} is here` : `${present[0].userName} and ${present.length - 1} ${present.length === 2 ? 'other' : 'others'} are here`}
+              </p>
+            </>
+          ) : (
+            <p className="text-sm text-foreground/55 flex items-center justify-center gap-2"><Headphones size={16} /> No one's here yet. Start the conversation.</p>
+          )}
         </div>
 
-        <div className="flex flex-col gap-3">
-          <button 
-            disabled={loading || isLocked || !canVoice}
-            onClick={handleJoin}
-            className={`w-full py-2.5 font-bold rounded-xl shadow-neon hover:scale-105 active:scale-95 transition-all disabled:opacity-50 disabled:scale-100 flex items-center justify-center gap-2 text-sm ${
-              isLocked || !canVoice ? 'bg-foreground/10 dark:bg-zinc-800 text-foreground/30 dark:text-white/20' : 'bg-green-500 text-white'
-            }`}
-          >
-            {loading ? <Loader2 className="animate-spin" /> : (isLocked || !canVoice) ? <Lock size={18} /> : <Volume2 size={18} />}
-            {loading ? 'Connecting...' : isLocked ? 'Room Locked' : !canVoice ? 'Permission Denied' : 'Join Channel'}
-          </button>
-          
-          <p className="text-[10px] text-foreground/20 uppercase tracking-[0.2em]">
-            {isLocked ? 'Only admins can enter this room' : 'Secure encrypted audio • Low latency'}
-          </p>
-        </div>
-      </motion.div>
+        <button
+          onClick={join}
+          disabled={loading || isLocked}
+          className="mt-5 w-full py-3 rounded-full bg-green-500 hover:bg-green-600 font-semibold disabled:opacity-50 disabled:bg-foreground/10 flex items-center justify-center gap-2 transition-colors"
+          style={isLocked ? undefined : { color: '#fff' }}
+        >
+          {loading ? <Loader2 size={18} className="animate-spin" /> : isLocked ? <Lock size={18} /> : <Mic size={18} />}
+          {loading ? 'Connecting…' : isLocked ? 'This room is locked' : inAnotherRoom ? `Switch to ${channel.name}` : 'Join room'}
+        </button>
+        <p className="mt-2 text-xs text-foreground/45">
+          {isLocked ? 'Only admins can join right now.' : 'Your microphone turns on when you join. You can mute anytime.'}
+        </p>
+      </div>
     </div>
   );
+}
+
+async function leavePresence(communityId: string, channelId: string) {
+  if (!auth.currentUser) return;
+  await deleteDoc(doc(db, 'communities', communityId, 'channels', channelId, 'voiceParticipants', auth.currentUser.uid)).catch(() => undefined);
 }

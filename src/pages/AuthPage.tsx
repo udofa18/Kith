@@ -127,7 +127,7 @@ export default function AuthPage() {
             <p className="text-white/40 text-sm">
               {mode === 'login'
                 ? 'Sign in to continue to Kith'
-                : 'Join creators building, sharing, and selling on Kith'}
+                : 'Join a community of creators sharing what they make'}
             </p>
           </div>
 

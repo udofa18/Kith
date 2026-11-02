@@ -1,267 +1,105 @@
-import { useState, useEffect, useRef } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useNavigate } from 'react-router-dom';
-import { doc, getDoc, collection, onSnapshot, query, setDoc, deleteDoc, addDoc, getDocs, serverTimestamp, increment, updateDoc } from 'firebase/firestore';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { doc, getDoc } from 'firebase/firestore';
+import { motion, AnimatePresence } from 'motion/react';
+import { CalendarDays, Flag, Flame, MapPin, MessageCircle } from 'lucide-react';
+import { toast } from 'react-hot-toast';
 import { db, auth, handleFirestoreError, OperationType } from '../firebase';
 import { followUser, unfollowUser } from '../services/socialService';
-import { motion, AnimatePresence } from 'motion/react';
-import { UserPlus, UserMinus, MessageSquare, Zap, MapPin, X, Send, Flag } from 'lucide-react';
+import { queryKeys } from '../lib/queryClient';
+import { fetchViewerContext } from '../features/feed/api/viewer';
+import { activeStreak } from '../features/shiplog/streak';
+import { fetchRelationship, toDate, type Relationship } from '../features/profile/api';
 import ReportModal from './ReportModal';
 import VerifiedBadge from './VerifiedBadge';
+import Avatar from './ui/Avatar';
 
 interface UserHoverCardProps {
   userId: string;
-  children: React.ReactNode;
+  children: ReactNode;
   communityId?: string;
 }
 
+const CARD_WIDTH = 320;
+const OPEN_DELAY = 450;
+const CLOSE_DELAY = 200;
+
+interface CardData extends Relationship {
+  user: any | null;
+}
+
+const compact = (n: number) => Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(n);
+
+async function fetchCard(userId: string, me: string | null, myFollowing: string[]): Promise<CardData> {
+  const [userSnap, relationship] = await Promise.all([
+    getDoc(doc(db, 'users', userId)),
+    fetchRelationship(userId, me, myFollowing),
+  ]);
+  return { user: userSnap.exists() ? userSnap.data() : null, ...relationship };
+}
+
+/** Profile preview shown when hovering a name or avatar. */
 export default function UserHoverCard({ userId, children, communityId }: UserHoverCardProps) {
-  const navigate = useNavigate();
-  const [showCard, setShowCard] = useState(false);
-  const [userData, setUserData] = useState<any>(null);
-  const [isFollowing, setIsFollowing] = useState(false);
-  const [followersCount, setFollowersCount] = useState(0);
-  const [mutualCount, setMutualCount] = useState(0);
-  const [hoverTimeout, setHoverTimeout] = useState<NodeJS.Timeout | null>(null);
-  const [coords, setCoords] = useState({ top: 0, left: 0, width: 0, height: 0, bottom: 0 });
-  const [verticalPos, setVerticalPos] = useState<'top' | 'bottom'>('bottom');
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number; above: boolean } | null>(null);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const triggerRef = useRef<HTMLDivElement>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
+  useEffect(() => () => clearTimeout(timer.current), []);
+
+  // Close if the page scrolls under the card.
   useEffect(() => {
-    if (!showCard || !userId) return;
+    if (!open) return;
+    const close = () => setOpen(false);
+    window.addEventListener('scroll', close, true);
+    return () => window.removeEventListener('scroll', close, true);
+  }, [open]);
 
-    // Fetch user data
-    const unsubscribeUser = onSnapshot(doc(db, 'users', userId), (doc) => {
-      if (doc.exists()) {
-        setUserData(doc.data());
-      }
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, `users/${userId}`);
-    });
-
-    // Fetch followers count
-    const unsubscribeFollowers = onSnapshot(collection(db, 'users', userId, 'followers'), (snapshot) => {
-      setFollowersCount(snapshot.size);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, `users/${userId}/followers`);
-    });
-
-    // Check if current user is following
-    if (auth.currentUser && auth.currentUser.uid !== userId) {
-      const followRef = doc(db, 'users', auth.currentUser.uid, 'following', userId);
-      getDoc(followRef).then(doc => setIsFollowing(doc.exists()));
-
-      // Mutual followers: People I follow who also follow this user
-      const fetchMutuals = async () => {
-        try {
-          // Get my following list
-          const myFollowingSnap = await getDocs(collection(db, 'users', auth.currentUser!.uid, 'following'));
-          const myFollowingIds = myFollowingSnap.docs.map(d => d.id);
-          
-          if (myFollowingIds.length > 0) {
-            // Get target user's followers
-            const theirFollowersSnap = await getDocs(collection(db, 'users', userId, 'followers'));
-            const theirFollowerIds = theirFollowersSnap.docs.map(d => d.id);
-            
-            // Intersection
-            const mutuals = myFollowingIds.filter(id => theirFollowerIds.includes(id));
-            setMutualCount(mutuals.length);
-          }
-        } catch (e) {
-          console.error("Error fetching mutuals:", e);
-        }
-      };
-      fetchMutuals();
-    }
-
-    return () => {
-      unsubscribeUser();
-      unsubscribeFollowers();
-    };
-  }, [showCard, userId]);
-
-  const handleMouseEnter = () => {
-    if (hoverTimeout) clearTimeout(hoverTimeout);
-    const timeout = setTimeout(() => {
-      if (triggerRef.current) {
-        const rect = triggerRef.current.getBoundingClientRect();
-        setCoords({ 
-          top: rect.top, 
-          left: rect.left, 
-          width: rect.width, 
-          height: rect.height,
-          bottom: rect.bottom
-        });
-
-        // Determine if there's more space above or below
-        const spaceBelow = window.innerHeight - rect.bottom;
-        const spaceAbove = rect.top;
-        const estimatedHeight = 350; // User card is roughly 350px tall
-
-        if (spaceBelow < estimatedHeight && spaceAbove > spaceBelow) {
-          setVerticalPos('top');
-        } else {
-          setVerticalPos('bottom');
-        }
-      }
-      setShowCard(true);
-    }, 400); // Slightly faster hover response
-    setHoverTimeout(timeout);
+  const show = () => {
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => {
+      const rect = triggerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const above = window.innerHeight - rect.bottom < 340 && rect.top > window.innerHeight - rect.bottom;
+      // Line the card up with the start of the name or avatar, kept on screen.
+      const left = Math.max(12, Math.min(window.innerWidth - CARD_WIDTH - 12, rect.left - 12));
+      setPos(above ? { left, bottom: window.innerHeight - rect.top + 8, above } : { left, top: rect.bottom + 8, above });
+      setOpen(true);
+    }, OPEN_DELAY);
   };
-
-  const handleMouseLeave = () => {
-    if (hoverTimeout) clearTimeout(hoverTimeout);
-    const timeout = setTimeout(() => setShowCard(false), 300);
-    setHoverTimeout(timeout);
+  const hide = () => {
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => setOpen(false), CLOSE_DELAY);
   };
-
-  const handleFollow = async (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (!auth.currentUser || auth.currentUser.uid === userId) return;
-    try {
-      await (isFollowing ? unfollowUser : followUser)(auth.currentUser.uid, userId);
-      setIsFollowing(!isFollowing);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `users/${auth.currentUser.uid}/following`);
-    }
-  };
-
-  const handleMessageClick = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    navigate(`/feed?view=messages&userId=${userId}`);
-  };
+  const keepOpen = () => clearTimeout(timer.current);
 
   return (
     <>
-      <div 
-        ref={triggerRef}
-        className="inline-block"
-        onMouseEnter={handleMouseEnter}
-        onMouseLeave={handleMouseLeave}
-      >
+      <div ref={triggerRef} className="inline-block" onMouseEnter={show} onMouseLeave={hide}>
         {children}
       </div>
-      
+
       {createPortal(
         <AnimatePresence>
-          {showCard && (
+          {open && pos && (
             <motion.div
-              initial={{ opacity: 0, y: verticalPos === 'bottom' ? -10 : 10, scale: 0.95 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: verticalPos === 'bottom' ? -10 : 10, scale: 0.95 }}
-              style={{
-                position: 'fixed',
-                ...(verticalPos === 'bottom' 
-                  ? { top: coords.top + coords.height + 10 }
-                  : { bottom: window.innerHeight - coords.top + 10 }
-                ),
-                left: Math.max(10, Math.min(window.innerWidth - 300, coords.left + (coords.width / 2) - 144)),
-                zIndex: 999999,
-              }}
-              className="w-72 bg-white dark:bg-[#121212] rounded-3xl p-6 shadow-2xl border border-black/10 dark:border-white/10 backdrop-blur-xl"
-              onMouseEnter={() => { if (hoverTimeout) clearTimeout(hoverTimeout); }}
-              onMouseLeave={handleMouseLeave}
+              initial={{ opacity: 0, y: pos.above ? 6 : -6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: pos.above ? 6 : -6 }}
+              transition={{ duration: 0.14 }}
+              style={{ position: 'fixed', left: pos.left, top: pos.top, bottom: pos.bottom, width: CARD_WIDTH, zIndex: 1000 }}
+              onMouseEnter={keepOpen}
+              onMouseLeave={hide}
+              onClick={e => e.stopPropagation()}
             >
-              {userData ? (
-                <div className="space-y-4">
-                  <div className="flex items-start justify-between">
-                    <div className="w-16 h-16 rounded-2xl overflow-hidden border-2 border-black/10 dark:border-white/10 neon-glow">
-                      <img 
-                        src={(userData.profileImage && userData.profileImage.trim() !== '') ? userData.profileImage : `https://api.dicebear.com/7.x/avataaars/svg?seed=${userId}`} 
-                        alt={userData.username} 
-                        className="w-full h-full object-cover"
-                      />
-                    </div>
-                    <div className="bg-yellow-400/10 border border-yellow-400/20 px-3 py-1 rounded-xl flex items-center gap-1">
-                      <Zap size={14} className="text-yellow-400" />
-                      <span className="text-xs font-bold text-yellow-400">{userData.xp || 0}</span>
-                    </div>
-                  </div>
-
-                  <div>
-                    <h4 className="font-black text-lg text-black dark:text-white uppercase tracking-tighter flex items-center gap-1.5 flex-wrap">
-                      <span>{userData.username}</span>
-                      <VerifiedBadge verified={userData.verified} />
-                    </h4>
-                    <p className="text-[10px] text-black/40 dark:text-white/40 flex items-center gap-1 font-bold uppercase tracking-widest">
-                      <MapPin size={12} /> {userData.location || 'Member since 2024'}
-                    </p>
-                  </div>
-
-                  <p className="text-xs text-black/70 dark:text-white/70 line-clamp-2 font-medium">
-                    {userData.bio || "No bio yet."}
-                  </p>
-
-                  <div className="flex gap-6 pt-2 border-t border-black/5 dark:border-white/5">
-                    <div>
-                      <div className="text-sm font-black text-black dark:text-white">{followersCount}</div>
-                      <div className="text-[8px] text-black/30 dark:text-white/30 font-black uppercase tracking-widest">Followers</div>
-                    </div>
-                    {auth.currentUser && auth.currentUser.uid !== userId && mutualCount > 0 && (
-                      <div>
-                        <div className="text-sm font-black text-primary">{mutualCount}</div>
-                        <div className="text-[8px] text-black/30 dark:text-white/30 font-black uppercase tracking-widest">Mutual</div>
-                      </div>
-                    )}
-                    <div>
-                      <div className="text-sm font-black text-black dark:text-white">{userData.totalSales || 0}</div>
-                      <div className="text-[8px] text-black/30 dark:text-white/30 font-black uppercase tracking-widest">Sales</div>
-                    </div>
-                  </div>
-
-                  <div className="flex gap-2 pt-2">
-                    {auth.currentUser?.uid !== userId && (
-                      <>
-                        <button 
-                          onClick={handleFollow}
-                          className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${
-                            isFollowing ? 'bg-white/10 text-white/50' : 'bg-primary text-white neon-glow'
-                          }`}
-                        >
-                          {isFollowing ? <UserMinus size={14} /> : <UserPlus size={14} />}
-                          {isFollowing ? 'Unfollow' : 'Follow'}
-                        </button>
-                        <button 
-                          onClick={handleMessageClick}
-                          className="p-2 glass rounded-xl hover:bg-white/10 transition-all text-primary"
-                        >
-                          <MessageSquare size={18} />
-                        </button>
-                        {communityId && (
-                          <button 
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              setIsReportModalOpen(true);
-                            }}
-                            className="p-2 glass rounded-xl hover:bg-red-500/10 transition-all text-red-500"
-                            title="Report User"
-                          >
-                            <Flag size={18} />
-                          </button>
-                        )}
-                      </>
-                    )}
-                    <Link 
-                      to={`/creators/${userId}`}
-                      className="flex-1 py-2 glass rounded-xl text-xs font-bold hover:bg-white/10 transition-all text-center"
-                    >
-                      View Profile
-                    </Link>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex items-center justify-center py-8">
-                  <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                </div>
-              )}
+              <HoverCardBody userId={userId} communityId={communityId} onReport={() => { setOpen(false); setIsReportModalOpen(true); }} onNavigate={() => setOpen(false)} />
             </motion.div>
           )}
         </AnimatePresence>,
-        document.body
+        document.body,
       )}
 
       {communityId && (
@@ -271,9 +109,182 @@ export default function UserHoverCard({ userId, children, communityId }: UserHov
           communityId={communityId}
           targetId={userId}
           targetType="user"
-          contentSnippet={userData?.username || userId}
+          contentSnippet={userId}
         />
       )}
     </>
+  );
+}
+
+function HoverCardBody({ userId, communityId, onReport, onNavigate }: {
+  userId: string;
+  communityId?: string;
+  onReport: () => void;
+  onNavigate: () => void;
+}) {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const me = auth.currentUser?.uid ?? null;
+  const isSelf = me === userId;
+
+  const { data: viewer, isLoading: viewerLoading } = useQuery({
+    queryKey: queryKeys.feedViewer(me),
+    queryFn: () => fetchViewerContext(me),
+    staleTime: 1000 * 60 * 5,
+    enabled: !!me,
+  });
+  const { data } = useQuery({
+    queryKey: ['hover-card', userId, me],
+    queryFn: () => fetchCard(userId, me, [...(viewer?.followingIds ?? [])]),
+    enabled: !me || !viewerLoading,
+    staleTime: 60_000,
+  });
+
+  const [following, setFollowing] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+  const isFollowing = following ?? data?.youFollow ?? false;
+
+  const toggleFollow = async () => {
+    if (!me) return toast.error('Sign in to follow people');
+    setBusy(true);
+    const next = !isFollowing;
+    setFollowing(next);
+    try {
+      await (next ? followUser : unfollowUser)(me, userId);
+      queryClient.invalidateQueries({ queryKey: queryKeys.feedViewer(me) });
+      queryClient.invalidateQueries({ queryKey: ['hover-card', userId] });
+    } catch (error) {
+      setFollowing(!next);
+      handleFirestoreError(error, OperationType.UPDATE, `users/${me}/following`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const shell = 'rounded-2xl bg-background text-black dark:text-white border border-black/10 dark:border-white/10 shadow-xl shadow-black/10 dark:shadow-black/40 overflow-hidden';
+
+  if (!data) {
+    return (
+      <div className={`${shell} p-4`}>
+        <div className="animate-pulse">
+        <div className="flex justify-between">
+          <div className="w-14 h-14 rounded-full bg-black/10 dark:bg-white/10" />
+          <div className="w-20 h-8 rounded-full bg-black/10 dark:bg-white/10" />
+        </div>
+        <div className="mt-3 h-4 w-32 rounded bg-black/10 dark:bg-white/10" />
+        <div className="mt-2 h-3 w-20 rounded bg-black/10 dark:bg-white/10" />
+        <div className="mt-4 h-3 w-full rounded bg-black/10 dark:bg-white/10" />
+        <div className="mt-2 h-3 w-2/3 rounded bg-black/10 dark:bg-white/10" />
+        </div>
+      </div>
+    );
+  }
+
+  const u = data.user;
+  if (!u) {
+    return <div className={`${shell} p-4 text-sm text-black/60 dark:text-white/60`}>This account isn't available.</div>;
+  }
+
+  const name = u.displayName || u.username || 'Member';
+  const joined = toDate(u.createdAt);
+  const streak = activeStreak(u.streak);
+  const profileUrl = `/creators/${userId}`;
+
+  return (
+    <div className={shell}>
+      <div className="p-4">
+        <div className="flex items-start justify-between gap-3">
+          <Link to={profileUrl} onClick={onNavigate} className="rounded-full">
+            <Avatar src={u.profileImage || u.photoURL} seed={userId} size={56} alt={name} />
+          </Link>
+          {!isSelf && (
+            <button
+              onClick={toggleFollow}
+              disabled={busy}
+              className={`group px-4 py-1.5 rounded-full text-sm font-semibold transition-colors disabled:opacity-60 ${
+                isFollowing
+                  ? 'border border-black/15 dark:border-white/20 hover:border-red-500/50 hover:text-red-500'
+                  : 'bg-primary text-white hover:bg-primary/90'
+              }`}
+            >
+              {isFollowing ? (
+                <><span className="group-hover:hidden">Following</span><span className="hidden group-hover:inline">Unfollow</span></>
+              ) : data.followsYou ? 'Follow back' : 'Follow'}
+            </button>
+          )}
+        </div>
+
+        <Link to={profileUrl} onClick={onNavigate} className="block mt-3 group">
+          <p className="flex items-center gap-1 font-bold text-[17px] leading-tight group-hover:underline">
+            <span className="truncate">{name}</span>
+            <VerifiedBadge verified={!!u.verified} size={16} />
+          </p>
+          <p className="flex items-center gap-2 text-sm text-black/50 dark:text-white/50">
+            {u.username && <span className="truncate">@{u.username}</span>}
+            {data.followsYou && (
+              <span className="shrink-0 px-1.5 py-0.5 rounded bg-black/5 dark:bg-white/10 text-[11px] font-medium text-black/60 dark:text-white/60">Follows you</span>
+            )}
+          </p>
+        </Link>
+
+        {u.bio && <p className="mt-2.5 text-sm leading-relaxed line-clamp-3 text-black/80 dark:text-white/80">{u.bio}</p>}
+
+        {(u.location || joined) && (
+          <div className="mt-2.5 flex flex-wrap gap-x-3 gap-y-1 text-[13px] text-black/50 dark:text-white/50">
+            {u.location && <span className="flex items-center gap-1"><MapPin size={13} />{u.location}</span>}
+            {joined && <span className="flex items-center gap-1"><CalendarDays size={13} />Joined {joined.toLocaleDateString(undefined, { month: 'short', year: 'numeric' })}</span>}
+          </div>
+        )}
+
+        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+          <Link to={profileUrl} onClick={onNavigate} className="hover:underline">
+            <span className="font-semibold">{compact(data.following)}</span> <span className="text-black/50 dark:text-white/50">Following</span>
+          </Link>
+          <Link to={profileUrl} onClick={onNavigate} className="hover:underline">
+            <span className="font-semibold">{compact(data.followers + (following === null ? 0 : Number(following) - Number(data.youFollow)))}</span>{' '}
+            <span className="text-black/50 dark:text-white/50">{data.followers === 1 ? 'Follower' : 'Followers'}</span>
+          </Link>
+          {streak > 1 && (
+            <span className="flex items-center gap-1 text-orange-500" title={`${streak}-day streak`}>
+              <Flame size={14} /><span className="font-semibold">{streak}</span>
+            </span>
+          )}
+        </div>
+
+        {data.mutualCount > 0 && (
+          <div className="mt-3 flex items-center gap-2 text-[13px] text-black/50 dark:text-white/50">
+            <div className="flex -space-x-2">
+              {data.mutuals.map(m => (
+                <span key={m.id} className="rounded-full ring-2 ring-background"><Avatar src={m.photo} seed={m.id} size={20} /></span>
+              ))}
+            </div>
+            <span className="line-clamp-1">
+              Followed by {data.mutuals.map(m => m.name.split(' ')[0]).join(', ')}
+              {data.mutualCount > data.mutuals.length && ` and ${data.mutualCount - data.mutuals.length} more you follow`}
+            </span>
+          </div>
+        )}
+      </div>
+
+      {!isSelf && me && (
+        <div className="flex border-t border-black/10 dark:border-white/10 text-sm font-medium">
+          <button
+            onClick={() => { onNavigate(); navigate(`/feed?view=messages&userId=${userId}`); }}
+            className="flex-1 flex items-center justify-center gap-1.5 py-2.5 hover:bg-black/[0.03] dark:hover:bg-white/[0.05] transition-colors"
+          >
+            <MessageCircle size={15} /> Message
+          </button>
+          {communityId && (
+            <button
+              onClick={onReport}
+              className="flex items-center justify-center gap-1.5 px-4 py-2.5 border-l border-black/10 dark:border-white/10 text-black/50 dark:text-white/50 hover:text-red-500 transition-colors"
+              title="Report"
+            >
+              <Flag size={15} /> Report
+            </button>
+          )}
+        </div>
+      )}
+    </div>
   );
 }

@@ -175,7 +175,7 @@ export default function ProfileStep({ uid, initial, onNext }: ProfileStepProps) 
             onChange={e => update({ bio: e.target.value })}
             maxLength={160}
             rows={3}
-            placeholder="What are you building?"
+            placeholder="A line or two about you"
             className={`${inputClass} resize-none`}
           />
           <p className="text-xs mt-2 text-white/30 text-right">{profile.bio.length}/160</p>

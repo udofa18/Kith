@@ -56,11 +56,12 @@ import {
   deleteDoc,
   increment
 } from 'firebase/firestore';
-import { useLiveSession } from '../../contexts/LiveSessionContext';
 import StreamChat from './StreamChat';
 import StreamEngagement from './StreamEngagement';
 import HostControls from './HostControls';
 import StreamStage from './StreamStage';
+import LiveQA from './LiveQA';
+import LivePolls from './LivePolls';
 
 interface LiveStreamRoomProps {
   communityId: string;
@@ -79,14 +80,16 @@ export default function LiveStreamRoom(props: LiveStreamRoomProps) {
   const [showChat, setShowChat] = useState(true);
   const [viewerCount, setViewerCount] = useState(0);
 
-  const { minimizeSession } = useLiveSession();
   const room = useRoomContext();
   const { localParticipant } = useLocalParticipant();
-  const [activeTab, setActiveTab] = useState<'chat' | 'people' | 'qa'>('chat');
+  const [activeTab, setActiveTab] = useState<'chat' | 'people' | 'qa' | 'polls'>('chat');
+  const streamPath = `communities/${props.communityId}/channels/${props.channelId}/liveStreams/${props.streamId}`;
 
   useEffect(() => {
     if (!room || !localParticipant) return;
     const handleData = (payload: Uint8Array, participant: any) => {
+      // Only the host can mute or remove people; ignore these commands from anyone else.
+      if (participant?.identity !== props.hostId) return;
       try {
         const data = JSON.parse(new TextDecoder().decode(payload));
         if (data.type === 'mute_request') {
@@ -128,7 +131,13 @@ export default function LiveStreamRoom(props: LiveStreamRoomProps) {
     };
   }, [props.communityId, props.channelId, props.streamId, props.isHost]);
 
-  const participants = useTracks([Track.Source.Camera, Track.Source.Microphone]).map(t => t.participant);
+  // Host-only moderation; receivers ignore these unless they come from the host.
+  const command = (identity: string, type: 'mute_request' | 'kick_request') => {
+    room.localParticipant
+      .publishData(new TextEncoder().encode(JSON.stringify({ type })), { reliable: true, destinationIdentities: [identity] })
+      .catch(() => undefined);
+  };
+
   const allParticipants = [room.localParticipant, ...Array.from(room.remoteParticipants.values())];
 
   return (
@@ -151,19 +160,13 @@ export default function LiveStreamRoom(props: LiveStreamRoomProps) {
                   {viewerCount} viewers
                 </span>
                 <span className="w-1 h-1 rounded-full bg-foreground/20 dark:bg-white/20" />
-                <span>{props.streamType} mode</span>
+                <span>{({ broadcast: 'Solo', guest: 'With guests', webinar: 'Lesson', paid: 'Premium' } as Record<string, string>)[props.streamType] || 'Live'}</span>
               </div>
             </div>
           </div>
 
           <div className="flex items-center gap-2 pointer-events-auto">
-            <button 
-                onClick={minimizeSession}
-                className="p-3 bg-foreground/5 dark:bg-white/5 hover:bg-foreground/10 dark:hover:bg-white/10 rounded-2xl text-foreground/60 dark:text-white/60 hover:text-foreground dark:hover:text-white transition-all border border-foreground/5 dark:border-white/5"
-                title="Minimize to pop-out"
-            >
-                <Minimize2 size={18} />
-            </button>
+
             <button 
                 onClick={() => {
                     setShowChat(true);
@@ -178,7 +181,7 @@ export default function LiveStreamRoom(props: LiveStreamRoomProps) {
               className="px-6 py-2.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-500 rounded-2xl text-xs font-black transition-all flex items-center gap-2 border border-rose-500/20 group"
             >
               <LogOut size={16} className="group-hover:-translate-x-1 transition-transform" />
-              {props.isHost ? 'End Stream' : 'Leave Space'}
+              {props.isHost ? 'End stream' : 'Leave'}
             </button>
           </div>
         </div>
@@ -210,23 +213,24 @@ export default function LiveStreamRoom(props: LiveStreamRoomProps) {
       <AnimatePresence>
         {showChat && (
           <motion.div
-            initial={{ width: 0, opacity: 0 }}
-            animate={{ width: 400, opacity: 1 }}
-            exit={{ width: 0, opacity: 0 }}
-            className="border-l border-foreground/10 dark:border-white/5 bg-background dark:bg-[#0A0A0B] flex flex-col relative z-40 overflow-hidden"
+            initial={{ opacity: 0, x: 40 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: 40 }}
+            className="fixed inset-0 sm:static sm:w-[360px] shrink-0 border-l border-foreground/10 bg-background flex flex-col z-40 overflow-hidden"
           >
-            <div className="flex-1 flex flex-col min-w-[400px]">
+            <div className="flex-1 flex flex-col min-h-0">
                 {/* Tabs */}
                 <div className="flex items-center gap-1 p-3 border-b border-foreground/5 dark:border-white/5 bg-foreground/2 dark:bg-white/2">
                     {[
                         { id: 'chat', label: 'Chat', icon: <MessageSquare size={14} /> },
                         { id: 'people', label: 'People', icon: <Users size={14} /> },
-                        { id: 'qa', label: 'Q&A', icon: <HelpCircle size={14} /> }
+                        { id: 'qa', label: 'Q&A', icon: <HelpCircle size={14} /> },
+                        { id: 'polls', label: 'Polls', icon: <BarChart3 size={14} /> }
                     ].map(tab => (
                         <button
                             key={tab.id}
                             onClick={() => setActiveTab(tab.id as any)}
-                            className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === tab.id ? 'bg-primary text-white shadow-lg' : 'text-foreground/30 dark:text-white/30 hover:text-foreground/60 dark:hover:text-white/60 hover:bg-foreground/5 dark:hover:bg-white/5'}`}
+                            className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-full text-xs font-semibold transition-colors ${activeTab === tab.id ? 'bg-primary text-white' : 'text-foreground/55 hover:text-foreground hover:bg-foreground/5'}`}
                         >
                             {tab.icon}
                             {tab.label}
@@ -260,7 +264,7 @@ export default function LiveStreamRoom(props: LiveStreamRoomProps) {
                                        <div className="flex items-center gap-3">
                                            <div className="w-10 h-10 rounded-xl bg-foreground/5 dark:bg-white/5 border border-foreground/10 dark:border-white/10 overflow-hidden relative">
                                                <img 
-                                                src={p.metadata ? JSON.parse(p.metadata).photoURL : `https://api.dicebear.com/7.x/avataaars/svg?seed=${p.identity}`} 
+                                                src={(() => { try { return JSON.parse(p.metadata || '{}').avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${p.identity}`; } catch { return `https://api.dicebear.com/7.x/avataaars/svg?seed=${p.identity}`; } })()} 
                                                 className="w-full h-full object-cover" 
                                                />
                                                {p.isSpeaking && <div className="absolute inset-0 border-2 border-primary animate-pulse" />}
@@ -270,17 +274,17 @@ export default function LiveStreamRoom(props: LiveStreamRoomProps) {
                                                    {p.name || p.identity}
                                                    {p.identity === props.hostId ? <span className="px-1.5 py-0.5 bg-primary/20 text-primary text-[8px] font-black uppercase rounded">Host</span> : null}
                                                </p>
-                                               <p className="text-[10px] text-foreground/30 dark:text-white/30 font-medium">Joined {i === 0 ? 'recently' : 'just now'}</p>
+                                               <p className="text-[11px] text-foreground/45">{p.identity === props.hostId ? 'Host' : p.isLocal ? 'You' : 'Watching'}</p>
                                            </div>
                                        </div>
                                        
-                                       <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                       <div className="flex items-center gap-2 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                                            {props.isHost && p.identity !== props.hostId && (
                                                <>
-                                                   <button className="p-2 bg-foreground/5 dark:bg-white/5 hover:bg-rose-500/20 text-foreground/40 dark:text-white/40 hover:text-rose-500 rounded-lg transition-all">
+                                                   <button onClick={() => command(p.identity, 'mute_request')} title="Mute" aria-label="Mute" className="p-2 rounded-full text-foreground/50 hover:text-red-500 hover:bg-red-500/10">
                                                        <MicOff size={14} />
                                                    </button>
-                                                   <button className="p-2 bg-foreground/5 dark:bg-white/5 hover:bg-rose-500/20 text-foreground/40 dark:text-white/40 hover:text-rose-500 rounded-lg transition-all">
+                                                   <button onClick={() => command(p.identity, 'kick_request')} title="Remove from stream" aria-label="Remove from stream" className="p-2 rounded-full text-foreground/50 hover:text-red-500 hover:bg-red-500/10">
                                                        <X size={14} />
                                                    </button>
                                                </>
@@ -292,20 +296,8 @@ export default function LiveStreamRoom(props: LiveStreamRoomProps) {
                         </div>
                     )}
 
-                    {activeTab === 'qa' && (
-                        <div className="p-8 flex flex-col items-center justify-center h-full text-center space-y-4">
-                           <div className="p-4 bg-primary/10 rounded-2xl text-primary">
-                               <HelpCircle size={32} />
-                           </div>
-                           <div>
-                               <h4 className="text-sm font-black text-foreground dark:text-white">Q&A session not active</h4>
-                               <p className="text-[10px] text-foreground/30 dark:text-white/30 font-medium mt-1">Host can start a Q&A session anytime.</p>
-                           </div>
-                           {props.isHost && (
-                               <button className="px-6 py-2 bg-primary text-white text-[10px] font-black uppercase tracking-widest rounded-xl shadow-lg">Start Q&A</button>
-                           )}
-                        </div>
-                    )}
+                    {activeTab === 'qa' && <LiveQA path={streamPath} isHost={props.isHost} />}
+                    {activeTab === 'polls' && <LivePolls path={streamPath} isHost={props.isHost} />}
                 </div>
             </div>
           </motion.div>

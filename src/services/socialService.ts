@@ -2,8 +2,9 @@ import { db } from '../firebase';
 import { getSupabase } from '../supabase';
 import { dualRead, dualWrite } from './db/utils';
 import {
-  doc, setDoc, deleteDoc, updateDoc, addDoc, getDocs, collection, query, where, limit, increment, serverTimestamp,
+  doc, setDoc, deleteDoc, updateDoc, addDoc, getDocs, collection, query, where, limit, increment, serverTimestamp, writeBatch,
 } from 'firebase/firestore';
+import { addFeePayment, feeOf } from '../lib/communityPricing';
 
 /** Follow edges live on both sides: users/{me}/following/{them} and users/{them}/followers/{me}. */
 export async function followUser(myUid: string, targetUid: string): Promise<void> {
@@ -78,12 +79,17 @@ export async function joinCommunity(
   community: { id: string; [key: string]: any },
   extra: Record<string, unknown> = {}
 ): Promise<void> {
-  await setDoc(doc(db, 'communities', community.id, 'members', uid), {
+  // Membership and any joining fee are written together, so paying and joining can't come apart.
+  const batch = writeBatch(db);
+  batch.set(doc(db, 'communities', community.id, 'members', uid), {
     userId: uid,
     role: 'member',
     joinedAt: serverTimestamp(),
     ...extra,
   });
+  const fee = feeOf(community);
+  if (fee && community.creatorId !== uid) addFeePayment(batch, fee, uid, community.creatorId);
+  await batch.commit();
 
   try {
     await updateDoc(doc(db, 'communities', community.id), { memberCount: increment(1) });

@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { db, auth, handleFirestoreError, OperationType } from '../firebase';
 import { collection, query, onSnapshot, where, collectionGroup, getDocs } from 'firebase/firestore';
 import { toast } from 'react-hot-toast';
-import MessagesView from '../components/MessagesView';
+import MessagesPage from '../features/messages/MessagesPage';
 import NotificationsView from '../components/NotificationsView';
 import CommunityList from '../components/CommunityList';
 import CommunityView from '../components/CommunityView';
@@ -122,7 +122,7 @@ export default function SocialFeed() {
 
         <main className={`w-full order-2 flex-1 ${fullBleed ? 'h-full overflow-hidden' : 'pt-4'} ${showSidebars ? 'max-w-[640px]' : 'max-w-full'}`}>
           {view === 'messages' ? (
-            <div className="w-full h-full"><MessagesView /></div>
+            <div className="w-full h-full"><MessagesPage /></div>
           ) : view === 'notifications' ? (
             <NotificationsView />
           ) : view === 'community' && communityId ? (

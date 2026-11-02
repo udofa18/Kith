@@ -5,7 +5,7 @@
 import type { FeedItem, FeedPage, SearchParams, ViewerContext } from '../types';
 import { engagementOf, reasonLabel, scoreItem, toDate } from '../ranking/score';
 import { rankAndMix } from '../ranking/mix';
-import { fetchPostsByAuthors, fetchPostsSince, fetchRecent, searchPosts, type SourceCursor, type SourceType } from './sources';
+import { fetchPostsByAuthors, fetchPostsSince, fetchRecent, searchPosts, type SearchCursor, type SourceCursor, type SourceType } from './sources';
 
 const PAGE_SIZE = 15;
 
@@ -105,7 +105,16 @@ export async function fetchTrendingPage(viewer: ViewerContext): Promise<FeedPage
 
 // ---------------------------------------------------------------- Search
 
-export async function fetchSearchPage(viewer: ViewerContext, params: SearchParams, cursor?: SourceCursor): Promise<FeedPage<SourceCursor>> {
-  const { items, cursor: next } = await searchPosts(params, PAGE_SIZE, cursor);
-  return { items: items.filter(allowed(viewer)), nextCursor: next ?? undefined };
+export async function fetchSearchPage(viewer: ViewerContext, params: SearchParams, cursor?: SearchCursor): Promise<FeedPage<SearchCursor>> {
+  // A round can come back empty while older posts remain, so keep going a few rounds before
+  // handing back a page (an empty first page would read as "no results").
+  const items: FeedItem[] = [];
+  let next: SearchCursor | null | undefined = cursor;
+  for (let round = 0; round < 4; round++) {
+    const result = await searchPosts(params, PAGE_SIZE, next ?? undefined);
+    items.push(...result.items.filter(allowed(viewer)));
+    next = result.cursor;
+    if (!next || items.length >= PAGE_SIZE) break;
+  }
+  return { items, nextCursor: next ?? undefined };
 }

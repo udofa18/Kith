@@ -6,6 +6,7 @@ import { collection, query, where, getDocs, addDoc, doc, serverTimestamp, getDoc
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
 import { createNotification } from '../lib/notifications';
+import { sendDirectMessage } from '../features/messages/api';
 
 interface CreateInstantSessionModalProps {
   isOpen: boolean;
@@ -88,38 +89,12 @@ export default function CreateInstantSessionModal({ isOpen, onClose }: CreateIns
         const inviteMessage = `Hey! I just started an instant live session: "${title.trim()}". Join me here: ${window.location.origin}/live/${eventId}`;
         
         for (const friendId of selectedFriends) {
-          const conversationId = [auth.currentUser.uid, friendId].sort().join('_');
-          const convRef = doc(db, 'conversations', conversationId);
-          const convDoc = await getDoc(convRef);
-
-          const batch = writeBatch(db);
-          
-          if (!convDoc.exists()) {
-            batch.set(convRef, {
-              participants: [auth.currentUser.uid, friendId],
-              lastMessage: inviteMessage,
-              lastMessageAt: serverTimestamp(),
-              unreadCount: { [friendId]: 1, [auth.currentUser.uid]: 0 }
-            });
-          } else {
-            batch.update(convRef, {
-              lastMessage: inviteMessage,
-              lastMessageAt: serverTimestamp(),
-              [`unreadCount.${friendId}`]: increment(1)
-            });
-          }
-
-          const messageRef = doc(collection(db, 'conversations', conversationId, 'messages'));
-          batch.set(messageRef, {
-            senderId: auth.currentUser.uid,
-            receiverId: friendId,
-            content: inviteMessage,
-            createdAt: serverTimestamp(),
-            read: false,
-            conversationId
-          });
-
-          await batch.commit();
+          await sendDirectMessage(
+            { uid: auth.currentUser.uid, name: auth.currentUser.displayName || 'Someone', photo: auth.currentUser.photoURL || '' },
+            friendId,
+            inviteMessage,
+            false,
+          );
 
           await createNotification({
             recipientId: friendId,

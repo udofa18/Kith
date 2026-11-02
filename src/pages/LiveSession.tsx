@@ -68,6 +68,7 @@ import { gainXP } from '../lib/xp';
 import ConfirmModal from '../components/ConfirmModal';
 import { toast } from 'react-hot-toast';
 import { useLiveSession } from '../contexts/LiveSessionContext';
+import { sendDirectMessage } from '../features/messages/api';
 
 export default function LiveSession() {
   const { eventId } = useParams();
@@ -1124,38 +1125,13 @@ function ShareModal({ isOpen, onClose, eventId, eventTitle }: { isOpen: boolean,
     if (!auth.currentUser) return;
     setSending(friendId);
     try {
-      const conversationId = [auth.currentUser.uid, friendId].sort().join('_');
-      const convRef = doc(db, 'conversations', conversationId);
       const inviteMessage = `Hey! Join my live session: "${eventTitle}". Link: ${shareUrl}`;
-      
-      const batch = writeBatch(db);
-      const convDoc = await getDoc(convRef);
-      
-      if (!convDoc.exists()) {
-        batch.set(convRef, {
-          participants: [auth.currentUser.uid, friendId],
-          lastMessage: inviteMessage,
-          lastMessageAt: serverTimestamp(),
-          unreadCount: { [friendId]: 1, [auth.currentUser.uid]: 0 }
-        });
-      } else {
-        batch.update(convRef, {
-          lastMessage: inviteMessage,
-          lastMessageAt: serverTimestamp(),
-          [`unreadCount.${friendId}`]: increment(1)
-        });
-      }
-
-      batch.set(doc(collection(db, 'conversations', conversationId, 'messages')), {
-        senderId: auth.currentUser.uid,
-        receiverId: friendId,
-        content: inviteMessage,
-        createdAt: serverTimestamp(),
-        read: false,
-        conversationId
-      });
-
-      await batch.commit();
+      await sendDirectMessage(
+        { uid: auth.currentUser.uid, name: auth.currentUser.displayName || 'Someone', photo: auth.currentUser.photoURL || '' },
+        friendId,
+        inviteMessage,
+        false,
+      );
       
       await createNotification({
         recipientId: friendId,

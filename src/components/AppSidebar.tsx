@@ -136,11 +136,10 @@ export default function AppSidebar({ user }: { user: any }) {
       let requestCount = 0;
       snapshot.docs.forEach(d => {
         const data = d.data();
-        const count = data.unreadCount?.[user.uid] || 0;
-        dmCount += count;
-        if (data.status === 'pending' && data.requestedBy !== user.uid) {
-          requestCount += 1;
-        }
+        const incomingRequest = data.status === 'pending' && data.requestedBy !== user.uid;
+        const hidden = data.status === 'declined' && data.requestedBy !== user.uid;
+        if (incomingRequest) requestCount += 1;
+        else if (!hidden && !data.mutedBy?.includes(user.uid)) dmCount += data.unreadCount?.[user.uid] || 0;
       });
       setTotalUnreadDMs(dmCount + requestCount);
     }, (error) => {

@@ -7,16 +7,6 @@ export interface ChatLink {
   createdAt: Date | null;
 }
 
-export interface ChatAttachment {
-  id: string;
-  url: string;
-  name: string;
-  type: string;
-  senderId: string;
-  createdAt: Date | null;
-  isImage: boolean;
-}
-
 interface ChatMessageLike {
   id: string;
   senderId: string;
@@ -61,30 +51,4 @@ export function extractLinksFromMessages(messages: ChatMessageLike[]): ChatLink[
   });
 
   return links.reverse();
-}
-
-export function extractAttachmentsFromMessages(messages: ChatMessageLike[]): ChatAttachment[] {
-  return messages
-    .filter(msg => msg.type === 'attachment' && msg.attachmentUrl)
-    .map(msg => ({
-      id: msg.id,
-      url: msg.attachmentUrl!,
-      name: msg.attachmentName || 'Attachment',
-      type: msg.attachmentType || 'application/octet-stream',
-      senderId: msg.senderId,
-      createdAt: toDate(msg.createdAt),
-      isImage: msg.attachmentType?.startsWith('image/') ?? false,
-    }))
-    .reverse();
-}
-
-export function deriveCountryFromLocation(location?: string): string | null {
-  if (!location?.trim()) return null;
-  const parts = location.split(',').map(p => p.trim()).filter(Boolean);
-  return parts.length > 1 ? parts[parts.length - 1] : parts[0];
-}
-
-export function formatTimezoneLabel(timezone?: string): string {
-  if (!timezone) return 'Not set';
-  return timezone.replace(/_/g, ' ');
 }

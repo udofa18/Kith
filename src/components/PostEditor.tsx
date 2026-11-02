@@ -4,7 +4,8 @@ import { auth, db, storage, handleFirestoreError, OperationType } from '../fireb
 import { collection, addDoc, serverTimestamp, doc, updateDoc, increment, getDoc, getDocs, writeBatch, setDoc, onSnapshot, query, orderBy } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { motion, AnimatePresence } from 'motion/react';
-import { Code, Image as ImageIcon, Link as LinkIcon, Send, Sparkles, X, BarChart2, Film, Plus, Smile, Hash, Repeat } from 'lucide-react';
+import { Code, Image as ImageIcon, Link as LinkIcon, Send, Sparkles, X, BarChart2, Film, Plus, Smile, Hash, Repeat, TrendingUp, MessageCircleQuestion, PenLine } from 'lucide-react';
+import { toast } from 'react-hot-toast';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { atomDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { suggestHashtags, detectLanguage } from '../services/geminiService';
@@ -12,8 +13,39 @@ import EmojiPicker, { Theme } from 'emoji-picker-react';
 
 import { updateDailyStats } from '../lib/stats';
 import { createNotification } from '../lib/notifications';
+import { useCurrentUser } from '../contexts/CurrentUserContext';
+import { advanceStreak, recordShipLog } from '../features/shiplog/streak';
+import { buildSearchTokens, extractHashtags, mergeTags, normalizeTag } from '../features/search/tokens';
 
-export default function PostEditor({ onPostCreated, communityId, channelId, quotedPostId, onCancelQuote }: { onPostCreated?: () => void, communityId?: string, channelId?: string, quotedPostId?: string | null, onCancelQuote?: () => void }) {
+export type PostKind = 'post' | 'shiplog' | 'feedback';
+
+const KINDS: { id: PostKind; label: string; icon: typeof PenLine; placeholder: string }[] = [
+  { id: 'post', label: 'Post', icon: PenLine, placeholder: "What's on your mind?" },
+  // Stored as 'shiplog' for compatibility; shown as a daily progress update.
+  { id: 'shiplog', label: 'Progress update', icon: TrendingUp, placeholder: 'What did you move forward today? Big or small, it counts.' },
+  { id: 'feedback', label: 'Ask for feedback', icon: MessageCircleQuestion, placeholder: 'What would you like feedback on? Add a photo or link.' },
+];
+
+export default function PostEditor({ onPostCreated, communityId, channelId, quotedPostId, onCancelQuote, initialKind, variant = 'inline', autoFocus = false, onDirtyChange }: {
+  onPostCreated?: () => void,
+  communityId?: string,
+  channelId?: string,
+  quotedPostId?: string | null,
+  onCancelQuote?: () => void,
+  initialKind?: PostKind,
+  /** 'dialog' drops the feed row chrome (border, hover) for use inside ComposeDialog. */
+  variant?: 'inline' | 'dialog',
+  autoFocus?: boolean,
+  /** Reports whether there's unsaved content, so a dialog can confirm before discarding it. */
+  onDirtyChange?: (dirty: boolean) => void,
+}) {
+  const currentUserProfile = useCurrentUser();
+  // Progress updates and feedback requests are feed features; community channels only post plain messages.
+  const canChooseKind = !communityId && !quotedPostId;
+  const [kind, setKind] = useState<PostKind>(initialKind ?? 'post');
+  const [project, setProject] = useState('');
+  useEffect(() => { if (initialKind) setKind(initialKind); }, [initialKind]);
+  const activeKind = KINDS.find(k => k.id === (canChooseKind ? kind : 'post'))!;
   const [content, setContent] = useState('');
   const [code, setCode] = useState('');
   const [language, setLanguage] = useState('javascript');
@@ -23,7 +55,6 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
   const [suggesting, setSuggesting] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const emojiPickerRef = useRef<HTMLDivElement>(null);
-  const [currentUserProfile, setCurrentUserProfile] = useState<any>(null);
   const [quotedPost, setQuotedPost] = useState<any>(null);
   const [loadingQuoted, setLoadingQuoted] = useState(false);
 
@@ -44,15 +75,6 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
     }
   }, [quotedPostId]);
 
-  useEffect(() => {
-    if (!auth.currentUser) return;
-    const unsubscribe = onSnapshot(doc(db, 'users', auth.currentUser.uid), (doc) => {
-      if (doc.exists()) {
-        setCurrentUserProfile(doc.data());
-      }
-    });
-    return () => unsubscribe();
-  }, []);
   
   // Media states
   const [mediaFiles, setMediaFiles] = useState<{ file: File, preview: string, type: 'image' | 'video' }[]>([]);
@@ -142,6 +164,8 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
         uploadedMedia.push({ type: media.type, url });
       }
 
+      // Tags typed in the text count too, not just the suggested ones.
+      const allTags = mergeTags(hashtags, extractHashtags(content));
       const postData: any = {
         authorUid: auth.currentUser.uid,
         authorName: displayName,
@@ -151,7 +175,8 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
         content,
         codeSnippet: code,
         language,
-        hashtags,
+        hashtags: allTags,
+        searchTokens: buildSearchTokens([content, project, displayName, username, ...allTags.map(t => `#${normalizeTag(t)}`)]),
         media: uploadedMedia,
         likesCount: 0,
         commentsCount: 0,
@@ -164,6 +189,13 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
         type: quotedPostId ? 'quote' : (showPoll ? 'poll' : 'post'),
         originalPostId: quotedPostId || null
       };
+
+      const postKind = canChooseKind ? kind : 'post';
+      if (postKind !== 'post') postData.kind = postKind;
+      if (postKind === 'shiplog') {
+        postData.shipDay = advanceStreak(currentUserProfile?.streak).current;
+        if (project.trim()) postData.project = project.trim().slice(0, 80);
+      }
 
       if (showPoll && pollQuestion && pollOptions.every(o => o.trim())) {
         postData.poll = {
@@ -207,10 +239,10 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
         }
 
         // Update trending hashtags tracker
-        if (hashtags.length > 0) {
+        if (allTags.length > 0) {
           try {
             const batch = writeBatch(db);
-            hashtags.forEach(tag => {
+            allTags.forEach(tag => {
               const tagId = tag.toLowerCase().replace('#', '').trim();
               if (tagId) {
                 const tagRef = doc(db, 'hashtags', tagId);
@@ -289,6 +321,15 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
         handleFirestoreError(error, OperationType.UPDATE, `users/${auth.currentUser.uid}`);
       }
 
+      if (postData.kind === 'shiplog') {
+        try {
+          const streak = await recordShipLog(auth.currentUser.uid, currentUserProfile?.streak);
+          toast.success(streak.current > 1 ? `Day ${streak.current} streak. Keep it going!` : 'Progress shared. Day 1 of your streak!');
+        } catch (error) {
+          console.error('Failed to update streak:', error);
+        }
+      }
+
       // Reset
       setContent('');
       setCode('');
@@ -298,6 +339,8 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
       setShowPoll(false);
       setPollQuestion('');
       setPollOptions(['', '']);
+      setKind('post');
+      setProject('');
       if (onPostCreated) onPostCreated();
     } catch (error) {
       console.error("Error creating post:", error);
@@ -307,6 +350,13 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
   };
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (autoFocus) textareaRef.current?.focus();
+  }, [autoFocus]);
+
+  const dirty = !!content.trim() || !!code.trim() || mediaFiles.length > 0 || !!pollQuestion.trim();
+  useEffect(() => { onDirtyChange?.(dirty); }, [dirty]);
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -361,7 +411,7 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
 
   return (
     <div 
-      className={`bg-transparent p-6 mb-0 relative transition-all duration-300 border-b border-black/10 dark:border-white/10 ${isFocused ? 'bg-black/5 dark:bg-white/5' : 'hover:bg-black/[0.02] dark:hover:bg-white/[0.02]'} ${showEmojiPicker ? 'z-50' : 'z-10'}`}
+      className={`relative transition-colors ${variant === 'dialog' ? 'px-4 pt-2 pb-3' : `px-5 py-4 border-b border-black/10 dark:border-white/10 ${isFocused ? 'bg-black/[0.02] dark:bg-white/[0.02]' : ''}`} ${showEmojiPicker ? 'z-50' : 'z-10'}`}
       onFocus={() => setIsFocused(true)}
       onBlur={(e) => {
         // Only blur if clicking completely outside the editor
@@ -370,8 +420,8 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
         }
       }}
     >
-      <div className="flex gap-4">
-        <div className="w-12 h-12 rounded-full overflow-hidden flex-shrink-0 border border-black/10 dark:border-white/10 bg-black/5">
+      <div className="flex gap-3">
+        <div className="w-10 h-10 rounded-full overflow-hidden flex-shrink-0 bg-black/5 dark:bg-white/10">
           <img 
             src={(currentUserProfile?.profileImage && currentUserProfile.profileImage.trim() !== '') ? currentUserProfile.profileImage : (auth.currentUser?.photoURL && auth.currentUser.photoURL.trim() !== '') ? auth.currentUser.photoURL : `https://api.dicebear.com/7.x/avataaars/svg?seed=${auth.currentUser?.uid}`} 
             alt="Avatar" 
@@ -379,7 +429,36 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
             className="w-full h-full object-cover"
           />
         </div>
-        <div className="flex-1 space-y-4">
+        <div className="flex-1 min-w-0 space-y-3">
+          {canChooseKind && (
+            <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="Post type">
+              {KINDS.map(k => (
+                <button
+                  key={k.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={kind === k.id}
+                  onClick={() => setKind(k.id)}
+                  className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[13px] font-medium border transition-colors ${
+                    kind === k.id
+                      ? 'bg-primary/10 border-primary/30 text-primary'
+                      : 'border-black/10 dark:border-white/10 text-black/60 dark:text-white/60 hover:text-black dark:hover:text-white'
+                  }`}
+                >
+                  <k.icon size={13} /> {k.label}
+                </button>
+              ))}
+            </div>
+          )}
+          {canChooseKind && kind === 'shiplog' && (
+            <input
+              value={project}
+              onChange={e => setProject(e.target.value)}
+              maxLength={80}
+              placeholder="What are you working on? (optional)"
+              className="w-full bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary"
+            />
+          )}
           <div className="relative">
             <AnimatePresence>
               {showChannelSuggestions && filteredChannels.length > 0 && (
@@ -387,10 +466,10 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: 10 }}
-                  className="absolute bottom-full left-0 mb-2 w-64 bg-background border border-black/10 dark:border-white/10 rounded-none shadow-none z-50 overflow-hidden backdrop-blur-xl"
+                  className="absolute bottom-full left-0 mb-2 w-64 bg-background border border-black/10 dark:border-white/10 rounded-lg shadow-none z-50 overflow-hidden backdrop-blur-xl"
                 >
                   <div className="p-2 border-b border-black/5 dark:border-white/5 bg-black/5 dark:bg-white/5">
-                    <p className="text-[10px] font-black text-black/40 dark:text-white/40 uppercase tracking-widest px-2">Mention Channel</p>
+                    <p className="text-xs font-medium text-black/50 dark:text-white/50 px-2">Mention a channel</p>
                   </div>
                   <div className="max-h-48 overflow-y-auto p-1">
                     {filteredChannels.map((c) => (
@@ -398,11 +477,11 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
                         key={c.id}
                         type="button"
                         onClick={() => insertChannelMention(c.name)}
-                        className="w-full flex items-center gap-3 px-3 py-2 rounded-none hover:bg-primary/10 text-left transition-all group"
+                        className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-primary/10 text-left transition-all group"
                       >
                         <Hash size={14} className="text-primary shrink-0" />
                         <div className="min-w-0">
-                          <p className="text-xs font-black text-black dark:text-white group-hover:text-primary transition-colors truncate">
+                          <p className="text-sm font-medium text-black dark:text-white group-hover:text-primary transition-colors truncate">
                             #{c.name}
                           </p>
                           {c.description && <p className="text-[10px] text-black/40 dark:text-white/40 truncate">{c.description}</p>}
@@ -445,8 +524,8 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
                   setShowChannelSuggestions(false);
                 }
               }}
-              placeholder="Share what you're building..."
-              className="w-full bg-transparent border-none outline-none text-xl resize-none min-h-[90px] text-black dark:text-white placeholder:text-black/30 dark:placeholder:text-white/30 overflow-hidden pt-2"
+              placeholder={activeKind.placeholder}
+              className="w-full bg-transparent border-none outline-none text-[17px] leading-relaxed resize-none min-h-[72px] text-black dark:text-white placeholder:text-black/40 dark:placeholder:text-white/40 overflow-hidden pt-1"
             />
 
             {/* Quoted Post Preview */}
@@ -485,7 +564,7 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
           {mediaFiles.length > 0 && (
             <div className="grid grid-cols-2 gap-2">
               {mediaFiles.map((media, i) => (
-                <div key={i} className="relative rounded-none overflow-hidden aspect-video bg-black/40 border border-black/10 dark:border-white/10">
+                <div key={i} className="relative rounded-lg overflow-hidden aspect-video bg-black/40 border border-black/10 dark:border-white/10">
                   {media.type === 'image' ? (
                     <img src={media.preview} alt="Preview" className="w-full h-full object-cover" />
                   ) : (
@@ -493,7 +572,7 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
                   )}
                   <button 
                     onClick={() => removeMedia(i)}
-                    className="absolute top-2 right-2 p-1 bg-black/60 rounded-none border border-white/20 text-white hover:bg-black"
+                    className="absolute top-2 right-2 p-1 bg-black/60 rounded-lg border border-white/20 text-white hover:bg-black"
                   >
                     <X size={14} />
                   </button>
@@ -509,10 +588,10 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: 10 }}
-                className="bg-black/5 dark:bg-black/20 border border-black/10 dark:border-white/10 rounded-none p-4 space-y-4"
+                className="bg-black/5 dark:bg-black/20 border border-black/10 dark:border-white/10 rounded-lg p-4 space-y-4"
               >
                 <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-black text-black/40 dark:text-white/40 uppercase tracking-widest">Create Poll</span>
+                  <span className="text-sm font-semibold">Poll</span>
                   <button onClick={() => setShowPoll(false)} className="text-black/30 dark:text-white/30 hover:text-black dark:hover:text-white">
                     <X size={16} />
                   </button>
@@ -522,7 +601,7 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
                   value={pollQuestion}
                   onChange={(e) => setPollQuestion(e.target.value)}
                   placeholder="Ask a question..."
-                  className="w-full bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-none px-4 py-2 text-xs outline-none focus:border-primary text-black dark:text-white font-black uppercase tracking-tight"
+                  className="w-full bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary text-black dark:text-white"
                 />
                 <div className="space-y-2">
                   {pollOptions.map((opt, i) => (
@@ -532,7 +611,7 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
                         value={opt}
                         onChange={(e) => updatePollOption(i, e.target.value)}
                         placeholder={`Option ${i + 1}`}
-                        className="flex-1 bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-none px-4 py-2 text-xs outline-none focus:border-primary text-black dark:text-white font-bold"
+                        className="flex-1 bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary text-black dark:text-white"
                       />
                       {pollOptions.length > 2 && (
                         <button onClick={() => removePollOption(i)} className="text-black/20 dark:text-white/20 hover:text-red-400">
@@ -544,7 +623,7 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
                   {pollOptions.length < 5 && (
                     <button 
                       onClick={addPollOption}
-                      className="text-[10px] text-primary font-black uppercase flex items-center gap-1 hover:underline tracking-widest"
+                      className="text-sm text-primary font-medium flex items-center gap-1 hover:underline"
                     >
                       <Plus size={14} /> Add Option
                     </button>
@@ -562,7 +641,7 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
                 exit={{ opacity: 0, height: 0 }}
                 className="space-y-2"
               >
-                <div className="flex items-center justify-between bg-black/40 px-4 py-2 rounded-none border-x border-t border-white/10">
+                <div className="flex items-center justify-between bg-black/40 px-4 py-2 rounded-lg border-x border-t border-white/10">
                   <select 
                     value={language}
                     onChange={(e) => setLanguage(e.target.value)}
@@ -583,7 +662,7 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
                   value={code}
                   onChange={(e) => setCode(e.target.value)}
                   placeholder="Paste your code here..."
-                  className="w-full bg-black/40 border border-white/10 rounded-none p-4 font-mono text-sm text-primary outline-none min-h-[200px]"
+                  className="w-full bg-black/40 border border-white/10 rounded-lg p-4 font-mono text-sm text-primary outline-none min-h-[200px]"
                 />
               </motion.div>
             )}
@@ -592,42 +671,42 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
           {hashtags.length > 0 && (
             <div className="flex flex-wrap gap-2">
               {hashtags.map((tag, i) => (
-                <span key={i} className="text-[10px] text-primary font-black uppercase tracking-widest bg-primary/10 px-3 py-1 rounded-full border border-primary/20">
+                <span key={i} className="text-[13px] text-primary font-medium bg-primary/10 px-2.5 py-0.5 rounded-full">
                   {tag}
                 </span>
               ))}
             </div>
           )}
 
-          <div className="flex items-center justify-between pt-4 border-t border-black/5 dark:border-white/5">
+          <div className="flex items-center justify-between pt-3 border-t border-black/5 dark:border-white/5">
             <div className="flex items-center gap-1">
               <button 
                 onClick={() => setShowCode(!showCode)}
-                className={`p-2 rounded-none transition-all ${showCode ? 'bg-primary text-white' : 'hover:bg-black/5 dark:hover:bg-white/5 text-black/40 dark:text-white/40 border border-transparent'}`}
+                className={`p-2 rounded-full transition-colors ${showCode ? 'bg-primary/10 text-primary' : 'hover:bg-primary/10 text-black/50 dark:text-white/50 hover:text-primary'}`}
                 title="Add Code Snippet"
               >
-                <Code size={20} />
+                <Code size={18} />
               </button>
               <button 
                 onClick={() => fileInputRef.current?.click()}
-                className="p-2 rounded-none hover:bg-black/5 dark:hover:bg-white/5 text-black/40 dark:text-white/40 transition-all border border-transparent"
+                className="p-2 rounded-full hover:bg-primary/10 text-black/50 dark:text-white/50 hover:text-primary transition-colors"
                 title="Add Media"
               >
-                <ImageIcon size={20} />
+                <ImageIcon size={18} />
               </button>
               <button 
                 onClick={() => setShowPoll(!showPoll)}
-                className={`p-2 rounded-none transition-all ${showPoll ? 'bg-primary text-white' : 'hover:bg-black/5 dark:hover:bg-white/5 text-black/40 dark:text-white/40 border border-transparent'}`}
+                className={`p-2 rounded-full transition-colors ${showPoll ? 'bg-primary/10 text-primary' : 'hover:bg-primary/10 text-black/50 dark:text-white/50 hover:text-primary'}`}
                 title="Add Poll"
               >
-                <BarChart2 size={20} />
+                <BarChart2 size={18} />
               </button>
               <button 
                 onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-                className={`p-2 rounded-none transition-all ${showEmojiPicker ? 'bg-primary text-white' : 'hover:bg-black/5 dark:hover:bg-white/5 text-black/40 dark:text-white/40 border border-transparent'}`}
+                className={`p-2 rounded-full transition-colors ${showEmojiPicker ? 'bg-primary/10 text-primary' : 'hover:bg-primary/10 text-black/50 dark:text-white/50 hover:text-primary'}`}
                 title="Add Emoji"
               >
-                <Smile size={20} />
+                <Smile size={18} />
               </button>
               {showEmojiPicker && (
                 <div ref={emojiPickerRef} className="absolute top-full left-0 mt-2 z-[100] origin-top-left scale-75 shadow-none border border-black/10 dark:border-white/10">
@@ -644,10 +723,10 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
               <button 
                 onClick={handleSuggestHashtags}
                 disabled={suggesting || (!content && !code)}
-                className="p-2 rounded-none hover:bg-black/5 dark:hover:bg-white/5 text-black/40 dark:text-white/40 transition-all disabled:opacity-30 border border-transparent hover:border-black/10 dark:hover:border-white/10"
+                className="p-2 rounded-full hover:bg-primary/10 text-black/50 dark:text-white/50 hover:text-primary transition-colors disabled:opacity-30"
                 title="Suggest Hashtags"
               >
-                <Sparkles size={20} className={suggesting ? 'animate-pulse text-primary' : ''} />
+                <Sparkles size={18} className={suggesting ? 'animate-pulse text-primary' : ''} />
               </button>
               <input 
                 type="file" 
@@ -661,9 +740,9 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
             <button
               onClick={handleSubmit}
               disabled={loading || (!content.trim() && mediaFiles.length === 0 && !pollQuestion)}
-              className="px-6 py-2.5 bg-gradient-to-r from-purple-600 via-indigo-600 to-blue-600 hover:from-purple-500 hover:via-indigo-500 hover:to-blue-500 text-white rounded-full font-black uppercase tracking-widest text-[10px] flex items-center gap-2 disabled:opacity-50 transition-all duration-300 shadow-md shadow-purple-500/15 hover:scale-105 active:scale-95 cursor-pointer"
+              className="px-5 py-2 bg-primary hover:bg-primary/90 text-white rounded-full font-semibold text-sm flex items-center gap-2 disabled:opacity-40 transition-colors"
             >
-              {loading ? 'Posting...' : 'Post'} <Send size={12} className="text-white" />
+              {loading ? 'Posting…' : kind === 'shiplog' && canChooseKind ? 'Share' : kind === 'feedback' && canChooseKind ? 'Ask' : 'Post'} <Send size={14} />
             </button>
           </div>
         </div>

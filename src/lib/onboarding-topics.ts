@@ -12,6 +12,8 @@ export interface TopicGroup {
 }
 
 export const TOPIC_GROUPS: TopicGroup[] = [
+  { label: 'Creative', category: 'creative', topics: ['Photography', 'Video', 'Music', 'Writing', 'Art & Illustration', 'Fashion'] },
+  { label: 'Life & wellbeing', category: 'lifestyle', topics: ['Fitness', 'Food', 'Travel', 'Wellness', 'Personal Finance', 'Gaming'] },
   { label: 'Engineering', category: 'technology', topics: ['React', 'Next.js', 'TypeScript', 'Node.js', 'Python', 'Go', 'PostgreSQL', 'Mobile'] },
   { label: 'AI & emerging tech', category: 'technology', topics: ['AI/ML', 'LLMs', 'Web3', 'AR/VR'] },
   { label: 'Design', category: 'build-projects', topics: ['UI Design', 'UX Research', 'Figma', 'Motion', '3D', 'Typography'] },

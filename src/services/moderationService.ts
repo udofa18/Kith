@@ -1,6 +1,4 @@
-import { GoogleGenAI, Type } from "@google/genai";
-
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+import { auth } from "../firebase";
 
 export interface ModerationResult {
   isSafe: boolean;
@@ -9,43 +7,22 @@ export interface ModerationResult {
   suggestedAction?: 'allow' | 'flag' | 'block';
 }
 
+const ALLOW: ModerationResult = { isSafe: true, score: 1.0, flaggedReasons: [], suggestedAction: 'allow' };
+
+/** Server-side Gemini moderation (/api/gemini/moderate). Fails open so outages don't block chat. */
 export const analyzeContent = async (content: string): Promise<ModerationResult> => {
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: `Analyze the following community message for toxicity, hate speech, harassment, or violations of community standards:
-      "${content}"`,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            isSafe: { type: Type.BOOLEAN },
-            score: { type: Type.NUMBER, description: "Safety score from 0.0 to 1.0" },
-            flaggedReasons: { 
-              type: Type.ARRAY, 
-              items: { type: Type.STRING } 
-            },
-            suggestedAction: { 
-              type: Type.STRING, 
-              enum: ["allow", "flag", "block"] 
-            }
-          },
-          required: ["isSafe", "score", "flaggedReasons", "suggestedAction"]
-        }
-      }
+    const token = await auth.currentUser?.getIdToken();
+    if (!token) return ALLOW;
+    const res = await fetch('/api/gemini/moderate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ content }),
     });
-
-    const result = JSON.parse(response.text || "{}");
-    return result as ModerationResult;
+    if (!res.ok) throw new Error(`${res.status}`);
+    return (await res.json()) as ModerationResult;
   } catch (error) {
     console.error("AI Moderation error:", error);
-    // Fail safe: allow but mention error
-    return {
-      isSafe: true,
-      score: 1.0,
-      flaggedReasons: [],
-      suggestedAction: 'allow'
-    };
+    return ALLOW;
   }
 };

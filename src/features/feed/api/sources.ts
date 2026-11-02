@@ -12,6 +12,7 @@ import { supabasePostToApp } from '../../../lib/db-mappers';
 import { shouldReadCollectionFromSupabase } from '../../../lib/database-config';
 import type { ContentType, FeedItem } from '../types';
 import { toDate } from '../ranking/score';
+import { extractHashtags, indexKey, matchesWords, normalizeTag, queryWords } from '../../search/tokens';
 
 export type SourceType = 'post' | 'article' | 'challenge' | 'event' | 'product' | 'job';
 
@@ -132,23 +133,52 @@ export async function fetchPostsSince(since: Date, max: number): Promise<FeedIte
   return snap.docs.map(d => normalizeItem(d.id, 'post', d.data()));
 }
 
+export type SearchCursor = {
+  /** Supabase: created_at of the last row. */
+  iso?: string;
+  /** Firestore: position in the token-indexed query (posts that have `searchTokens`). */
+  indexed?: QueryDocumentSnapshot | null;
+  /** Firestore: position in the scan over older posts written before indexing existed. */
+  scan?: QueryDocumentSnapshot | null;
+  indexedDone?: boolean;
+  scanDone?: boolean;
+};
+
+/** How a post matches a search; also used by the scan over older, unindexed posts. */
+export function postMatches(post: any, match: { search?: string; hashtag?: string }): boolean {
+  const tag = match.hashtag ? normalizeTag(match.hashtag) : '';
+  if (tag) {
+    const tags = [...(post.hashtags || []), ...extractHashtags(post.content || '')].map(normalizeTag);
+    return tags.includes(tag);
+  }
+  const qWords = queryWords(match.search || '');
+  const text = [post.content, post.project, post.authorName, post.authorUsername, ...(post.hashtags || [])].join(' ');
+  return matchesWords(text, qWords);
+}
+
+const SCAN_BATCH = 60;
+
 /**
- * Text/hashtag search over public posts.
- * Supabase does it in SQL; Firestore has no text search, so we scan recent posts in batches.
+ * Text/hashtag search over public posts, newest first.
+ *
+ * Firestore has no text search. New posts carry `searchTokens` (see features/search/tokens), so one
+ * `array-contains` query finds candidates and the remaining words are checked here. Older posts
+ * without tokens are found by scanning recent posts alongside; both streams are merged by date.
  */
 export async function searchPosts(
   match: { search?: string; hashtag?: string },
   count: number,
-  cursor?: SourceCursor,
-): Promise<{ items: FeedItem[]; cursor: SourceCursor | null }> {
-  const term = match.search?.trim().toLowerCase();
-  // Restrict to tag characters: the value is interpolated into a PostgREST filter string.
-  const tag = match.hashtag?.toLowerCase().replace(/[^a-z0-9_]/g, '');
+  cursor?: SearchCursor,
+): Promise<{ items: FeedItem[]; cursor: SearchCursor | null }> {
+  const tag = match.hashtag ? normalizeTag(match.hashtag) : '';
+  const qWords = queryWords(match.search || '');
+  if (!tag && qWords.length === 0) return { items: [], cursor: null };
 
   if (shouldReadCollectionFromSupabase('posts')) {
+    // `tag` is restricted to [a-z0-9_]: it's interpolated into a PostgREST filter string.
     let q = getSupabase().from('posts').select('*').eq('visibility', 'public');
     if (tag) q = q.or(`hashtags.cs.{#${tag}},hashtags.cs.{${tag}}`);
-    if (term) q = q.ilike('content', `%${term}%`);
+    else for (const w of qWords) q = q.ilike('content', `%${w}%`);
     if (cursor?.iso) q = q.lt('created_at', cursor.iso);
     const { data, error } = await q.order('created_at', { ascending: false }).limit(count);
     if (error) throw error;
@@ -159,27 +189,41 @@ export async function searchPosts(
     };
   }
 
-  const matches = (post: any) => {
-    if (tag) return (post.hashtags || []).some((h: string) => h.toLowerCase().replace(/[^a-z0-9_]/g, '') === tag);
-    if (term) return `${post.content || ''} ${post.authorName || ''}`.toLowerCase().includes(term);
-    return true;
-  };
+  const key = tag ? `#${tag}` : indexKey(qWords)!;
+  const page = (after: QueryDocumentSnapshot | null | undefined, extra: QueryConstraint[], n: number) => getDocs(query(
+    collection(db, 'posts'),
+    where('visibility', '==', 'public'),
+    ...extra,
+    orderBy('createdAt', 'desc'),
+    ...(after ? [startAfter(after)] : []),
+    limit(n),
+  ));
 
-  const BATCH = 50;
-  const MAX_BATCHES = 4;
-  const found: FeedItem[] = [];
-  let snapCursor = cursor?.snap;
-  for (let i = 0; i < MAX_BATCHES && found.length < count; i++) {
-    const snap = await getDocs(query(
-      collection(db, 'posts'),
-      where('visibility', '==', 'public'),
-      orderBy('createdAt', 'desc'),
-      ...(snapCursor ? [startAfter(snapCursor)] : []),
-      limit(BATCH),
-    ));
-    found.push(...snap.docs.filter(d => matches(d.data())).map(d => normalizeItem(d.id, 'post', d.data())));
-    if (snap.docs.length < BATCH) return { items: found, cursor: null };
-    snapCursor = snap.docs[snap.docs.length - 1];
+  const [indexedSnap, scanSnap] = await Promise.all([
+    cursor?.indexedDone ? null : page(cursor?.indexed, [where('searchTokens', 'array-contains', key)], count).catch(err => {
+      // Missing index (not deployed yet) shouldn't break search: the scan still runs.
+      console.warn('[search] indexed query failed:', err);
+      return null;
+    }),
+    cursor?.scanDone ? null : page(cursor?.scan, [], SCAN_BATCH),
+  ]);
+
+  const found = new Map<string, FeedItem>();
+  for (const d of indexedSnap?.docs ?? []) {
+    if (postMatches(d.data(), match)) found.set(d.id, normalizeItem(d.id, 'post', d.data()));
   }
-  return { items: found, cursor: { snap: snapCursor } };
+  for (const d of scanSnap?.docs ?? []) {
+    const data = d.data();
+    // Indexed posts come from the query above; the scan only covers older ones.
+    if (!data.searchTokens && postMatches(data, match)) found.set(d.id, normalizeItem(d.id, 'post', data));
+  }
+
+  const next: SearchCursor = {
+    indexed: indexedSnap?.docs.at(-1) ?? cursor?.indexed,
+    scan: scanSnap?.docs.at(-1) ?? cursor?.scan,
+    indexedDone: cursor?.indexedDone || !indexedSnap || indexedSnap.docs.length < count,
+    scanDone: cursor?.scanDone || !scanSnap || scanSnap.docs.length < SCAN_BATCH,
+  };
+  const items = [...found.values()].sort((a, b) => toDate(b.data.createdAt).getTime() - toDate(a.data.createdAt).getTime());
+  return { items, cursor: next.indexedDone && next.scanDone ? null : next };
 }

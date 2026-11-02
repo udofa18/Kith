@@ -14,7 +14,7 @@ import {
   Info, Calendar, Hash, Lock, Search, MoreVertical, Trash2, 
   ShieldAlert, ShieldCheck, UserCog, Save, Globe, Twitter, 
   Github, Linkedin, ExternalLink, AlertCircle, Image as ImageIcon, Link as LinkIcon,
-  Upload, Layout, Clock, Trophy, BarChart3, Bell, Pin, ChevronRight, Copy, Check
+  Upload, Layout, Clock, Trophy, BarChart3, Bell, Pin, ChevronRight, Copy, Check, ArrowLeft, X
 } from 'lucide-react';
 import UserHoverCard from './UserHoverCard';
 import ChannelSidebar from './ChannelSidebar';
@@ -24,6 +24,9 @@ import ChannelSettingsModal from './ChannelSettingsModal';
 import CommunityEvents from './CommunityEvents';
 import CommunityLeaderboard from './CommunityLeaderboard';
 import CommunityAnalytics from './CommunityAnalytics';
+import CommunityAbout from './community/CommunityAbout';
+import CommunityMembers from './community/CommunityMembers';
+import { useMembership } from '../lib/communityRoles';
 import VoiceChannelView from './VoiceChannelView';
 import LiveStreamView from './LiveStreamView';
 import CommunityInviteModal from './CommunityInviteModal';
@@ -33,6 +36,13 @@ import CommunityDetailsModal from './CommunityDetailsModal';
 import { updateDailyStats } from '../lib/stats';
 import { formatDate } from '../lib/utils';
 import VerifiedBadge from './VerifiedBadge';
+import { CommunityIcon, communityHue } from './CommunityCard';
+import Avatar from './ui/Avatar';
+import { categoryLabel, categoryOf } from '../lib/communityCategories';
+import { feeOf, formatFee } from '../lib/communityPricing';
+import { joinCommunity, leaveCommunity } from '../services/socialService';
+import { presenceLabel } from '../features/messages/api';
+import { channelTypeInfo } from '../lib/channelTypes';
 
 export default function CommunityView({ communityId }: { communityId: string }) {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -109,18 +119,31 @@ export default function CommunityView({ communityId }: { communityId: string }) 
   const [showChannelSettings, setShowChannelSettings] = useState(false);
   const [channelToEdit, setChannelToEdit] = useState<any>(null);
   const [showCreateEvent, setShowCreateEvent] = useState(false);
-  const [memberSearch, setMemberSearch] = useState('');
-  const [activeMemberMenu, setActiveMemberMenu] = useState<string | null>(null);
   const [creator, setCreator] = useState<any>(null);
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const backdropInputRef = useRef<HTMLInputElement>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [userChannelStats, setUserChannelStats] = useState<Record<string, number>>({});
   const [userMentions, setUserMentions] = useState<Record<string, number>>({});
-  const [mentionsUnsubscribe, setMentionsUnsubscribe] = useState<(() => void) | null>(null);
-  const [showKickConfirm, setShowKickConfirm] = useState(false);
-  const [memberToKickId, setMemberToKickId] = useState<string | null>(null);
-  const [kicking, setKicking] = useState(false);
+  const profileCache = useRef(new Map<string, any>());
+  // Phones show one pane at a time: the community menu, or what's open (a channel or tab).
+  const membership = useMembership(communityId);
+  const [mobilePane, setMobilePane] = useState<'nav' | 'content'>('nav');
+  // The member list is tucked away until asked for; the choice is remembered.
+  const [showMemberPanel, setShowMemberPanel] = useState(() => typeof localStorage !== 'undefined' && localStorage.getItem('kith.memberPanel') === '1');
+  const [panelSearch, setPanelSearch] = useState('');
+  useEffect(() => {
+    localStorage.setItem('kith.memberPanel', showMemberPanel ? '1' : '0');
+    if (!showMemberPanel) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setShowMemberPanel(false); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [showMemberPanel]);
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(t);
+  }, []);
   const [upcomingEvents, setUpcomingEvents] = useState<any[]>([]);
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
@@ -165,6 +188,7 @@ export default function CommunityView({ communityId }: { communityId: string }) 
   const [isSavingSettings, setIsSavingSettings] = useState(false);
 
   const [myCustomRoles, setMyCustomRoles] = useState<string[]>([]);
+  const [myTimeoutUntil, setMyTimeoutUntil] = useState<number | null>(null);
   const [mutedChannels, setMutedChannels] = useState<string[]>([]);
 
   useEffect(() => {
@@ -187,6 +211,7 @@ export default function CommunityView({ communityId }: { communityId: string }) 
           setIsAdmin(myMember.role === 'admin' || myMember.role === 'owner' || myMember.role === 'moderator' || (myMember.permissions || []).includes('moderate_chat'));
           setMyPermissions(myMember.permissions || []);
           setMyCustomRoles(myMember.customRoles || []);
+          setMyTimeoutUntil(myMember.timeoutUntil?.toMillis?.() ?? null);
           setHiddenChannels(myMember.hiddenChannels || []);
           setMutedChannels(myMember.mutedChannels || []);
         } else {
@@ -204,24 +229,22 @@ export default function CommunityView({ communityId }: { communityId: string }) 
     }
 
     let unsubscribeStats: (() => void) | undefined;
+    let unsubscribeMentions: (() => void) | undefined;
 
     const unsubscribeMembers = onSnapshot(collection(db, 'communities', communityId, 'members'), async (snapshot) => {
       // Basic members list without user profiles initially for speed
-      const basicMembers = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      const basicMembers = snapshot.docs.map(d => ({ id: d.id, ...d.data(), user: profileCache.current.get(d.id) ?? null }));
       setMembers(basicMembers);
 
-      // Fetch user profiles in background - only when needed or gradually
-      // For now, let's just optimize the existing one to not block
+      // Attach profiles. Each profile is fetched once and cached, so a member joining or
+      // changing role doesn't re-download everyone.
       (async () => {
-        const memberData = await Promise.all(snapshot.docs.map(async (d) => {
-          const userDoc = await getDoc(doc(db, 'users', d.id));
-          return { 
-            id: d.id, 
-            ...d.data(), 
-            user: userDoc.exists() ? userDoc.data() : null 
-          };
+        await Promise.all(snapshot.docs.map(async (d) => {
+          if (profileCache.current.has(d.id)) return;
+          const userDoc = await getDoc(doc(db, 'users', d.id)).catch(() => null);
+          profileCache.current.set(d.id, userDoc?.exists() ? userDoc.data() : null);
         }));
-        setMembers(memberData);
+        setMembers(snapshot.docs.map(d => ({ id: d.id, ...d.data(), user: profileCache.current.get(d.id) ?? null })));
       })().catch(console.error);
 
       if (auth.currentUser) {
@@ -240,7 +263,7 @@ export default function CommunityView({ communityId }: { communityId: string }) 
         }
 
         // Fetch mentions
-        if (!mentionsUnsubscribe) {
+        if (!unsubscribeMentions) {
           const mentionsQuery = query(
             collection(db, 'notifications'),
             where('recipientId', '==', auth.currentUser.uid),
@@ -261,7 +284,7 @@ export default function CommunityView({ communityId }: { communityId: string }) 
           }, (error) => {
             handleFirestoreError(error, OperationType.GET, `notifications (recipient: ${auth.currentUser?.uid}, community: ${communityId})`);
           });
-          setMentionsUnsubscribe(() => unsub);
+          unsubscribeMentions = unsub;
         }
       }
     }, (error) => {
@@ -273,9 +296,27 @@ export default function CommunityView({ communityId }: { communityId: string }) 
       unsubscribeMembers();
       if (unsubscribeMyMember) unsubscribeMyMember();
       if (unsubscribeStats) unsubscribeStats();
-      if (mentionsUnsubscribe) mentionsUnsubscribe();
+      if (unsubscribeMentions) unsubscribeMentions();
     };
-  }, [communityId, mentionsUnsubscribe]);
+  }, [communityId]);
+
+  // On phones, members land on the channel list; visitors land on the join panel.
+  useEffect(() => { setMobilePane(isMember ? 'nav' : 'content'); }, [isMember]);
+
+  // Refresh member profiles every couple of minutes so "active" dots stay accurate.
+  const memberIds = members.map(m => m.id).join(',');
+  useEffect(() => {
+    if (!memberIds) return;
+    const t = setInterval(async () => {
+      const ids = memberIds.split(',').slice(0, 100);
+      await Promise.all(ids.map(async id => {
+        const snap = await getDoc(doc(db, 'users', id)).catch(() => null);
+        if (snap?.exists()) profileCache.current.set(id, snap.data());
+      }));
+      setMembers(prev => prev.map(m => ({ ...m, user: profileCache.current.get(m.id) ?? m.user })));
+    }, 2 * 60_000);
+    return () => clearInterval(t);
+  }, [memberIds]);
 
   useEffect(() => {
     if (!communityId || !activeChannelId || activeTab !== 'channels') {
@@ -548,38 +589,27 @@ export default function CommunityView({ communityId }: { communityId: string }) 
     if (!auth.currentUser || !communityId || !community) return;
 
     try {
-      const memberRef = doc(db, 'communities', communityId, 'members', auth.currentUser.uid);
-      const communityRef = doc(db, 'communities', communityId);
-
       if (isMember) {
         if (isOwner) {
-          toast.error("Owners cannot leave. Please transfer ownership first.");
+          toast.error("Owners can't leave. Transfer ownership first.");
           return;
         }
-        await deleteDoc(memberRef);
-        await updateDoc(communityRef, { memberCount: increment(-1) });
-        toast.success(`Left ${community.name}`);
+        await leaveCommunity(auth.currentUser.uid, communityId);
+        toast.success(`You left ${community.name}`);
         setSearchParams({ view: 'communities' });
-      } else {
-        // Check for paid entry or private/approval status
-        const control = community.membershipControl;
-        const isPrivateFlag = community.isPrivate || (control?.accessType && control?.accessType !== 'public') || control?.approvalRequired;
-        const isPaid = community.isPaid && community.price > 0;
-        const hasOnboarding = control?.onboardingQuestions?.length > 0;
-
-        if (isPrivateFlag || isPaid || hasOnboarding) {
-          setShowDetailsModal(true);
-          return;
-        }
-
-        await setDoc(memberRef, {
-          userId: auth.currentUser.uid,
-          role: 'member',
-          joinedAt: serverTimestamp()
-        });
-        await updateDoc(communityRef, { memberCount: increment(1) });
-        toast.success(`Joined ${community.name}`);
+        return;
       }
+
+      // Private, paid or question-gated communities go through the join dialog.
+      const control = community.membershipControl;
+      const isPrivateFlag = community.isPrivate || (control?.accessType && control?.accessType !== 'public') || control?.approvalRequired;
+      if (isPrivateFlag || feeOf(community) || control?.onboardingQuestions?.length > 0) {
+        setShowDetailsModal(true);
+        return;
+      }
+      await joinCommunity(auth.currentUser.uid, auth.currentUser.displayName, community);
+      queryClient.invalidateQueries({ queryKey: queryKeys.community(communityId) });
+      toast.success(`Welcome to ${community.name}`);
     } catch (error) {
       handleFirestoreError(error, isMember ? OperationType.DELETE : OperationType.WRITE, `communities/${communityId}/members/${auth.currentUser?.uid}`);
     }
@@ -611,40 +641,6 @@ export default function CommunityView({ communityId }: { communityId: string }) 
       handleFirestoreError(error, OperationType.UPDATE, `communities/${communityId}`);
     } finally {
       setIsSavingSettings(false);
-    }
-  };
-
-  const updateMemberRole = async (userId: string, newRole: string) => {
-    if (!isAdmin || !communityId) return;
-    try {
-      const memberRef = doc(db, 'communities', communityId, 'members', userId);
-      await updateDoc(memberRef, { role: newRole });
-      setActiveMemberMenu(null);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `communities/${communityId}/members/${userId}`);
-    }
-  };
-
-  const kickMember = (userId: string) => {
-    setMemberToKickId(userId);
-    setShowKickConfirm(true);
-    setActiveMemberMenu(null);
-  };
-
-  const confirmKickMember = async () => {
-    if (!isAdmin || !communityId || !memberToKickId) return;
-    setKicking(true);
-    try {
-      const memberRef = doc(db, 'communities', communityId, 'members', memberToKickId);
-      const communityRef = doc(db, 'communities', communityId);
-      await deleteDoc(memberRef);
-      await updateDoc(communityRef, { memberCount: increment(-1) });
-      setShowKickConfirm(false);
-      setMemberToKickId(null);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `communities/${communityId}/members/${memberToKickId}`);
-    } finally {
-      setKicking(false);
     }
   };
 
@@ -692,6 +688,13 @@ export default function CommunityView({ communityId }: { communityId: string }) 
     return groups;
   }, [members]);
 
+  const needsApproval = !!(community?.isPrivate || community?.membershipControl?.approvalRequired ||
+    (community?.membershipControl?.accessType && community.membershipControl.accessType !== 'public'));
+  const isOnline = (m: any) => presenceLabel(m.user?.lastActiveAt, now) === 'Active now';
+  const onlineCount = members.filter(isOnline).length;
+  // The stored count can drift; trust the loaded list once we have it.
+  const memberTotal = members.length || community?.memberCount || 0;
+
   if (communityLoading || channelsLoading) {
     return (
       <div className="flex items-center justify-center h-96">
@@ -715,11 +718,6 @@ export default function CommunityView({ communityId }: { communityId: string }) 
   }
 
   const activeChannel = channels.find(c => c.id === activeChannelId);
-  const filteredMembers = members.filter(m => 
-    m.user?.username?.toLowerCase().includes(memberSearch.toLowerCase()) ||
-    m.role.toLowerCase().includes(memberSearch.toLowerCase())
-  );
-
   return (
     <div className="h-full flex flex-col">
       <CreateChannelModal 
@@ -747,31 +745,6 @@ export default function CommunityView({ communityId }: { communityId: string }) 
       )}
 
       <ConfirmModal 
-        isOpen={showKickConfirm}
-        onClose={() => setShowKickConfirm(false)}
-        onConfirm={confirmKickMember}
-        title="Remove Member"
-        message="Are you sure you want to remove this member from the community?"
-        confirmText="Remove Member"
-        loading={kicking}
-      />
-
-      <CommunityDetailsModal 
-        isOpen={showDetailsModal}
-        onClose={() => setShowDetailsModal(false)}
-        communityId={communityId}
-      />
-
-      {showInviteModal && community && (
-        <CommunityInviteModal
-          isOpen={showInviteModal}
-          onClose={() => setShowInviteModal(false)}
-          communityId={community.id}
-          communityName={community.name}
-        />
-      )}
-
-      <ConfirmModal 
         isOpen={showLeaveConfirm}
         onClose={() => setShowLeaveConfirm(false)}
         onConfirm={handleJoinLeave}
@@ -781,9 +754,9 @@ export default function CommunityView({ communityId }: { communityId: string }) 
       />
 
       {/* Discord-style Layout */}
-      <div className="flex-1 flex overflow-hidden rounded-[32px] border border-foreground/10 bg-background/50 backdrop-blur-md">
+      <div className="flex-1 flex overflow-hidden bg-background text-black dark:text-white">
         {/* Left Sidebar: Channels */}
-        <div className="w-64 flex flex-col border-r border-foreground/10 bg-foreground/5">
+        <div className={`${mobilePane === 'nav' ? 'flex' : 'hidden'} md:flex w-full md:w-64 shrink-0 flex-col border-r border-foreground/10 bg-foreground/[0.03]`}>
           {/* Community Header in Sidebar */}
           <div className="relative">
             <div 
@@ -791,27 +764,23 @@ export default function CommunityView({ communityId }: { communityId: string }) 
               className="p-4 border-b border-foreground/10 flex items-center justify-between group cursor-pointer hover:bg-foreground/5 transition-all"
             >
               <div className="flex items-center gap-3 min-w-0">
-                <div className="w-8 h-8 rounded-lg overflow-hidden flex-shrink-0 border border-foreground/10">
-                  <img 
-                    src={(community.image && community.image.trim() !== '') ? community.image : `https://picsum.photos/seed/${community.id}/100/100`} 
-                    alt="" 
-                    className="w-full h-full object-cover" 
-                  />
-                </div>
+                <CommunityIcon community={community} size={36} />
                 <div className="min-w-0">
                   <h2 className="font-bold text-sm truncate">{community.name}</h2>
-                  <p className="text-[10px] text-foreground/50 truncate">{community.memberCount} members</p>
+                  <p className="text-xs text-foreground/50 truncate">{memberTotal} {memberTotal === 1 ? 'member' : 'members'}{onlineCount > 0 && ` · ${onlineCount} online`}</p>
                 </div>
               </div>
               {isMember ? (
                 <MoreVertical size={16} className="text-foreground/40 group-hover:text-foreground transition-all" />
               ) : (
-                <button 
-                  onClick={handleJoinLeave}
-                  className="p-1.5 bg-primary text-primary-foreground rounded-lg shadow-[0_0_10px_rgba(139,92,246,0.5)] hover:scale-110 transition-all"
-                >
-                  <UserPlus size={14} />
-                </button>
+                auth.currentUser && (
+                  <button
+                    onClick={e => { e.stopPropagation(); handleJoinLeave(); }}
+                    className="shrink-0 px-3 py-1.5 bg-primary text-white rounded-full text-xs font-semibold hover:bg-primary/90 transition-colors"
+                  >
+                    Join
+                  </button>
+                )
               )}
             </div>
 
@@ -877,7 +846,7 @@ export default function CommunityView({ communityId }: { communityId: string }) 
               ].map(tab => (
                 <button
                   key={tab.id}
-                  onClick={() => setActiveTab(tab.id as any)}
+                  onClick={() => { setActiveTab(tab.id as any); if (tab.id !== 'channels') setMobilePane('content'); }}
                   className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-medium transition-all ${
                     activeTab === tab.id ? 'bg-primary/10 text-primary' : 'text-foreground/50 hover:bg-foreground/5 hover:text-foreground'
                   }`}
@@ -887,13 +856,21 @@ export default function CommunityView({ communityId }: { communityId: string }) 
               ))}
             </div>
 
-            {activeTab === 'channels' && (
+            {activeTab === 'channels' && !isMember && (
+              <p className="pt-4 border-t border-foreground/10 px-3 text-xs text-foreground/50">Channels appear here once you join.</p>
+            )}
+            {activeTab === 'channels' && isMember && (
               <div className="pt-4 border-t border-foreground/10">
                 <ChannelSidebar 
                   communityId={communityId}
                   channels={channels}
                   activeChannelId={activeChannelId}
-                  onChannelSelect={setActiveChannelId}
+                  onChannelSelect={(id: string) => {
+                    setActiveChannelId(id);
+                    setMobilePane('content');
+                    // Keep the open channel in the URL so links, refresh and the voice bar know where you are.
+                    setSearchParams(prev => { const p = new URLSearchParams(prev); p.set('channelId', id); return p; }, { replace: true });
+                  }}
                   isAdmin={isAdmin}
                   myPermissions={myPermissions}
                   myCustomRoles={myCustomRoles}
@@ -970,55 +947,59 @@ export default function CommunityView({ communityId }: { communityId: string }) 
             )}
           </div>
 
-          {/* User Profile in Sidebar Footer */}
-          <div className="p-3 bg-background/40 border-t border-foreground/5 flex items-center justify-between">
-            <div className="flex items-center gap-2 min-w-0">
-              <div className="w-8 h-8 rounded-full bg-foreground/10 overflow-hidden flex-shrink-0">
-                <img 
-                  src={
-                    (currentUserProfile?.profileImage && currentUserProfile.profileImage.trim() !== '') ? currentUserProfile.profileImage : 
-                    (auth.currentUser?.photoURL && auth.currentUser.photoURL.trim() !== '') ? auth.currentUser.photoURL : 
-                    `https://api.dicebear.com/7.x/avataaars/svg?seed=${auth.currentUser?.uid}`
-                  } 
-                  alt="" 
-                  referrerPolicy="no-referrer" 
-                />
-              </div>
-              <div className="min-w-0">
-                <p className="text-xs font-bold truncate">{currentUserProfile?.displayName || auth.currentUser?.displayName || 'User'}</p>
-                <p className="text-[10px] text-foreground/40 truncate">@{currentUserProfile?.username || auth.currentUser?.email?.split('@')[0] || 'user'}</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-1">
-              <button className="p-1.5 hover:bg-foreground/10 rounded-lg text-foreground/40 hover:text-foreground transition-all">
-                <Settings size={14} />
-              </button>
-            </div>
-          </div>
+          {/* You */}
+          {auth.currentUser && (
+            <Link to={`/creators/${auth.currentUser.uid}`} className="p-3 border-t border-foreground/10 flex items-center gap-2.5 hover:bg-foreground/5 transition-colors">
+              <Avatar src={currentUserProfile?.profileImage || auth.currentUser.photoURL} seed={auth.currentUser.uid} size={32} />
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-semibold truncate">{currentUserProfile?.displayName || auth.currentUser.displayName || 'You'}</span>
+                <span className="block text-xs text-foreground/50 truncate">
+                  {isOwner ? 'Owner' : isAdmin ? 'Admin' : isMember ? 'Member' : 'Not a member yet'}
+                </span>
+              </span>
+            </Link>
+          )}
         </div>
 
         {/* Middle Content: Chat or Tab Content */}
-        <div className="flex-1 flex flex-col min-w-0 bg-background/5">
-          <div className="h-16 px-6 border-b border-foreground/5 flex items-center justify-between bg-background/5 backdrop-blur-md shrink-0">
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center text-primary">
-                {activeTab === 'channels' ? <Hash size={18} /> : (
+        <div className={`${mobilePane === 'content' ? 'flex' : 'hidden'} md:flex flex-1 flex-col min-w-0`}>
+          <div className="h-14 px-3 sm:px-5 border-b border-foreground/10 flex items-center justify-between gap-2 shrink-0">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <button onClick={() => setMobilePane('nav')} aria-label="Back to channels" className="md:hidden p-2 -ml-1 rounded-full hover:bg-foreground/10">
+                <ArrowLeft size={20} />
+              </button>
+              <div className="hidden sm:flex w-8 h-8 shrink-0 rounded-lg bg-primary/10 items-center justify-center text-primary">
+                {activeTab === 'channels' ? (() => { const Icon = channelTypeInfo(activeChannel?.type).icon; return <Icon size={18} />; })() : (
                   activeTab === 'leaderboard' ? <Trophy size={18} /> : (
                     activeTab === 'analytics' ? <BarChart3 size={18} /> : <Info size={18} />
                   )
                 )}
               </div>
-              <div>
-                <h2 className="font-black text-xl tracking-tight">
-                  {activeTab === 'channels' ? (activeChannel?.name || 'Select Channel') : (activeTab.charAt(0).toUpperCase() + activeTab.slice(1))}
+              <div className="min-w-0">
+              <div className="min-w-0">
+                <h2 className="font-bold text-base sm:text-lg leading-tight truncate">
+                  {activeTab === 'channels' ? (isMember ? (activeChannel?.name || 'Channels') : community.name) : (activeTab.charAt(0).toUpperCase() + activeTab.slice(1))}
                 </h2>
                 {activeTab === 'channels' && activeChannel?.description && (
-                  <p className="text-xs text-foreground/40 truncate max-w-[400px] font-medium">{activeChannel.description}</p>
+                  <p className="text-xs text-foreground/50 truncate max-w-[400px]">{activeChannel.description}</p>
                 )}
+              </div>
               </div>
             </div>
 
             <div className="flex items-center gap-2">
+              {isMember && activeTab !== 'members' && activeTab !== 'settings' && (
+                <button
+                  onClick={() => setShowMemberPanel(o => !o)}
+                  aria-pressed={showMemberPanel}
+                  aria-label={showMemberPanel ? 'Hide members' : 'Show members'}
+                  title={showMemberPanel ? 'Hide members' : 'Show members'}
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-colors ${showMemberPanel ? 'bg-primary/10 text-primary' : 'text-foreground/50 hover:bg-foreground/5 hover:text-foreground'}`}
+                >
+                  <Users size={17} />
+                  <span>{memberTotal}</span>
+                </button>
+              )}
               {(isAdmin || myPermissions.includes('invite_users')) && (
                 <button 
                   onClick={() => setShowInviteModal(true)}
@@ -1163,7 +1144,15 @@ export default function CommunityView({ communityId }: { communityId: string }) 
           )}
 
           {activeTab === 'channels' ? (
-            activeChannel ? (
+            !isMember ? (
+              <JoinPanel
+                community={community}
+                signedIn={!!auth.currentUser}
+                onJoin={handleJoinLeave}
+                onAbout={() => setActiveTab('about')}
+                members={members}
+              />
+            ) : activeChannel ? (
               activeChannel.type === 'voice' ? (
                 <VoiceChannelView 
                   communityId={communityId}
@@ -1188,6 +1177,8 @@ export default function CommunityView({ communityId }: { communityId: string }) 
                   isMember={isMember} 
                   isAdmin={isAdmin}
                   myPermissions={myPermissions}
+                  myCustomRoles={myCustomRoles}
+                  timeoutUntil={myTimeoutUntil}
                   communityMembers={members}
                   roles={roles}
                   onOpenSettings={() => {
@@ -1197,325 +1188,30 @@ export default function CommunityView({ communityId }: { communityId: string }) 
                 />
               )
             ) : (
-              <div className="flex-1 flex flex-col items-center justify-center p-20 text-center text-foreground/30">
-                <Hash size={64} className="mb-4 opacity-10 text-foreground" />
-                <p>Select a channel to start chatting</p>
+              <div className="flex-1 flex flex-col items-center justify-center p-10 text-center text-foreground/50">
+                <Hash size={40} className="mb-3 opacity-30" />
+                <p>Pick a channel to start chatting.</p>
               </div>
             )
           ) : (
             <div className="flex-1 overflow-y-auto p-4">
-              {activeTab === 'events' && <CommunityEvents communityId={communityId} isAdmin={isAdmin} isMember={isMember} />}
+              {activeTab === 'events' && <CommunityEvents communityId={communityId} isAdmin={isAdmin} isMember={isMember} canCreate={membership.can('create_event')} />}
               {activeTab === 'leaderboard' && <CommunityLeaderboard communityId={communityId} />}
               {activeTab === 'analytics' && <CommunityAnalytics communityId={communityId} />}
               {activeTab === 'about' && (
-                <div className="max-w-5xl mx-auto space-y-6">
-                  <div className="relative h-64 rounded-3xl overflow-hidden border border-foreground/10 group">
-                  <img src={(community.backdrop && community.backdrop.trim() !== '') ? community.backdrop : `https://picsum.photos/seed/${community.id}_bg/1200/400`} alt="" className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" />
-                    <div className="absolute inset-0 bg-gradient-to-t from-background via-background/20 to-transparent" />
-                    <div className="absolute bottom-8 left-8 flex items-end gap-6">
-                      <div className="w-24 h-24 rounded-2xl overflow-hidden border-4 border-background shadow-2xl shrink-0">
-                          <img src={(community.image && community.image.trim() !== '') ? community.image : `https://picsum.photos/seed/${community.id}/200/200`} alt="" className="w-full h-full object-cover" />
-                      </div>
-                      <div className="mb-1 space-y-1">
-                        <div className="flex items-center gap-3">
-                          <h1 className="text-3xl font-black tracking-tight">{community.name}</h1>
-                          <div className="px-2 py-1 bg-primary text-primary-foreground text-[10px] font-black uppercase rounded-lg shadow-lg">
-                            {community.category || 'General'}
-                          </div>
-                        </div>
-                        <p className="text-sm text-foreground/60 flex items-center gap-2">
-                          <Users size={14} className="text-primary" />
-                          <span className="font-bold">{community.memberCount || 0}</span> members connected
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                  
-                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                    <div className="lg:col-span-2 space-y-6">
-                      <div className="glass rounded-[32px] p-8 space-y-6 border border-foreground/5 relative overflow-hidden">
-                        <div className="absolute top-0 right-0 p-8 opacity-5">
-                          <Info size={120} />
-                        </div>
-                        <div>
-                          <h3 className="text-[10px] font-black text-primary uppercase tracking-[0.2em] mb-4">Mission & Description</h3>
-                          <p className="text-lg text-foreground/70 leading-relaxed font-medium">{community.description || 'No description provided.'}</p>
-                        </div>
-
-                        <div className="pt-6 border-t border-foreground/5 grid grid-cols-2 md:grid-cols-3 gap-6">
-                          <div>
-                            <p className="text-[10px] font-black text-foreground/30 uppercase tracking-widest mb-1">Created</p>
-                            <p className="text-sm font-bold text-foreground/80">{formatDate(community.createdAt, 'MMMM yyyy')}</p>
-                          </div>
-                          <div>
-                            <p className="text-[10px] font-black text-foreground/30 uppercase tracking-widest mb-1">Status</p>
-                            <p className="text-sm font-bold text-green-500 flex items-center gap-1.5">
-                              <span className="w-1.5 h-1.5 rounded-full bg-green-500" /> Active
-                            </p>
-                          </div>
-                          <div>
-                            <p className="text-[10px] font-black text-foreground/30 uppercase tracking-widest mb-1">Visibility</p>
-                            <p className="text-sm font-bold text-foreground/80 flex items-center gap-1.5">
-                              {community.isPrivate ? <Lock size={14} /> : <Globe size={14} />}
-                              {community.isPrivate ? 'Private' : 'Public'}
-                            </p>
-                          </div>
-                        </div>
-
-                        {community.rules?.length > 0 && (
-                          <div className="pt-8 border-t border-foreground/5">
-                            <h3 className="text-[10px] font-black text-primary uppercase tracking-[0.2em] mb-6">Community Guidelines</h3>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                              {community.rules.map((rule: string, i: number) => (
-                                <div key={i} className="flex gap-4 p-5 rounded-2xl bg-foreground/5 border border-foreground/5 hover:border-primary/20 transition-all group">
-                                  <div className="w-8 h-8 rounded-xl bg-primary/10 flex items-center justify-center text-primary font-black shrink-0 group-hover:scale-110 transition-transform">
-                                    {i + 1}
-                                  </div>
-                                  <p className="text-sm text-foreground/60 leading-relaxed font-medium">{rule}</p>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="space-y-6">
-                      {/* Join Link Card */}
-                      <div className="glass rounded-[32px] p-6 border border-primary/20 bg-primary/5 space-y-4 relative overflow-hidden">
-                        <div className="absolute top-0 right-0 -mr-8 -mt-8 w-24 h-24 bg-primary opacity-10 rounded-full blur-3xl" />
-                        <h3 className="text-xs font-black text-primary uppercase tracking-widest flex items-center gap-2">
-                          <LinkIcon size={14} /> Share Community
-                        </h3>
-                        <p className="text-[11px] text-foreground/50 leading-relaxed font-medium">Use this permanent link to invite others to join the community.</p>
-                        <div className="relative group">
-                          <input 
-                            readOnly 
-                            value={`${window.location.origin}/community/${communityId}`}
-                            className="w-full bg-background/50 border border-foreground/10 rounded-xl px-4 py-3 text-xs font-mono text-foreground/60 pr-12 focus:border-primary transition-all cursor-default"
-                          />
-                          <button 
-                            onClick={copyGeneralLink}
-                            className={`absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-lg transition-all ${copiedLink ? 'bg-green-500 text-white' : 'hover:bg-primary/20 text-primary'}`}
-                          >
-                            {copiedLink ? <Check size={14} /> : <Copy size={14} />}
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Owner Card */}
-                      {creator && (
-                        <div className="glass rounded-[32px] p-6 border border-foreground/5 space-y-4">
-                          <h3 className="text-xs font-black text-foreground/30 uppercase tracking-widest">Community Owner</h3>
-                          <Link to={`/creators/${creator.id}`} className="flex items-center gap-4 p-2 rounded-2xl hover:bg-foreground/5 transition-all group">
-                            <div className="w-12 h-12 rounded-full overflow-hidden border border-foreground/10 group-hover:border-primary transition-colors">
-                          <img 
-                            src={
-                              (creator.user?.profileImage && creator.user.profileImage.trim() !== '') ? creator.user.profileImage : 
-                              (creator.user?.photoURL && creator.user.photoURL.trim() !== '') ? creator.user.photoURL : 
-                              `https://api.dicebear.com/7.x/avataaars/svg?seed=${creator.id}`
-                            } 
-                            alt="" 
-                            className="w-full h-full object-cover" 
-                          />
-                        </div>
-                            <div className="min-w-0">
-                                <p className="text-sm font-bold text-foreground group-hover:text-primary transition-colors truncate flex items-center gap-1">
-                                  <span>{creator.user?.displayName || 'Anonymous Creator'}</span>
-                                  <VerifiedBadge verified={creator.user?.verified} />
-                                </p>
-                                <p className="text-xs text-foreground/40 font-medium">@{creator.user?.username || 'creator'}</p>
-                            </div>
-                          </Link>
-                        </div>
-                      )}
-
-                      {/* Social Links Card */}
-                      <div className="glass rounded-[32px] p-6 border border-foreground/5 space-y-4">
-                        <h3 className="text-xs font-black text-foreground/30 uppercase tracking-widest">Connect & Links</h3>
-                        <div className="space-y-2">
-                          {community.website && (
-                            <a href={community.website} target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 px-4 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-all group">
-                              <Globe size={16} className="text-primary" />
-                              <span className="text-xs font-bold flex-1">Website</span>
-                              <ExternalLink size={14} className="text-foreground/20 group-hover:text-primary" />
-                            </a>
-                          )}
-                          {community.socials?.twitter && (
-                            <a href={`https://twitter.com/${community.socials.twitter}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 px-4 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-all group">
-                              <Twitter size={16} className="text-sky-400" />
-                              <span className="text-xs font-bold flex-1">Twitter</span>
-                              <ExternalLink size={14} className="text-foreground/20 group-hover:text-sky-400" />
-                            </a>
-                          )}
-                          {community.socials?.github && (
-                            <a href={`https://github.com/${community.socials.github}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 px-4 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-all group">
-                              <Github size={16} className="text-foreground" />
-                              <span className="text-xs font-bold flex-1">GitHub</span>
-                              <ExternalLink size={14} className="text-foreground/20 group-hover:text-foreground" />
-                            </a>
-                          )}
-                          {community.socials?.linkedin && (
-                            <a href={`https://linkedin.com/in/${community.socials.linkedin}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 px-4 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-all group">
-                              <Linkedin size={16} className="text-blue-600" />
-                              <span className="text-xs font-bold flex-1">LinkedIn</span>
-                              <ExternalLink size={14} className="text-foreground/20 group-hover:text-blue-600" />
-                            </a>
-                          )}
-                          {community.socials?.discord && (
-                            <a href={community.socials.discord} target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 px-4 py-3 rounded-xl bg-foreground/5 hover:bg-foreground/10 transition-all group">
-                                <Users size={16} className="text-indigo-500" />
-                                <span className="text-xs font-bold flex-1">Discord</span>
-                                <ExternalLink size={14} className="text-foreground/20 group-hover:text-indigo-500" />
-                            </a>
-                          )}
-                          {!community.website && !community.socials?.twitter && !community.socials?.github && !community.socials?.linkedin && !community.socials?.discord && (
-                            <p className="text-[10px] text-foreground/30 text-center py-4 font-black uppercase tracking-widest italic">No external links linked</p>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                <CommunityAbout
+                  community={community}
+                  communityId={communityId}
+                  members={members}
+                  needsApproval={needsApproval}
+                  onlineCount={onlineCount}
+                  copied={copiedLink}
+                  onCopy={copyGeneralLink}
+                  onEdit={membership.isAdmin ? () => { setActiveTab('settings'); setSearchParams({ view: 'community', id: communityId, settings: 'branding' }); } : undefined}
+                />
               )}
               {activeTab === 'members' && (
-                <div className="space-y-6">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h2 className="text-2xl font-bold">Members</h2>
-                      <p className="text-sm text-foreground/40">{community.memberCount} total members connected</p>
-                    </div>
-                    <div className="relative">
-                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-foreground/30" size={18} />
-                      <input 
-                        type="text"
-                        placeholder="Search members..."
-                        value={memberSearch}
-                        onChange={(e) => setMemberSearch(e.target.value)}
-                        className="bg-foreground/5 border border-foreground/10 rounded-xl pl-10 pr-4 py-2 text-sm focus:border-primary outline-none transition-all w-64 text-foreground mb-0 placeholder:text-foreground/20"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="glass rounded-[2rem] overflow-hidden border border-foreground/5 shrink-0">
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-left border-collapse">
-                        <thead>
-                          <tr className="border-b border-foreground/5">
-                            <th className="px-6 py-4 text-[10px] font-black uppercase tracking-[0.2em] text-foreground/30">User</th>
-                            <th className="px-6 py-4 text-[10px] font-black uppercase tracking-[0.2em] text-foreground/30">Roles</th>
-                            <th className="px-6 py-4 text-[10px] font-black uppercase tracking-[0.2em] text-foreground/30">Joined</th>
-                            <th className="px-6 py-4 text-[10px] font-black uppercase tracking-[0.2em] text-foreground/30 text-right">Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-foreground/5">
-                          {filteredMembers.map((member) => (
-                            <tr key={member.id} className="group hover:bg-foreground/2 transition-colors">
-                              <td className="px-6 py-4">
-                                <div className="flex items-center gap-3">
-                                  <UserHoverCard userId={member.id}>
-                                    <div className="w-10 h-10 rounded-full bg-foreground/10 overflow-hidden cursor-pointer border border-foreground/5 hover:border-primary/50 transition-all">
-                                        <img 
-                                          src={
-                                          (member.user?.profileImage && member.user.profileImage.trim() !== '') ? member.user.profileImage : 
-                                          (member.user?.photoURL && member.user.photoURL.trim() !== '') ? member.user.photoURL : 
-                                          `https://api.dicebear.com/7.x/avataaars/svg?seed=${member.id}`
-                                        } 
-                                        alt="" 
-                                        referrerPolicy="no-referrer" 
-                                        className="w-full h-full object-cover"
-                                      />
-                                    </div>
-                                  </UserHoverCard>
-                                  <div>
-                                    <p className="text-sm font-bold text-foreground flex items-center gap-1">
-                                      <span>{member.user?.displayName || member.user?.username || 'Anonymous'}</span>
-                                      <VerifiedBadge verified={member.user?.verified} />
-                                    </p>
-                                    <p className="text-[10px] text-foreground/40 font-medium">@{member.user?.username}</p>
-                                  </div>
-                                </div>
-                              </td>
-                              <td className="px-6 py-4">
-                                <div className="flex flex-wrap gap-1.5">
-                                  {/* Global Role */}
-                                  <div className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase border ${
-                                    member.role === 'owner' ? 'bg-yellow-500/10 text-yellow-500 border-yellow-500/20' :
-                                    member.role === 'admin' ? 'bg-red-400/10 text-red-400 border-red-400/20' :
-                                    member.role === 'moderator' ? 'bg-blue-400/10 text-blue-400 border-blue-400/20' :
-                                    'bg-foreground/10 text-foreground/40 border-foreground/20'
-                                  }`}>
-                                    {member.role}
-                                  </div>
-                                  
-                                  {/* Custom Roles */}
-                                  {(member.customRoles || []).map((rid: string) => {
-                                    const r = roles.find(role => role.id === rid);
-                                    if (!r) return null;
-                                    return (
-                                      <div key={rid} className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase border" style={{ backgroundColor: `${r.color}15`, color: r.color, borderColor: `${r.color}30` }}>{r.name}</div>
-                                    );
-                                  })}
-                                </div>
-                              </td>
-                              <td className="px-6 py-4">
-                                <p className="text-xs text-foreground/60 font-medium">
-                                  {formatDate(member.joinedAt, 'MMM d, yyyy')}
-                                </p>
-                              </td>
-                              <td className="px-6 py-4 text-right">
-                                {isAdmin && member.id !== auth.currentUser?.uid && (
-                                  <div className="relative inline-block text-left">
-                                    <button 
-                                      onClick={() => setActiveMemberMenu(activeMemberMenu === member.id ? null : member.id)}
-                                      className="p-2 hover:bg-foreground/5 rounded-xl text-foreground/40 hover:text-foreground transition-all"
-                                    >
-                                      <MoreVertical size={16} />
-                                    </button>
-                                    <AnimatePresence>
-                                      {activeMemberMenu === member.id && (
-                                        <motion.div
-                                          initial={{ opacity: 0, scale: 0.95, y: 10 }}
-                                          animate={{ opacity: 1, scale: 1, y: 0 }}
-                                          exit={{ opacity: 0, scale: 0.95, y: 10 }}
-                                          className="absolute right-0 top-full mt-2 w-48 bg-background rounded-xl border border-foreground/10 shadow-2xl z-50 overflow-hidden"
-                                        >
-                                          {isOwner && (
-                                            <>
-                                              <button 
-                                                onClick={() => updateMemberRole(member.id, 'admin')}
-                                                className="w-full flex items-center gap-2 px-4 py-3 text-xs text-foreground/70 hover:bg-foreground/5 transition-colors text-left"
-                                              >
-                                                Make Admin
-                                              </button>
-                                              <button 
-                                                onClick={() => updateMemberRole(member.id, 'moderator')}
-                                                className="w-full flex items-center gap-2 px-4 py-3 text-xs text-foreground/70 hover:bg-foreground/5 transition-colors text-left"
-                                              >
-                                                Make Moderator
-                                              </button>
-                                              <div className="h-[1px] bg-foreground/5" />
-                                            </>
-                                          )}
-                                          <button 
-                                            onClick={() => kickMember(member.id)}
-                                            className="w-full flex items-center gap-2 px-4 py-3 text-xs text-red-400 hover:bg-red-400/10 transition-colors text-left"
-                                          >
-                                            Kick Member
-                                          </button>
-                                        </motion.div>
-                                      )}
-                                    </AnimatePresence>
-                                  </div>
-                                )}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                </div>
+                <CommunityMembers communityId={communityId} community={community} members={members} roles={roles} now={now} />
               )}
               {activeTab === 'settings' && (
                 <CommunitySettingsCenter 
@@ -1527,171 +1223,57 @@ export default function CommunityView({ communityId }: { communityId: string }) 
           )}
         </div>
 
-        {/* Right Sidebar: Members (Discord-style) */}
-        {activeTab === 'channels' && (
-          <div className="w-60 flex flex-col border-l border-foreground/5 bg-background/5 overflow-y-auto p-4 space-y-6">
-            {/* Admin Roles */}
-            {['owner', 'admin', 'moderator'].map(role => {
-              const roleMembers = groupedMembers[role] || [];
-              if (roleMembers.length === 0) return null;
-
-              return (
-                <div key={role} className="space-y-2">
-                  <h3 className="text-[10px] font-bold uppercase tracking-widest text-foreground/30 px-2">
-                    {roleLabels[role]} — {roleMembers.length}
-                  </h3>
-                  <div className="space-y-1">
-                    {roleMembers.map(member => (
-                      <UserHoverCard key={member.id} userId={member.id}>
-                        <div className="flex items-center gap-3 px-2 py-1.5 rounded-lg hover:bg-foreground/5 transition-all cursor-pointer group">
-                          <div className="relative">
-                            <div className="w-8 h-8 rounded-full bg-foreground/10 overflow-hidden">
-                              <img 
-                                src={
-                                  (member.user?.profileImage && member.user.profileImage.trim() !== '') ? member.user.profileImage :
-                                  (member.user?.photoURL && member.user.photoURL.trim() !== '') ? member.user.photoURL : 
-                                  `https://api.dicebear.com/7.x/avataaars/svg?seed=${member.id}`
-                                } 
-                                alt="" 
-                              />
-                            </div>
-                            <div className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-green-500 border-2 border-background rounded-full" />
-                          </div>
-                          <div className="min-w-0">
-                            <div className="flex flex-col">
-                              <p className={`text-sm font-medium truncate ${
-                                role === 'owner' ? 'text-yellow-500' : 
-                                role === 'admin' ? 'text-red-400' : 
-                                'text-foreground/70 group-hover:text-foreground'
-                              }`} style={(() => {
-                                 const memberRoles = (member.customRoles || []).map((rid: string) => roles.find(r => r.id === rid)).filter(Boolean);
-                                 if (memberRoles.length > 0) {
-                                   return { color: memberRoles[0].color };
-                                 }
-                                 return {};
-                              })()}>
-                                {member.user?.username || 'Anonymous'}
-                              </p>
-                              <div className="flex flex-wrap gap-1 mt-0.5">
-                                {(member.customRoles || []).map((rid: string) => {
-                                  const r = roles.find(role => role.id === rid);
-                                  if (!r) return null;
-                                  return (
-                                    <div key={rid} className="px-1 py-0.5 rounded-[4px] text-[7px] font-black uppercase" style={{ backgroundColor: `${r.color}15`, color: r.color }}>{r.name}</div>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                            {member.user?.status && (
-                              <p className="text-[10px] text-foreground/40 truncate mt-1">{member.user.status}</p>
-                            )}
-                          </div>
-                        </div>
-                      </UserHoverCard>
-                    ))}
+        {/* Right: members, online first. Closed until opened from the header. */}
+        {showMemberPanel && isMember && activeTab !== 'members' && activeTab !== 'settings' && (() => {
+          const q = panelSearch.trim().toLowerCase();
+          const matches = (m: any) => !q || `${m.user?.displayName || ''} ${m.user?.username || ''}`.toLowerCase().includes(q);
+          return (
+            <>
+              <div className="xl:hidden fixed inset-0 z-40 bg-black/40" onClick={() => setShowMemberPanel(false)} />
+              <aside aria-label="Members" className="fixed xl:static inset-y-0 right-0 z-50 xl:z-auto w-72 xl:w-64 max-w-[85vw] shrink-0 flex flex-col border-l border-foreground/10 bg-background shadow-2xl xl:shadow-none">
+                <div className="h-14 px-4 shrink-0 flex items-center justify-between border-b border-foreground/10">
+                  <h2 className="text-sm font-semibold">Members <span className="font-normal text-foreground/50">· {onlineCount} online</span></h2>
+                  <button onClick={() => setShowMemberPanel(false)} aria-label="Close members" className="p-1.5 -mr-1.5 rounded-lg text-foreground/50 hover:bg-foreground/10"><X size={16} /></button>
+                </div>
+                <div className="p-3 shrink-0">
+                  <div className="relative">
+                    <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-foreground/40" />
+                    <input value={panelSearch} onChange={e => setPanelSearch(e.target.value)} placeholder="Search members" aria-label="Search members"
+                      className="w-full pl-8 pr-3 py-1.5 rounded-lg bg-foreground/5 text-sm outline-none focus:ring-1 focus:ring-primary/40 placeholder:text-foreground/35" />
                   </div>
                 </div>
-              );
-            })}
-
-            {/* Join Requests Section */}
-            {isAdmin && pendingRequests.length > 0 && (
-              <div className="space-y-2">
-                <h3 className="text-[10px] font-bold uppercase tracking-widest text-primary px-2 flex items-center justify-between">
-                  Join Requests
-                  <span className="bg-primary text-white text-[9px] px-1.5 rounded-full animate-pulse">{pendingRequests.length}</span>
-                </h3>
-                <div className="space-y-1 px-1">
-                  {pendingRequests.map(req => (
-                    <div 
-                      key={req.id} 
-                      onClick={() => {
-                        setActiveTab('settings');
-                        setSearchParams({ view: 'community', id: communityId, settings: 'members' });
-                      }}
-                      className="flex items-center gap-3 px-2 py-2 rounded-xl bg-primary/5 border border-primary/10 hover:bg-primary/10 transition-all cursor-pointer group shadow-sm"
+                <div className="flex-1 overflow-y-auto pb-4">
+                  {isAdmin && pendingRequests.length > 0 && !q && (
+                    <button
+                      onClick={() => { setShowMemberPanel(false); setActiveTab('settings'); setMobilePane('content'); setSearchParams({ view: 'community', id: communityId, settings: 'members' }); }}
+                      className="mx-3 mb-4 w-[calc(100%-1.5rem)] flex items-center gap-2.5 p-3 rounded-2xl bg-primary/10 text-left hover:bg-primary/15 transition-colors"
                     >
-                      <div className="w-7 h-7 rounded-full bg-primary/20 overflow-hidden shrink-0 border border-primary/20">
-                        <img 
-                          src={(req.userPhoto && req.userPhoto.trim() !== '') ? req.userPhoto : `https://api.dicebear.com/7.x/avataaars/svg?seed=${req.userId}`} 
-                          alt="" 
-                        />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-[11px] font-bold text-foreground truncate group-hover:text-primary transition-colors">
-                          {req.userName || 'Anonymous'}
-                        </p>
-                        <p className="text-[9px] text-foreground/40 font-black uppercase tracking-tighter">Wants to join</p>
-                      </div>
-                    </div>
-                  ))}
+                      <UserPlus size={18} className="text-primary shrink-0" />
+                      <span className="min-w-0 flex-1 text-sm">
+                        <span className="block font-semibold">{pendingRequests.length} join {pendingRequests.length === 1 ? 'request' : 'requests'}</span>
+                        <span className="block text-xs text-foreground/55">Review and approve</span>
+                      </span>
+                    </button>
+                  )}
+                  {roleOrder.map(role => {
+                    const list = [...(groupedMembers[role] || [])].filter(matches).sort((x, y) => Number(isOnline(y)) - Number(isOnline(x)));
+                    if (list.length === 0) return null;
+                    return (
+                      <section key={role} className="mb-4">
+                        <h3 className="px-4 mb-1 text-xs font-semibold text-foreground/45">{roleLabels[role]} · {list.length}</h3>
+                        {list.map(member => (
+                          <MemberRow key={member.id} member={member} roles={roles} online={isOnline(member)} now={now} />
+                        ))}
+                      </section>
+                    );
+                  })}
+                  {q && members.every(m => !matches(m)) && <p className="px-4 py-6 text-sm text-center text-foreground/45">No one matches "{panelSearch}".</p>}
                 </div>
-              </div>
-            )}
-
-            {/* General Members */}
-            {(() => {
-              const role = 'member';
-              const roleMembers = groupedMembers[role] || [];
-              if (roleMembers.length === 0) return null;
-
-              return (
-                <div key={role} className="space-y-2">
-                  <h3 className="text-[10px] font-bold uppercase tracking-widest text-foreground/30 px-2">
-                    {roleLabels[role]} — {roleMembers.length}
-                  </h3>
-                  <div className="space-y-1">
-                    {roleMembers.map(member => (
-                      <UserHoverCard key={member.id} userId={member.id}>
-                        <div className="flex items-center gap-3 px-2 py-1.5 rounded-lg hover:bg-foreground/5 transition-all cursor-pointer group">
-                          <div className="relative">
-                            <div className="w-8 h-8 rounded-full bg-foreground/10 overflow-hidden">
-                              <img 
-                                src={
-                                  (member.user?.profileImage && member.user.profileImage.trim() !== '') ? member.user.profileImage :
-                                  (member.user?.photoURL && member.user.photoURL.trim() !== '') ? member.user.photoURL : 
-                                  `https://api.dicebear.com/7.x/avataaars/svg?seed=${member.id}`
-                                } 
-                                alt="" 
-                              />
-                            </div>
-                            <div className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-green-500 border-2 border-background rounded-full" />
-                          </div>
-                          <div className="min-w-0">
-                            <div className="flex flex-col">
-                              <p className="text-sm font-medium truncate text-foreground/70 group-hover:text-foreground" style={(() => {
-                                 const memberRoles = (member.customRoles || []).map((rid: string) => roles.find(r => r.id === rid)).filter(Boolean);
-                                 if (memberRoles.length > 0) {
-                                   return { color: memberRoles[0].color };
-                                 }
-                                 return {};
-                              })()}>
-                                {member.user?.username || 'Anonymous'}
-                              </p>
-                              <div className="flex flex-wrap gap-1 mt-0.5">
-                                {(member.customRoles || []).map((rid: string) => {
-                                  const r = roles.find(role => role.id === rid);
-                                  if (!r) return null;
-                                  return (
-                                    <div key={rid} className="px-1 py-0.5 rounded-[4px] text-[7px] font-black uppercase" style={{ backgroundColor: `${r.color}15`, color: r.color }}>{r.name}</div>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                            {member.user?.status && (
-                              <p className="text-[10px] text-foreground/40 truncate mt-1">{member.user.status}</p>
-                            )}
-                          </div>
-                        </div>
-                      </UserHoverCard>
-                    ))}
-                  </div>
-                </div>
-              );
-            })()}
-          </div>
-        )}
-      </div>
+              </aside>
+            </>
+          );
+        })()}
+</div>
       <ConfirmModal 
         isOpen={showChannelDeleteConfirm}
         onClose={() => {
@@ -1726,5 +1308,69 @@ export default function CommunityView({ communityId }: { communityId: string }) 
         roles={roles}
       />
     </div>
+  );
+}
+
+/** Shown in place of channels to people who haven't joined. */
+function JoinPanel({ community, signedIn, onJoin, onAbout, members }: { community: any; signedIn: boolean; onJoin: () => void; onAbout: () => void; members: any[] }) {
+  const fee = feeOf(community);
+  const control = community.membershipControl;
+  const needsApproval = community.isPrivate || control?.approvalRequired || (control?.accessType && control.accessType !== 'public');
+  const faces = members.filter(m => m.user).slice(0, 5);
+  return (
+    <div className="flex-1 overflow-y-auto flex items-center justify-center p-6">
+      <div className="max-w-md w-full text-center">
+        <CommunityIcon community={community} size={80} className="mx-auto" />
+        <h2 className="mt-4 text-2xl font-bold">{community.name}</h2>
+        {community.description && <p className="mt-2 text-foreground/65 leading-relaxed">{community.description}</p>}
+        <div className="mt-4 flex items-center justify-center gap-2 text-sm text-foreground/60">
+          {faces.length > 0 && (
+            <span className="flex -space-x-2">
+              {faces.map(m => (
+                <span key={m.id} className="rounded-full ring-2 ring-background"><Avatar src={m.user.profileImage || m.user.photoURL} seed={m.id} size={28} /></span>
+              ))}
+            </span>
+          )}
+          <span>{community.memberCount || 0} members</span>
+        </div>
+        <div className="mt-6 p-4 rounded-2xl border border-foreground/10 text-sm text-foreground/65">
+          {needsApproval ? 'This is a private community. Send a request and the admins will review it.' : 'Join to see the channels, chat with members and post in the feed.'}
+          {fee && <span className="block mt-1 text-amber-600 dark:text-amber-400 font-medium">Joining fee: {formatFee(fee)}</span>}
+        </div>
+        <div className="mt-5 flex justify-center gap-2">
+          <button onClick={onAbout} className="px-5 py-2.5 rounded-full border border-foreground/15 text-sm font-semibold hover:bg-foreground/5">About</button>
+          {signedIn ? (
+            <button onClick={onJoin} className="px-6 py-2.5 rounded-full bg-primary text-white text-sm font-semibold hover:bg-primary/90">
+              {needsApproval ? 'Request to join' : 'Join community'}
+            </button>
+          ) : (
+            <Link to="/login" className="px-6 py-2.5 rounded-full bg-primary text-white text-sm font-semibold hover:bg-primary/90">Sign in to join</Link>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MemberRow({ member, roles, online, now }: { member: any; roles: any[]; online: boolean; now: number }) {
+  const u = member.user;
+  const name = u?.displayName || u?.username || 'Member';
+  const customRoles = (member.customRoles || []).map((rid: string) => roles.find(r => r.id === rid)).filter(Boolean);
+  const presence = presenceLabel(u?.lastActiveAt, now);
+  return (
+    <UserHoverCard userId={member.id}>
+      <div className={`mx-2 flex items-center gap-2.5 px-2 py-1.5 rounded-xl hover:bg-foreground/5 transition-colors cursor-pointer ${online ? '' : 'opacity-70'}`}>
+        <span className="relative shrink-0">
+          <Avatar src={u?.profileImage || u?.photoURL} seed={member.id} size={32} />
+          {online && <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-green-500 ring-2 ring-background" />}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm font-medium truncate" style={customRoles[0]?.color ? { color: customRoles[0].color } : undefined}>{name}</span>
+          <span className="block text-[11px] text-foreground/45 truncate">
+            {customRoles.length ? customRoles.map((r: any) => r.name).join(' · ') : presence && !online ? presence : u?.username ? `@${u.username}` : ''}
+          </span>
+        </span>
+      </div>
+    </UserHoverCard>
   );
 }

@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 import { Hash, MessageSquare, Code, FileText, Megaphone, Plus, Lock, Volume2, Radio, EyeOff, X, GripVertical, Shield, MoreVertical, CheckCheck, BellOff, Trash2, Unlock, Layout, ChevronDown, ChevronRight, Edit2, Copy, Settings } from 'lucide-react';
 import { motion, Reorder, AnimatePresence } from 'motion/react';
-import { collection, query, onSnapshot, orderBy, doc, updateDoc, deleteDoc, addDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, query, onSnapshot, orderBy, doc, updateDoc, deleteDoc, addDoc, serverTimestamp, where } from 'firebase/firestore';
 import { db, auth, handleFirestoreError, OperationType } from '../firebase';
 import { toast } from 'react-hot-toast';
+import { channelTypeInfo } from '../lib/channelTypes';
 
 interface Category {
   id: string;
@@ -176,11 +177,13 @@ export default function ChannelSidebar({
       .map(channel => {
         if (!channel.id) return null;
         try {
-          const q = query(collection(db, 'communities', communityId, 'channels', channel.id, 'liveStreams'));
+          // Only live streams, and only ones whose host checked in recently (see LiveStreamView).
+          const q = query(collection(db, 'communities', communityId, 'channels', channel.id, 'liveStreams'), where('status', '==', 'live'));
           return onSnapshot(q, (snapshot) => {
+            const seen = (v: any) => (v?.toMillis ? v.toMillis() : v ? new Date(v).getTime() : 0);
             const activeStreams = snapshot.docs
               .map(doc => ({ id: doc.id, ...doc.data() }))
-              .filter((s: any) => s.status === 'live');
+              .filter((s: any) => Date.now() - (seen(s.lastSeenAt) || seen(s.startTime)) < 2 * 60_000);
             
             setActiveLiveStreams(prev => ({
               ...prev,
@@ -201,15 +204,8 @@ export default function ChannelSidebar({
   }, [channels, communityId]);
 
   const getIcon = (type: string) => {
-    switch (type) {
-      case 'feed': return <Layout size={18} />;
-      case 'announcements': return <Megaphone size={18} />;
-      case 'voice': return <Volume2 size={18} />;
-      case 'live': return <Radio size={18} />;
-      case 'code': return <Code size={18} />;
-      case 'resources': return <FileText size={18} />;
-      default: return <Hash size={18} />;
-    }
+    const Icon = channelTypeInfo(type).icon;
+    return <Icon size={18} />;
   };
 
   const visibleChannels = channels.filter(c => {

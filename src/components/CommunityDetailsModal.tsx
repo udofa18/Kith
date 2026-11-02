@@ -6,6 +6,9 @@ import { X, Users, Calendar, Globe, Lock, Shield, Zap, UserPlus, UserMinus, Load
 import { formatDate } from '../lib/utils';
 import { toast } from 'react-hot-toast';
 import { joinCommunity } from '../services/socialService';
+import { CommunityIcon, communityHue } from './CommunityCard';
+import { categoryLabel, categoryOf } from '../lib/communityCategories';
+import { canAfford, feeOf, formatFee } from '../lib/communityPricing';
 
 export default function CommunityDetailsModal({ isOpen, onClose, communityId, onJoinSuccess, inviteCode }: { 
   isOpen: boolean, 
@@ -105,23 +108,17 @@ export default function CommunityDetailsModal({ isOpen, onClose, communityId, on
         }
     }
 
-    // Paid Entry Check
-    if (community?.isPaid && community?.price > 0 && !isMember) {
-        // Here we would normally trigger a payment flow. 
-        // For this app, we'll check if user has enough XP and deduct it, or just show a prompt.
-        const userDoc = await getDoc(doc(db, 'users', auth.currentUser.uid));
-        const userXP = userDoc.data()?.xp || 0;
-        
-        if (userXP < community.price) {
-            toast.error(`Insufficient XP. You need ${community.price} XP to join this community.`);
+    const fee = feeOf(community);
+    const isPrivateFlag = community?.isPrivate || (control?.accessType && control?.accessType !== 'public') || control?.approvalRequired;
+
+    // Direct joins pay now, so check the balance first. Requests are charged on approval.
+    if (fee && !isMember && !isPrivateFlag && community.creatorId !== auth.currentUser.uid) {
+        if (!(await canAfford(auth.currentUser.uid, fee))) {
+            toast.error(`You need ${formatFee(fee)} to join. Earn XP by posting and helping others.`);
             return;
         }
-
-        // We'll proceed with joining, but technically we should deduct XP here.
-        // For now, we'll let handleJoin proceed after this check.
     }
 
-    const isPrivateFlag = community?.isPrivate || (control?.accessType && control?.accessType !== 'public') || control?.approvalRequired;
     const hasOnboarding = control?.onboardingQuestions?.length > 0;
 
     if (isPrivateFlag || hasOnboarding) {
@@ -131,21 +128,14 @@ export default function CommunityDetailsModal({ isOpen, onClose, communityId, on
         }
     }
 
+    const unanswered = (control?.onboardingQuestions || []).find((q: any) => q.required && !answers[q.id]?.trim());
+    if (showOnboarding && unanswered) {
+        toast.error(`Please answer: ${unanswered.question}`);
+        return;
+    }
+
     setJoining(true);
     try {
-      // Deduct XP if paid
-      if (community?.isPaid && community?.price > 0 && !isMember) {
-          try {
-            await updateDoc(doc(db, 'users', auth.currentUser.uid), {
-                xp: increment(-community.price)
-            });
-            toast.success(`Deducted ${community.price} XP for community entry`);
-          } catch (err) {
-            handleFirestoreError(err, OperationType.UPDATE, `users/${auth.currentUser.uid}`);
-            throw err;
-          }
-      }
-
       if (isPrivateFlag) {
           // Submit join request
           const requestId = auth.currentUser.uid; // One request per user
@@ -220,7 +210,16 @@ export default function CommunityDetailsModal({ isOpen, onClose, communityId, on
               if (!inviteSnap.empty) {
                 const inviteDoc = inviteSnap.docs[0];
                 const inviteData = inviteDoc.data();
-                
+
+                // Limits are enforced here: an expired, used-up or self-referred link is ignored.
+                const expired = inviteData.expiresAt && new Date(inviteData.expiresAt).getTime() < Date.now();
+                const usedUp = inviteData.maxUses > 0 && (inviteData.uses || 0) >= inviteData.maxUses;
+                if (expired || usedUp || inviteData.creatorId === auth.currentUser.uid || inviteData.communityId !== communityId) {
+                  if (onJoinSuccess) onJoinSuccess();
+                  return;
+                }
+                inviteData.rewardXp = Math.min(Math.max(Number(inviteData.rewardXp) || 0, 0), 500);
+
                 // Increment uses
                 await updateDoc(inviteDoc.ref, {
                   uses: increment(1)
@@ -273,8 +272,11 @@ export default function CommunityDetailsModal({ isOpen, onClose, communityId, on
 
   if (!isOpen) return null;
 
+  const hue = community ? communityHue(community.id || community.name || 'x') : 0;
+  const hasCover = !!community?.backdrop?.trim() && !community.backdrop.includes('picsum.photos');
+
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
       <motion.div 
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
@@ -286,7 +288,7 @@ export default function CommunityDetailsModal({ isOpen, onClose, communityId, on
       <motion.div 
         initial={{ opacity: 0, scale: 0.9, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
-        className="bg-background rounded-[32px] w-full max-w-2xl relative z-10 overflow-hidden shadow-2xl border border-foreground/10"
+        className="bg-background text-black dark:text-white rounded-3xl w-full max-w-lg relative z-10 overflow-hidden shadow-2xl border border-foreground/10 max-h-[90vh] overflow-y-auto"
       >
         {loading ? (
           <div className="p-20 flex justify-center">
@@ -294,33 +296,24 @@ export default function CommunityDetailsModal({ isOpen, onClose, communityId, on
           </div>
         ) : community ? (
           <>
-            <div className="h-48 relative">
-              <img 
-                src={(community.backdrop && community.backdrop.trim() !== '') ? community.backdrop : `https://picsum.photos/seed/${community.id}_bg/1200/400`} 
-                alt="Backdrop" 
-                className="w-full h-full object-cover"
-                referrerPolicy="no-referrer"
-              />
-              <div className="absolute inset-0 bg-gradient-to-t from-background to-transparent" />
-              <button onClick={onClose} className="absolute top-6 right-6 text-foreground/50 hover:text-foreground transition-colors p-2 bg-background/20 rounded-full backdrop-blur-md">
-                <X size={24} />
+            <div
+              className="h-36 sm:h-44 relative"
+              style={hasCover ? undefined : { background: `linear-gradient(135deg, hsl(${hue} 70% 62%), hsl(${(hue + 45) % 360} 65% 48%))` }}
+            >
+              {hasCover && <img src={community.backdrop} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />}
+              <button onClick={onClose} aria-label="Close" className="absolute top-4 right-4 p-2 rounded-full bg-black/40 hover:bg-black/55 backdrop-blur-md" style={{ color: '#fff' }}>
+                <X size={20} />
               </button>
             </div>
 
-            <div className="px-8 pb-8 -mt-12 relative z-10">
-              <div className="flex items-end gap-6 mb-6">
-                <div className="w-24 h-24 rounded-[24px] bg-background border-4 border-background overflow-hidden shadow-2xl">
-                  <img 
-                    src={(community.image && community.image.trim() !== '') ? community.image : `https://picsum.photos/seed/${community.id}/400/400`} 
-                    alt={community.name} 
-                    className="w-full h-full object-cover"
-                    referrerPolicy="no-referrer"
-                  />
-                </div>
-                <div className="mb-2">
-                  <h2 className="text-2xl font-bold">{community.name}</h2>
+            <div className="px-6 sm:px-8 pb-6 sm:pb-8 -mt-10 relative z-10">
+              <div className="flex flex-col items-start gap-3 mb-5">
+                <CommunityIcon community={community} size={84} className="ring-4 ring-background shadow-xl" />
+                <div>
+                  <h2 className="text-xl sm:text-2xl font-bold leading-tight">{community.name}</h2>
                   <div className="flex items-center gap-3 mt-1 text-foreground/50 text-xs">
-                    <span className="flex items-center gap-1"><Users size={12} /> {community.memberCount} members</span>
+                    <span className="flex items-center gap-1"><Users size={12} /> {community.memberCount || 0} members</span>
+                    {categoryOf(community) !== 'general' && <span>{categoryLabel(categoryOf(community))}</span>}
                     <span className="flex items-center gap-1">
                       {community.isPrivate ? <><Lock size={12} /> Private</> : <><Globe size={12} /> Public</>}
                     </span>
@@ -343,7 +336,7 @@ export default function CommunityDetailsModal({ isOpen, onClose, communityId, on
                         <div className="flex items-center justify-between mb-2">
                              <div className="flex items-center gap-3 text-primary">
                                 <Shield size={24} />
-                                <h3 className="text-xl font-black italic">Entry Protocol</h3>
+                                <h3 className="text-lg font-bold">A few questions first</h3>
                              </div>
                              <button onClick={() => setShowOnboarding(false)} className="text-[10px] uppercase font-black tracking-widest text-foreground/40 hover:text-foreground">Cancel</button>
                         </div>
@@ -369,20 +362,23 @@ export default function CommunityDetailsModal({ isOpen, onClose, communityId, on
                                             value={answers[q.id] || ''}
                                             onChange={e => setAnswers({ ...answers, [q.id]: e.target.value })}
                                             className="w-full bg-white/5 border border-white/10 rounded-2xl p-4 text-xs font-bold outline-none focus:border-primary transition-all resize-none min-h-[100px] placeholder:text-white/10"
-                                            placeholder="Your detailed response..."
+                                            placeholder="Your answer"
                                         />
                                     )}
                                 </div>
                             ))}
 
-                            {community.isPaid && !isMember && (
+                            {feeOf(community) && !isMember && (
                               <div className="p-6 rounded-3xl bg-amber-500/10 border border-amber-500/20 space-y-3">
                                  <div className="flex items-center gap-3 text-amber-500">
                                    <Zap size={20} />
-                                   <span className="text-sm font-black uppercase tracking-widest">Premium Entry</span>
+                                   <span className="text-sm font-semibold">Joining fee</span>
                                  </div>
-                                 <p className="text-[10px] text-foreground/60 font-bold uppercase tracking-widest leading-loose">
-                                   Access fee: <span className="text-amber-500 font-black">{community.price} XP</span>
+                                 <p className="text-sm text-foreground/70">
+                                   <span className="text-amber-500 font-semibold">{formatFee(feeOf(community)!)}</span>{' '}
+                                   {(community.isPrivate || community.membershipControl?.approvalRequired || (community.membershipControl?.accessType && community.membershipControl.accessType !== 'public'))
+                                     ? 'is charged only if your request is approved.'
+                                     : 'is charged when you join.'}
                                  </p>
                               </div>
                             )}
@@ -394,21 +390,21 @@ export default function CommunityDetailsModal({ isOpen, onClose, communityId, on
                             className="w-full py-5 bg-primary text-white rounded-[2rem] font-black text-xs uppercase tracking-widest shadow-[0_0_30px_rgba(139,92,246,0.5)] hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-3"
                         >
                             {joining ? <Loader2 className="animate-spin" /> : <Shield size={18} />}
-                            {(community.membershipControl.approvalRequired || community.isPrivate) ? 'Submit Application' : community.isPaid ? 'Pay & Join' : 'Initialize Access'}
+                            {(community.membershipControl.approvalRequired || community.isPrivate) ? 'Send request' : 'Join community'}
                         </button>
                     </motion.div>
                 ) : (
                     <>
                         <div>
-                          <h3 className="text-sm font-bold uppercase tracking-widest text-foreground/40 mb-2">Description</h3>
+                          <h3 className="text-sm font-semibold text-foreground/50 mb-1.5">About</h3>
                           <p className="text-foreground/80 text-sm leading-relaxed">
-                            {community.description || "No description provided."}
+                            {community.description || "The creator hasn't added a description yet."}
                           </p>
                         </div>
 
                         <div className="grid grid-cols-2 gap-4">
                           <div className="p-4 bg-foreground/5 rounded-2xl border border-foreground/10">
-                            <div className="text-[10px] text-foreground/40 uppercase tracking-widest mb-1">Created</div>
+                            <div className="text-xs text-foreground/50 mb-1">Started</div>
                             <div className="text-sm font-bold flex items-center gap-2">
                               <Calendar size={14} className="text-primary" />
                               {community.createdAt ? (() => {
@@ -422,7 +418,7 @@ export default function CommunityDetailsModal({ isOpen, onClose, communityId, on
                             </div>
                           </div>
                           <div className="p-4 bg-foreground/5 rounded-2xl border border-foreground/10">
-                            <div className="text-[10px] text-foreground/40 uppercase tracking-widest mb-1">Admin</div>
+                            <div className="text-xs text-foreground/50 mb-1">Created by</div>
                             <div className="text-sm font-bold flex items-center gap-2">
                               <Shield size={14} className="text-primary" />
                               {creatorProfile ? (creatorProfile.displayName || creatorProfile.username) : 'Community Creator'}
@@ -434,20 +430,20 @@ export default function CommunityDetailsModal({ isOpen, onClose, communityId, on
                           <button
                             onClick={handleJoin}
                             disabled={joining || isMember || requestStatus === 'pending' || requestStatus === 'rejected'}
-                            className={`flex-1 py-4 rounded-2xl font-bold text-lg transition-all flex items-center justify-center gap-2 ${
+                            className={`flex-1 py-3.5 rounded-full font-semibold text-base transition-all flex items-center justify-center gap-2 ${
                               isMember || requestStatus !== 'none'
                                 ? 'bg-foreground/10 text-foreground/50 cursor-default' 
                                 : 'bg-primary text-primary-foreground hover:opacity-90'
                             }`}
                           >
                             {isMember ? (
-                                <><UserMinus size={20} /> Already a Member</>
+                                <>You're a member</>
                             ) : requestStatus === 'pending' ? (
                                 <><Calendar size={20} /> Request Pending</>
                             ) : requestStatus === 'rejected' ? (
-                                <><X size={20} /> Request Refused</>
+                                <>Request not accepted</>
                             ) : (
-                                <>{joining ? 'Joining...' : 'Join Community'} <UserPlus size={20} /></>
+                                <>{joining ? 'Joining…' : feeOf(community) && !(community.membershipControl?.approvalRequired || community.isPrivate) ? `Join · ${formatFee(feeOf(community)!)}` : (community.membershipControl?.approvalRequired || community.isPrivate) ? 'Request to join' : 'Join community'} <UserPlus size={20} /></>
                             )}
                           </button>
                         </div>

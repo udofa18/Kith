@@ -1,601 +1,494 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { 
-  X, 
-  Phone, 
-  PhoneOff, 
-  Mic, 
-  MicOff, 
-  Video as VideoIcon, 
-  VideoOff, 
-  Minimize2, 
-  Maximize2,
-  Volume2,
-  VolumeX,
-  Monitor,
-  MessageSquare,
-  MoreVertical
+import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { useNavigate } from 'react-router-dom';
+import { AnimatePresence, motion } from 'motion/react';
+import {
+  ChevronDown, MessageCircle, Mic, MicOff, MonitorUp, Phone, PhoneOff, Video as VideoIcon, VideoOff, WifiOff,
 } from 'lucide-react';
-import { useCall, CallSession } from '../../contexts/CallContext';
-import { 
-  LiveKitRoom, 
-  VideoConference, 
-  useTracks, 
-  VideoTrack, 
-  ParticipantTile, 
-  ControlBar, 
-  useLocalParticipant, 
-  RoomContext,
-  RoomAudioRenderer
+import {
+  LiveKitRoom, RoomAudioRenderer, VideoTrack, useConnectionState, useIsSpeaking, useLocalParticipant,
+  useRemoteParticipants, useTracks,
 } from '@livekit/components-react';
-import { Track, Participant } from 'livekit-client';
+import { ConnectionState, Track, type Participant } from 'livekit-client';
+import { toast } from 'react-hot-toast';
 import { auth } from '../../firebase';
+import { otherPartyOf, useCall, type CallOutcome, type CallSession } from '../../contexts/CallContext';
+import Avatar from '../ui/Avatar';
 
-interface ParticipantMetadata {
-  avatar?: string;
+const RINGTONE = 'https://assets.mixkit.co/active_storage/sfx/1359/1359-preview.mp3';
+const DIALTONE = 'https://assets.mixkit.co/active_storage/sfx/1358/1358-preview.mp3';
+const LIVEKIT_URL = import.meta.env.VITE_LIVEKIT_URL as string | undefined;
+
+/** Loops a sound while `on` is true. */
+function useLoop(src: string, on: boolean) {
+  useEffect(() => {
+    if (!on) return;
+    const audio = new Audio(src);
+    audio.loop = true;
+    audio.play().catch(() => undefined);
+    return () => { audio.pause(); audio.src = ''; };
+  }, [src, on]);
 }
 
-function getParticipantMetadata(participant: Participant): ParticipantMetadata {
-  try {
-    return participant.metadata ? JSON.parse(participant.metadata) : {};
-  } catch {
-    return {};
-  }
+const elapsed = (from: any) => {
+  const start = from?.toMillis ? from.toMillis() : from instanceof Date ? from.getTime() : Date.now();
+  return Math.max(0, Math.floor((Date.now() - start) / 1000));
+};
+const mmss = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+
+function useTimer(from: any) {
+  const [s, setS] = useState(() => elapsed(from));
+  useEffect(() => {
+    setS(elapsed(from));
+    const t = setInterval(() => setS(elapsed(from)), 1000);
+    return () => clearInterval(t);
+  }, [from]);
+  return mmss(s);
 }
 
+/** Global call UI: incoming call, the call screen (full or minimised), and the end-of-call notice. */
 export default function CallInterface() {
-  const { activeCall, incomingCall, acceptCall, declineCall, endCall, isMinimized, setIsMinimized } = useCall();
+  const { activeCall, incomingCall, outcome, acceptCall, declineCall, endCall, isMinimized, setIsMinimized } = useCall();
+  const me = auth.currentUser?.uid;
   const [token, setToken] = useState<string | null>(null);
-  const ringtoneRef = useRef<HTMLAudioElement | null>(null);
-  const dialtoneRef = useRef<HTMLAudioElement | null>(null);
+  const [tokenError, setTokenError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (incomingCall) {
-      ringtoneRef.current = new Audio('https://assets.mixkit.co/active_storage/sfx/1359/1359-preview.mp3');
-      ringtoneRef.current.loop = true;
-      ringtoneRef.current.play().catch(console.error);
-    } else {
-      ringtoneRef.current?.pause();
-      ringtoneRef.current = null;
-    }
-    return () => ringtoneRef.current?.pause();
-  }, [incomingCall?.id]);
+  useLoop(RINGTONE, !!incomingCall && !activeCall);
+  useLoop(DIALTONE, activeCall?.status === 'ringing' && activeCall.callerId === me);
 
+  // Fetch a room token once the call is answered.
   useEffect(() => {
-    if (activeCall?.status === 'ringing' && activeCall.callerId === auth.currentUser?.uid) {
-      dialtoneRef.current = new Audio('https://assets.mixkit.co/active_storage/sfx/1358/1358-preview.mp3');
-      dialtoneRef.current.loop = true;
-      dialtoneRef.current.play().catch(console.error);
-    } else {
-      dialtoneRef.current?.pause();
-      dialtoneRef.current = null;
-    }
-    return () => dialtoneRef.current?.pause();
+    setToken(null);
+    setTokenError(null);
+    if (!activeCall || activeCall.status !== 'active' || !auth.currentUser) return;
+    if (!LIVEKIT_URL) { setTokenError("Calls aren't set up on this site yet."); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const user = auth.currentUser!;
+        const res = await fetch('/api/livekit-token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await user.getIdToken()}` },
+          body: JSON.stringify({ eventId: `call_${activeCall.id}`, username: user.displayName || 'Member', photoURL: user.photoURL || '' }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Could not connect');
+        if (!cancelled) setToken(data.token);
+      } catch (err: any) {
+        if (!cancelled) setTokenError(err.message || 'Could not connect');
+      }
+    })();
+    return () => { cancelled = true; };
   }, [activeCall?.id, activeCall?.status]);
 
-  useEffect(() => {
-    if (activeCall && activeCall.status === 'active') {
-      fetchToken();
-    } else {
-      setToken(null);
-    }
-  }, [activeCall?.id, activeCall?.status]);
-
-  const fetchToken = async () => {
-    if (!activeCall || !auth.currentUser) return;
-    
-    try {
-      const response = await fetch('/api/livekit-token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          eventId: activeCall.id,
-          userId: auth.currentUser.uid,
-          username: auth.currentUser.displayName || 'User',
-          photoURL: auth.currentUser.photoURL || ''
-        })
-      });
-      const data = await response.json();
-      setToken(data.token);
-    } catch (err) {
-      console.error('Failed to get call token:', err);
-    }
-  };
-
-  if (!activeCall && !incomingCall) return null;
-
-  return (
-    <div className="fixed inset-0 z-[100] pointer-events-none overflow-hidden">
+  return createPortal(
+    <div className="keep-dark">
       <AnimatePresence>
-        {incomingCall && (
-          <IncomingCallModal 
-            call={incomingCall} 
-            onAccept={acceptCall} 
-            onDecline={declineCall} 
-          />
-        )}
-
-        {activeCall && (
-          <ActiveCallOverlay 
-            call={activeCall}
-            token={token}
-            isMinimized={isMinimized}
-            onEnd={endCall}
-            onToggleMinimize={() => setIsMinimized(!isMinimized)}
-          />
+        {incomingCall && !activeCall && (
+          <IncomingCall key={incomingCall.id} call={incomingCall} onAccept={acceptCall} onDecline={declineCall} />
         )}
       </AnimatePresence>
-    </div>
-  );
-}
 
-function IncomingCallModal({ call, onAccept, onDecline }: { call: CallSession, onAccept: () => void, onDecline: () => void }) {
-  return (
-    <motion.div 
-      initial={{ opacity: 0, y: 100 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, scale: 0.9 }}
-      className="absolute bottom-12 left-1/2 -translate-x-1/2 pointer-events-auto bg-white/80 dark:bg-[#1A1F2E]/80 backdrop-blur-2xl border border-black/10 dark:border-white/10 p-6 rounded-[2.5rem] shadow-[0_32px_64px_-12px_rgba(0,0,0,0.5)] flex items-center gap-8 min-w-[450px] z-[120]"
-    >
-      <div className="flex items-center gap-5">
-        <div className="relative">
-          <div className="w-16 h-16 rounded-3xl overflow-hidden shadow-xl ring-2 ring-primary/20">
-            <img src={(call.callerPhoto && call.callerPhoto.trim() !== '') ? call.callerPhoto : `https://api.dicebear.com/7.x/avataaars/svg?seed=${call.callerId}`} className="w-full h-full object-cover" alt="" />
-          </div>
-          <div className="absolute -bottom-1 -right-1 w-5 h-5 bg-green-500 border-2 border-white dark:border-[#1A1F2E] rounded-full animate-pulse" />
-        </div>
-        <div>
-          <h3 className="font-black text-xl text-black dark:text-white leading-tight">{call.callerName}</h3>
-          <p className="text-xs font-bold text-primary animate-pulse tracking-widest uppercase mt-0.5">Incoming {call.media} Call</p>
-        </div>
-      </div>
-
-      <div className="flex gap-4 ml-auto">
-        <button 
-          onClick={onDecline}
-          className="w-14 h-14 rounded-full bg-rose-500/10 hover:bg-rose-500/20 text-rose-500 flex items-center justify-center transition-all border border-rose-500/20"
-        >
-          <PhoneOff size={24} />
-        </button>
-        <button 
-          onClick={onAccept}
-          className="w-14 h-14 rounded-full bg-primary text-white flex items-center justify-center hover:scale-110 active:scale-95 transition-all shadow-neon animate-bounce"
-        >
-          {call.media === 'video' ? <VideoIcon size={24} /> : <Phone size={24} />}
-        </button>
-      </div>
-    </motion.div>
-  );
-}
-
-function ActiveCallOverlay({ call, token, isMinimized, onEnd, onToggleMinimize }: { call: CallSession, token: string | null, isMinimized: boolean, onEnd: () => void, onToggleMinimize: () => void }) {
-  const [isFullScreen, setIsFullScreen] = useState(false);
-
-  const otherParticipantId = Object.keys(call.participants).find(id => id !== auth.currentUser?.uid) || Object.keys(call.participants)[0];
-  const otherParticipant = call.participants[otherParticipantId];
-  
-  const displayPhoto = call.callerId === auth.currentUser?.uid 
-    ? (otherParticipant?.photoURL && otherParticipant.photoURL.trim() !== '' ? otherParticipant.photoURL : `https://api.dicebear.com/7.x/avataaars/svg?seed=${otherParticipantId}`)
-    : (call.callerPhoto && call.callerPhoto.trim() !== '' ? call.callerPhoto : `https://api.dicebear.com/7.x/avataaars/svg?seed=${call.callerId}`);
-  const displayName = call.callerId === auth.currentUser?.uid
-    ? (otherParticipant?.displayName || 'Recipient')
-    : call.callerName;
-
-  if (isMinimized) {
-    if (token) {
-      return (
-        <LiveKitRoom
-          video={call.media === 'video'}
-          audio={true}
-          token={token}
-          serverUrl={import.meta.env.VITE_LIVEKIT_URL || 'wss://livekit.io'}
-          onDisconnected={onEnd}
-        >
-          <MinimizedCallUI 
-            call={call} 
-            displayPhoto={displayPhoto} 
-            displayName={displayName} 
-            onEnd={onEnd} 
-            onMaximize={onToggleMinimize} 
-          />
-          <RoomAudioRenderer />
-        </LiveKitRoom>
-      );
-    }
-    return (
-      <motion.div 
-        layoutId="call-overlay"
-        onClick={onToggleMinimize}
-        className="absolute bottom-8 right-8 w-72 bg-[#1A1F2E] rounded-3xl border border-white/10 shadow-2xl pointer-events-auto flex flex-col overflow-hidden z-50 cursor-pointer"
-      >
-        <div className="p-4 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl overflow-hidden flex-shrink-0 bg-white/5 relative">
-            <img src={displayPhoto} className="w-full h-full object-cover" alt="" />
-            <div className="absolute inset-0 bg-primary/20 animate-pulse" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-bold text-white truncate">{displayName}</p>
-            <p className="text-[10px] text-primary font-black uppercase tracking-widest animate-pulse">Ringing...</p>
-          </div>
-          <button onClick={onEnd} className="p-2 bg-rose-500 rounded-lg text-white hover:bg-rose-600 transition-colors">
-            <PhoneOff size={14} />
-          </button>
-        </div>
-      </motion.div>
-    );
-  }
-
-  return (
-    <motion.div 
-      layoutId="call-overlay"
-      className={`${isFullScreen ? 'fixed inset-0' : 'fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[90vw] max-w-4xl h-[80vh]'} bg-[#0F1219] dark:border dark:border-white/5 rounded-[2.5rem] shadow-[0_64px_128px_-12px_rgba(0,0,0,0.8)] z-[101] pointer-events-auto flex flex-col overflow-hidden transition-all duration-500`}
-    >
-      {call.status === 'ringing' ? (
-        <RingingUI 
-          call={call} 
-          displayPhoto={displayPhoto} 
-          displayName={displayName} 
-          onEnd={onEnd} 
-        />
-      ) : token ? (
-        <LiveKitRoom
-          video={call.media === 'video'}
-          audio={true}
-          token={token}
-          serverUrl={import.meta.env.VITE_LIVEKIT_URL || 'wss://livekit.io'}
-          className="flex-1 flex flex-col relative"
-          onDisconnected={onEnd}
-        >
-          <CallContent 
-            call={call} 
-            displayPhoto={displayPhoto}
-            displayName={displayName}
-            onEnd={onEnd} 
-            onMinimize={onToggleMinimize} 
-            isFullScreen={isFullScreen}
-            setIsFullScreen={setIsFullScreen}
-          />
-          <RoomAudioRenderer />
-        </LiveKitRoom>
-      ) : (
-        <div className="flex-1 flex items-center justify-center text-white">
-          <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin" />
-        </div>
-      )}
-    </motion.div>
-  );
-}
-
-function MinimizedCallUI({ 
-  call, 
-  displayPhoto, 
-  displayName, 
-  onEnd, 
-  onMaximize 
-}: { 
-  call: CallSession, 
-  displayPhoto: string, 
-  displayName: string, 
-  onEnd: () => void, 
-  onMaximize: () => void 
-}) {
-  const { localParticipant, isMicrophoneEnabled, isCameraEnabled } = useLocalParticipant();
-
-  return (
-    <motion.div 
-      layoutId="call-overlay"
-      className="absolute bottom-8 right-8 w-72 bg-[#1A1F2E] rounded-3xl border border-white/10 shadow-2xl pointer-events-auto flex flex-col overflow-hidden z-50"
-    >
-      <div className="p-4 flex items-center gap-3">
-        <div className="w-10 h-10 rounded-xl overflow-hidden flex-shrink-0 bg-white/5">
-          <img src={displayPhoto} className="w-full h-full object-cover" alt="" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-bold text-white truncate">{displayName}</p>
-          <div className="flex items-center gap-1.5">
-            <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
-            <p className="text-[10px] text-primary font-black uppercase tracking-widest">{call.media} Active</p>
-          </div>
-        </div>
-        <button 
-          onClick={onMaximize}
-          className="p-1.5 hover:bg-white/5 rounded-lg text-white/40 hover:text-white transition-colors"
-        >
-          <Maximize2 size={16} />
-        </button>
-      </div>
-
-      <div className="px-4 pb-4 flex items-center justify-between gap-2">
-        <div className="flex gap-2">
-          <button 
-            onClick={() => localParticipant?.setMicrophoneEnabled(!isMicrophoneEnabled)}
-            className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all ${isMicrophoneEnabled ? 'bg-white/5 text-white/60 hover:text-white' : 'bg-rose-500 text-white'}`}
+      {activeCall && (
+        activeCall.status === 'ringing' ? (
+          <Shell minimized={isMinimized}>
+            {isMinimized
+              ? <MiniBar call={activeCall} label="Calling…" onExpand={() => setIsMinimized(false)} onEnd={endCall} />
+              : <Ringing call={activeCall} onEnd={endCall} onMinimize={() => setIsMinimized(true)} />}
+          </Shell>
+        ) : token && LIVEKIT_URL ? (
+          <LiveKitRoom
+            serverUrl={LIVEKIT_URL}
+            token={token}
+            audio
+            video={activeCall.media === 'video'}
+            connect
+            onDisconnected={() => endCall()}
+            onMediaDeviceFailure={() => toast.error(`Allow ${activeCall.media === 'video' ? 'camera and microphone' : 'microphone'} access in your browser to talk.`)}
+            className="contents"
           >
-            {isMicrophoneEnabled ? <Mic size={16} /> : <MicOff size={16} />}
-          </button>
-          {call.media === 'video' && (
-            <button 
-              onClick={() => localParticipant?.setCameraEnabled(!isCameraEnabled)}
-              className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all ${isCameraEnabled ? 'bg-white/5 text-white/60 hover:text-white' : 'bg-rose-500 text-white'}`}
-            >
-              {isCameraEnabled ? <VideoIcon size={16} /> : <VideoOff size={16} />}
-            </button>
-          )}
-        </div>
-        <button 
-          onClick={onEnd}
-          className="w-10 h-10 rounded-xl bg-rose-500 text-white flex items-center justify-center hover:bg-rose-600 transition-all shadow-lg shadow-rose-500/20"
-        >
-          <PhoneOff size={18} />
-        </button>
-      </div>
+            <RoomAudioRenderer />
+            <Shell minimized={isMinimized}>
+              {isMinimized
+                ? <LiveMiniBar call={activeCall} onExpand={() => setIsMinimized(false)} onEnd={endCall} />
+                : <InCall call={activeCall} onEnd={endCall} onMinimize={() => setIsMinimized(true)} />}
+            </Shell>
+          </LiveKitRoom>
+        ) : (
+          <Shell minimized={false}>
+            <Connecting call={activeCall} error={tokenError} onEnd={endCall} />
+          </Shell>
+        )
+      )}
+
+      <AnimatePresence>{outcome && !activeCall && <OutcomeNotice key="outcome" outcome={outcome} />}</AnimatePresence>
+    </div>,
+    document.body,
+  );
+}
+
+// ---------------------------------------------------------------- Layout
+
+function Shell({ minimized, children }: { minimized: boolean; children: React.ReactNode }) {
+  if (minimized) return <>{children}</>;
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      className="fixed inset-0 z-[110] bg-neutral-950 text-white flex flex-col select-none"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Call"
+    >
+      {children}
     </motion.div>
   );
 }
 
-function RingingUI({ call, displayPhoto, displayName, onEnd }: { call: CallSession, displayPhoto: string, displayName: string, onEnd: () => void }) {
+function Backdrop({ photo }: { photo: string }) {
   return (
-    <div className="flex-1 flex flex-col items-center justify-center text-white relative">
-      <div className="absolute inset-0 overflow-hidden pointer-events-none opacity-20">
-         <img src={displayPhoto} className="w-full h-full object-cover blur-3xl scale-110" alt="" />
-      </div>
-      
-      <motion.div 
-        animate={{ scale: [1, 1.05, 1]}} 
-        transition={{ duration: 2, repeat: Infinity }}
-        className="w-48 h-48 rounded-[3rem] overflow-hidden shadow-2xl relative z-10"
-      >
-        <img src={displayPhoto} className="w-full h-full object-cover" alt="" />
-      </motion.div>
-      
-      <div className="text-center mt-12 relative z-10">
-        <h2 className="text-4xl font-black mb-3">{displayName}</h2>
-        <div className="flex items-center justify-center gap-3">
-          <div className="flex gap-1">
-            {[0, 1, 2].map(i => (
-              <motion.div 
-                key={i} 
-                animate={{ opacity: [0.2, 1, 0.2], y: [0, -4, 0] }} 
-                transition={{ duration: 1.5, repeat: Infinity, delay: i * 0.2 }}
-                className="w-1.5 h-1.5 rounded-full bg-primary" 
-              />
-            ))}
-          </div>
-          <p className="text-sm font-bold uppercase tracking-[0.2em] text-primary/80">
-            {call.callerId === auth.currentUser?.uid ? 'Calling...' : 'In-bound call'}
-          </p>
-        </div>
-      </div>
+    <div className="absolute inset-0 overflow-hidden pointer-events-none">
+      {photo && <img src={photo} alt="" className="w-full h-full object-cover blur-3xl scale-125 opacity-30" />}
+      <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-black/20 to-black/70" />
+    </div>
+  );
+}
 
-      <div className="mt-24 relative z-10">
-        <button 
-          onClick={onEnd}
-          className="w-20 h-20 rounded-full bg-rose-500 text-white flex items-center justify-center hover:scale-110 active:scale-95 transition-all shadow-[0_20px_40px_rgba(244,63,94,0.3)]"
-        >
-          <PhoneOff size={32} />
+function TopBar({ title, subtitle, onMinimize }: { title: string; subtitle: React.ReactNode; onMinimize?: () => void }) {
+  return (
+    <div className="relative z-20 flex items-center gap-3 px-4 pt-[max(16px,env(safe-area-inset-top))] pb-3">
+      {onMinimize && (
+        <button onClick={onMinimize} aria-label="Minimise call" title="Minimise" className="w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center">
+          <ChevronDown size={22} />
         </button>
+      )}
+      <div className="min-w-0 flex-1 text-center pr-10">
+        <p className="font-semibold truncate">{title}</p>
+        <p className="text-xs text-white/70">{subtitle}</p>
       </div>
     </div>
   );
 }
 
-function CallContent({ 
-  call, 
-  displayPhoto, 
-  displayName, 
-  onEnd, 
-  onMinimize, 
-  isFullScreen, 
-  setIsFullScreen 
-}: { 
-  call: CallSession, 
-  displayPhoto: string,
-  displayName: string,
-  onEnd: () => void, 
-  onMinimize: () => void,
-  isFullScreen: boolean,
-  setIsFullScreen: (val: boolean) => void
+function RoundButton({ label, onClick, active = true, danger, children, size = 'md' }: {
+  label: string;
+  onClick: () => void;
+  active?: boolean;
+  danger?: boolean;
+  size?: 'md' | 'lg';
+  children: React.ReactNode;
 }) {
-  const tracks = useTracks([Track.Source.Camera, Track.Source.ScreenShare]);
-  const { localParticipant, isMicrophoneEnabled, isCameraEnabled } = useLocalParticipant();
+  const dim = size === 'lg' ? 'w-16 h-16' : 'w-14 h-14';
+  const tone = danger ? 'bg-red-500 hover:bg-red-600' : active ? 'bg-white/15 hover:bg-white/25' : 'bg-white text-neutral-900 hover:bg-white/90';
+  return (
+    <div className="flex flex-col items-center gap-1.5">
+      <button onClick={onClick} aria-label={label} title={label} className={`${dim} rounded-full flex items-center justify-center transition-colors ${tone}`} style={!active && !danger ? { color: '#111' } : undefined}>
+        {children}
+      </button>
+      <span className="text-[11px] text-white/70">{label}</span>
+    </div>
+  );
+}
 
-  // Separate local and remote tracks
-  const remoteTracks = tracks.filter(t => !t.participant.isLocal);
-  const localTracks = tracks.filter(t => t.participant.isLocal);
+// ---------------------------------------------------------------- Incoming
 
+function IncomingCall({ call, onAccept, onDecline }: { call: CallSession; onAccept: () => void; onDecline: () => void }) {
+  const video = call.media === 'video';
+  const Accept = video ? VideoIcon : Phone;
   return (
     <>
-      <div className="p-8 flex justify-between items-center z-20">
-        <div className="flex items-center gap-4 bg-white/5 backdrop-blur-xl px-5 py-2.5 rounded-2xl border border-white/10">
-          <div className="w-10 h-10 rounded-xl overflow-hidden shadow-lg border border-white/10">
-             <img src={displayPhoto} className="w-full h-full object-cover" alt="" />
-          </div>
-          <div>
-            <p className="text-sm font-black text-white leading-tight">{displayName}</p>
-            <div className="flex items-center gap-2">
-              <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
-              <CallTimer startTime={call.createdAt} />
-            </div>
+      {/* Phones: full screen */}
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="sm:hidden fixed inset-0 z-[120] bg-neutral-950 text-white flex flex-col">
+        <Backdrop photo={call.callerPhoto} />
+        <div className="relative z-10 flex-1 flex flex-col items-center justify-center text-center px-6">
+          <span className="relative">
+            <span className="absolute inset-0 rounded-full bg-white/20 animate-ping" />
+            <Avatar src={call.callerPhoto} seed={call.callerId} size={112} />
+          </span>
+          <p className="mt-6 text-2xl font-bold">{call.callerName || 'Someone'}</p>
+          <p className="mt-1 text-white/70">Incoming {video ? 'video' : 'voice'} call</p>
+        </div>
+        <div className="relative z-10 flex justify-around pb-[max(40px,env(safe-area-inset-bottom))] px-10">
+          <RoundButton label="Decline" danger size="lg" onClick={onDecline}><PhoneOff size={26} /></RoundButton>
+          <div className="flex flex-col items-center gap-1.5">
+            <button onClick={onAccept} aria-label="Accept" className="w-16 h-16 rounded-full bg-green-500 hover:bg-green-600 flex items-center justify-center animate-pulse"><Accept size={26} /></button>
+            <span className="text-[11px] text-white/70">Accept</span>
           </div>
         </div>
+      </motion.div>
 
-        <div className="flex gap-3">
-          <button 
-            onClick={() => setIsFullScreen(!isFullScreen)}
-            className="p-3 bg-white/5 backdrop-blur-xl rounded-2xl border border-white/10 text-white/60 hover:text-white hover:bg-white/10 transition-all"
-          >
-            {isFullScreen ? <Minimize2 size={20} /> : <Maximize2 size={20} />}
-          </button>
-          <button 
-            onClick={onMinimize}
-            className="p-3 bg-white/5 backdrop-blur-xl rounded-2xl border border-white/10 text-white/60 hover:text-white hover:bg-white/10 transition-all"
-          >
-            <X size={20} />
-          </button>
+      {/* Larger screens: card at the top */}
+      <motion.div
+        initial={{ opacity: 0, y: -20 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: -20 }}
+        className="hidden sm:flex fixed top-5 left-1/2 -translate-x-1/2 z-[120] w-[380px] items-center gap-3 p-3 pl-4 rounded-3xl bg-neutral-900/95 backdrop-blur-xl border border-white/10 shadow-2xl text-white"
+        role="alertdialog"
+        aria-label={`Incoming call from ${call.callerName}`}
+      >
+        <Avatar src={call.callerPhoto} seed={call.callerId} size={48} />
+        <div className="min-w-0 flex-1">
+          <p className="font-semibold truncate">{call.callerName || 'Someone'}</p>
+          <p className="text-sm text-white/60">Incoming {video ? 'video' : 'voice'} call</p>
         </div>
+        <button onClick={onDecline} aria-label="Decline" title="Decline" className="w-11 h-11 rounded-full bg-red-500 hover:bg-red-600 flex items-center justify-center"><PhoneOff size={19} /></button>
+        <button onClick={onAccept} aria-label="Accept" title="Accept" className="w-11 h-11 rounded-full bg-green-500 hover:bg-green-600 flex items-center justify-center"><Accept size={19} /></button>
+      </motion.div>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------- Ringing (outgoing) and connecting
+
+/** Your own camera while a video call rings, so you can check how you look. */
+function SelfPreview() {
+  const ref = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    let stream: MediaStream | null = null;
+    let cancelled = false;
+    navigator.mediaDevices?.getUserMedia({ video: true }).then(s => {
+      if (cancelled) { s.getTracks().forEach(t => t.stop()); return; }
+      stream = s;
+      if (ref.current) ref.current.srcObject = s;
+    }).catch(() => undefined);
+    return () => { cancelled = true; stream?.getTracks().forEach(t => t.stop()); };
+  }, []);
+  return <video ref={ref} autoPlay muted playsInline className="absolute inset-0 w-full h-full object-cover -scale-x-100 opacity-60" />;
+}
+
+function Ringing({ call, onEnd, onMinimize }: { call: CallSession; onEnd: () => void; onMinimize: () => void }) {
+  const other = otherPartyOf(call, auth.currentUser?.uid);
+  return (
+    <>
+      {call.media === 'video' ? <SelfPreview /> : <Backdrop photo={other.photo} />}
+      <TopBar title={other.name} subtitle={call.media === 'video' ? 'Video call' : 'Voice call'} onMinimize={onMinimize} />
+      <div className="relative z-10 flex-1 flex flex-col items-center justify-center text-center">
+        <span className="relative">
+          <span className="absolute -inset-3 rounded-full border-2 border-white/20 animate-ping" />
+          <Avatar src={other.photo} seed={other.id} size={120} />
+        </span>
+        <p className="mt-6 text-2xl font-bold">{other.name}</p>
+        <p className="mt-1 text-white/70">Calling…</p>
       </div>
-
-      <div className="flex-1 overflow-hidden relative">
-        {call.media === 'video' ? (
-          <div className="h-full w-full relative">
-            {/* Main Stage (Remote Participants) */}
-            <div className="h-full w-full p-8 grid grid-cols-1 gap-6 pb-32">
-              {remoteTracks.length > 0 ? (
-                remoteTracks.map((track) => (
-                  <div key={`${track.participant.identity}-${track.source}`} className="relative rounded-3xl overflow-hidden bg-white/5 border border-white/5 group h-full w-full">
-                    <VideoTrack trackRef={track} className="w-full h-full object-cover" />
-                    
-                    {/* Overlay for when remote video is off */}
-                    {!track.participant.isCameraEnabled && (
-                      <div className="absolute inset-0 bg-[#0F1219] flex flex-col items-center justify-center z-10">
-                         <div className="absolute inset-0 overflow-hidden opacity-5">
-                            <img 
-                              src={(getParticipantMetadata(track.participant).avatar && getParticipantMetadata(track.participant).avatar?.trim() !== '') ? getParticipantMetadata(track.participant).avatar : `https://api.dicebear.com/7.x/avataaars/svg?seed=${track.participant.identity}`} 
-                              className="w-full h-full object-cover blur-3xl scale-110" 
-                              alt="" 
-                            />
-                         </div>
-                         <motion.div 
-                           initial={{ scale: 0.9, opacity: 0 }}
-                           animate={{ scale: 1, opacity: 1 }}
-                           className="relative"
-                         >
-                           <div className="w-48 h-48 rounded-[4rem] overflow-hidden shadow-2xl border-2 border-white/10 relative z-20">
-                              <img 
-                                src={(getParticipantMetadata(track.participant).avatar && getParticipantMetadata(track.participant).avatar?.trim() !== '') ? getParticipantMetadata(track.participant).avatar : `https://api.dicebear.com/7.x/avataaars/svg?seed=${track.participant.identity}`} 
-                                className="w-full h-full object-cover" 
-                                alt="" 
-                              />
-                           </div>
-                           <div className="mt-6 text-center">
-                              <p className="text-xl font-black text-white">{track.participant.name || 'Participant'}</p>
-                              <p className="text-xs text-white/40 font-bold uppercase tracking-widest mt-1">Camera Off</p>
-                           </div>
-                         </motion.div>
-                      </div>
-                    )}
-                    
-                    {/* Name Label */}
-                    <div className="absolute bottom-6 left-6 bg-black/40 backdrop-blur-xl px-4 py-2 rounded-2xl border border-white/10 z-20">
-                       <p className="text-xs font-black text-white">{track.participant.name || 'Participant'}</p>
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <div className="flex-1 flex flex-col items-center justify-center">
-                   <div className="w-48 h-48 rounded-[4rem] overflow-hidden shadow-2xl border-2 border-primary/20 mb-8">
-                      <img src={displayPhoto} className="w-full h-full object-cover" alt="" />
-                   </div>
-                   <h2 className="text-2xl font-black text-white mb-2">{displayName}</h2>
-                   <p className="text-xs text-primary font-black uppercase tracking-widest animate-pulse">Waiting for participant...</p>
-                </div>
-              )}
-            </div>
-
-            {/* PIP (Local Participant) */}
-            <motion.div 
-              drag
-              dragConstraints={{ left: -500, right: 0, top: 0, bottom: 500 }}
-              className="absolute top-8 right-8 w-48 aspect-[3/4] bg-[#1A1F2E] rounded-3xl overflow-hidden border border-white/10 shadow-2xl z-30 group cursor-grab active:cursor-grabbing"
-            >
-              {localTracks.find(t => t.source === Track.Source.Camera) ? (
-                <>
-                  <VideoTrack 
-                    trackRef={localTracks.find(t => t.source === Track.Source.Camera)!} 
-                    className={`w-full h-full object-cover ${!isCameraEnabled ? 'hidden' : ''}`} 
-                  />
-                  {!isCameraEnabled && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-[#0F1219]">
-                       <img 
-                        src={(auth.currentUser?.photoURL && auth.currentUser.photoURL.trim() !== '') ? auth.currentUser.photoURL : `https://api.dicebear.com/7.x/avataaars/svg?seed=${auth.currentUser?.uid}`} 
-                        className="w-16 h-16 rounded-2xl object-cover border border-white/10" 
-                        alt="" 
-                       />
-                    </div>
-                  )}
-                  <div className="absolute bottom-3 left-3 bg-black/40 backdrop-blur-md px-2 py-1 rounded-lg border border-white/10 opacity-0 group-hover:opacity-100 transition-opacity">
-                     <p className="text-[10px] font-black text-white">You</p>
-                  </div>
-                </>
-              ) : (
-                <div className="w-full h-full flex items-center justify-center">
-                   <VideoOff size={24} className="text-white/20" />
-                </div>
-              )}
-            </motion.div>
-          </div>
-        ) : (
-          <div className="h-full flex items-center justify-center pb-32">
-            <div className="text-center">
-              <motion.div 
-                animate={{ scale: [1, 1.05, 1], rotate: [0, 2, -2, 0] }}
-                transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}
-                className="w-64 h-64 rounded-[4rem] overflow-hidden shadow-2xl border-2 border-primary/20 mb-8 mx-auto"
-              >
-                <img src={displayPhoto} className="w-full h-full object-cover" alt="" />
-              </motion.div>
-              <h2 className="text-4xl font-black text-white mb-2">{displayName}</h2>
-              <div className="inline-flex items-center gap-2 bg-primary/10 px-4 py-1.5 rounded-full">
-                 <div className="w-1.5 h-1.5 rounded-full bg-primary animate-ping" />
-                 <p className="text-primary text-[10px] font-black uppercase tracking-widest">Ongoing Call</p>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-
-      <div className="absolute bottom-12 left-1/2 -translate-x-1/2 flex items-center gap-4 px-6 py-4 bg-black/40 backdrop-blur-3xl rounded-[2.5rem] border border-white/10 shadow-2xl z-20">
-        <button 
-          onClick={() => localParticipant?.setMicrophoneEnabled(!isMicrophoneEnabled)}
-          className={`w-16 h-16 rounded-[1.5rem] flex items-center justify-center transition-all ${isMicrophoneEnabled ? 'bg-white/5 text-white/60 hover:text-white hover:bg-white/10' : 'bg-rose-500 text-white shadow-neon'}`}
-        >
-          {isMicrophoneEnabled ? <Mic size={24} /> : <MicOff size={24} />}
-        </button>
-
-        {call.media === 'video' && (
-          <button 
-            onClick={() => localParticipant?.setCameraEnabled(!isCameraEnabled)}
-            className={`w-16 h-16 rounded-[1.5rem] flex items-center justify-center transition-all ${isCameraEnabled ? 'bg-white/5 text-white/60 hover:text-white hover:bg-white/10' : 'bg-rose-500 text-white shadow-neon'}`}
-          >
-            {isCameraEnabled ? <VideoIcon size={24} /> : <VideoOff size={24} />}
-          </button>
-        )}
-
-        <button 
-          onClick={onEnd}
-          className="w-20 h-20 rounded-[2rem] bg-rose-500 text-white flex items-center justify-center hover:scale-105 active:scale-95 transition-all shadow-[0_20px_40px_rgba(244,63,94,0.3)]"
-        >
-          <PhoneOff size={32} />
-        </button>
-
-        <button className="w-16 h-16 rounded-[1.5rem] bg-white/5 text-white/60 flex items-center justify-center hover:text-white hover:bg-white/10 transition-all">
-          <MessageSquare size={24} />
-        </button>
-
-        <button className="w-16 h-16 rounded-[1.5rem] bg-white/5 text-white/60 flex items-center justify-center hover:text-white hover:bg-white/10 transition-all">
-           <Volume2 size={24} />
-        </button>
+      <div className="relative z-10 flex justify-center pb-[max(40px,env(safe-area-inset-bottom))]">
+        <RoundButton label="Cancel" danger size="lg" onClick={onEnd}><PhoneOff size={26} /></RoundButton>
       </div>
     </>
   );
 }
 
-function CallTimer({ startTime }: { startTime: any }) {
-  const [seconds, setSeconds] = useState(0);
+function Connecting({ call, error, onEnd }: { call: CallSession; error: string | null; onEnd: () => void }) {
+  const other = otherPartyOf(call, auth.currentUser?.uid);
+  return (
+    <>
+      <Backdrop photo={other.photo} />
+      <div className="relative z-10 flex-1 flex flex-col items-center justify-center text-center px-6">
+        <Avatar src={other.photo} seed={other.id} size={112} />
+        <p className="mt-6 text-2xl font-bold">{other.name}</p>
+        {error ? (
+          <p className="mt-2 text-red-300 max-w-xs">{error}</p>
+        ) : (
+          <p className="mt-2 text-white/70 flex items-center gap-2"><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Connecting…</p>
+        )}
+      </div>
+      <div className="relative z-10 flex justify-center pb-[max(40px,env(safe-area-inset-bottom))]">
+        <RoundButton label={error ? 'Close' : 'End'} danger size="lg" onClick={onEnd}><PhoneOff size={26} /></RoundButton>
+      </div>
+    </>
+  );
+}
 
-  useEffect(() => {
-    const start = startTime?.toDate ? startTime.toDate().getTime() : (typeof startTime === 'number' ? startTime : new Date().getTime());
-    const interval = setInterval(() => {
-      setSeconds(Math.floor((Date.now() - start) / 1000));
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [startTime]);
+// ---------------------------------------------------------------- In call
 
-  const formatTime = (s: number) => {
-    const mins = Math.floor(s / 60);
-    const secs = s % 60;
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
+function InCall({ call, onEnd, onMinimize }: { call: CallSession; onEnd: () => void; onMinimize: () => void }) {
+  const navigate = useNavigate();
+  const other = otherPartyOf(call, auth.currentUser?.uid);
+  const timer = useTimer(call.answeredAt ?? call.createdAt);
+  const state = useConnectionState();
+  const remotes = useRemoteParticipants();
+  const remote = remotes[0];
+  const { localParticipant, isMicrophoneEnabled, isCameraEnabled, isScreenShareEnabled } = useLocalParticipant();
+  const tracks = useTracks([Track.Source.Camera, Track.Source.ScreenShare], { onlySubscribed: false });
+  const remoteVideo = tracks.find(t => !t.participant.isLocal && t.source === Track.Source.ScreenShare && t.publication?.track)
+    ?? tracks.find(t => !t.participant.isLocal && t.source === Track.Source.Camera && t.publication?.track && !t.publication.isMuted);
+  const localVideo = tracks.find(t => t.participant.isLocal && t.source === Track.Source.Camera && t.publication?.track && !t.publication.isMuted);
+  const anyVideo = !!remoteVideo || !!localVideo;
+
+  // In video, controls fade after a few seconds without movement.
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const hideTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const poke = () => {
+    setControlsVisible(true);
+    clearTimeout(hideTimer.current);
+    if (anyVideo) hideTimer.current = setTimeout(() => setControlsVisible(false), 4000);
   };
+  useEffect(() => { poke(); return () => clearTimeout(hideTimer.current); }, [anyVideo]);
 
-  return <p className="text-[10px] text-white/40 font-mono font-bold tracking-wider">{formatTime(seconds)}</p>;
+  const status = state === ConnectionState.Reconnecting ? 'Reconnecting…'
+    : state === ConnectionState.Connecting ? 'Connecting…'
+      : !remote ? `Waiting for ${other.name.split(' ')[0]}…`
+        : timer;
+
+  const canShare = typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getDisplayMedia && !/Mobi/i.test(navigator.userAgent);
+  const toggle = (p: Promise<unknown> | undefined, what: string) => p?.catch(() => toast.error(`Couldn't turn on your ${what}. Check your browser permissions.`));
+
+  return (
+    <div className="relative flex-1 flex flex-col" onMouseMove={poke} onClick={poke}>
+      {/* Stage */}
+      {remoteVideo ? (
+        <VideoTrack trackRef={remoteVideo} className={`absolute inset-0 w-full h-full ${remoteVideo.source === Track.Source.ScreenShare ? 'object-contain bg-black' : 'object-cover'}`} />
+      ) : (
+        <Backdrop photo={other.photo} />
+      )}
+
+      <div className={`transition-opacity duration-300 ${controlsVisible || !anyVideo ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+        <div className={anyVideo ? 'bg-gradient-to-b from-black/60 to-transparent' : ''}>
+          <TopBar
+            title={other.name}
+            subtitle={<span className="inline-flex items-center gap-1.5">{state === ConnectionState.Reconnecting && <WifiOff size={12} />}{status}{remote && !remote.isMicrophoneEnabled && <MicOff size={12} className="text-red-300" />}</span>}
+            onMinimize={onMinimize}
+          />
+        </div>
+      </div>
+
+      {!remoteVideo && (
+        <div className="relative z-10 flex-1 flex flex-col items-center justify-center text-center px-6">
+          <SpeakingAvatar participant={remote} photo={other.photo} seed={other.id} size={136} />
+          <p className="mt-6 text-2xl font-bold">{other.name}</p>
+          <p className="mt-1 text-white/70">{remote && !remote.isMicrophoneEnabled ? 'Muted' : status}</p>
+        </div>
+      )}
+      {remoteVideo && <div className="flex-1" />}
+
+      {/* Your camera */}
+      {localVideo && (
+        <motion.div
+          drag
+          dragMomentum={false}
+          className="absolute z-20 right-4 bottom-32 w-28 sm:w-44 aspect-[3/4] rounded-2xl overflow-hidden shadow-2xl border border-white/15 bg-neutral-800 cursor-grab active:cursor-grabbing"
+        >
+          <VideoTrack trackRef={localVideo} className="w-full h-full object-cover -scale-x-100" />
+        </motion.div>
+      )}
+
+      {/* Controls */}
+      <div className={`relative z-20 transition-opacity duration-300 ${controlsVisible || !anyVideo ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+        <div className={`flex items-start justify-center gap-5 sm:gap-7 px-4 pt-6 pb-[max(28px,env(safe-area-inset-bottom))] ${anyVideo ? 'bg-gradient-to-t from-black/70 to-transparent' : ''}`}>
+          <RoundButton label={isMicrophoneEnabled ? 'Mute' : 'Unmute'} active={isMicrophoneEnabled} onClick={() => toggle(localParticipant?.setMicrophoneEnabled(!isMicrophoneEnabled), 'microphone')}>
+            {isMicrophoneEnabled ? <Mic size={22} /> : <MicOff size={22} />}
+          </RoundButton>
+          <RoundButton label={isCameraEnabled ? 'Camera off' : 'Camera'} active={isCameraEnabled || call.media === 'voice'} onClick={() => toggle(localParticipant?.setCameraEnabled(!isCameraEnabled), 'camera')}>
+            {isCameraEnabled ? <VideoIcon size={22} /> : <VideoOff size={22} />}
+          </RoundButton>
+          {canShare && (
+            <RoundButton label={isScreenShareEnabled ? 'Stop sharing' : 'Share screen'} active={!isScreenShareEnabled} onClick={() => toggle(localParticipant?.setScreenShareEnabled(!isScreenShareEnabled), 'screen share')}>
+              <MonitorUp size={22} />
+            </RoundButton>
+          )}
+          <RoundButton label="Chat" onClick={() => { onMinimize(); navigate(`/feed?view=messages&c=${call.chatId}`); }}>
+            <MessageCircle size={22} />
+          </RoundButton>
+          <RoundButton label="End" danger onClick={onEnd}><PhoneOff size={22} /></RoundButton>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Avatar with a ring that pulses while the person is talking. */
+function SpeakingAvatar({ participant, photo, seed, size }: { participant?: Participant; photo: string; seed: string; size: number }) {
+  return participant ? <SpeakingRing participant={participant} photo={photo} seed={seed} size={size} /> : <Avatar src={photo} seed={seed} size={size} />;
+}
+
+function SpeakingRing({ participant, photo, seed, size }: { participant: Participant; photo: string; seed: string; size: number }) {
+  const speaking = useIsSpeaking(participant);
+  return (
+    <span className={`rounded-full p-1 transition-shadow duration-200 ${speaking ? 'shadow-[0_0_0_4px_rgba(34,197,94,0.7)]' : 'shadow-[0_0_0_4px_rgba(255,255,255,0.08)]'}`}>
+      <Avatar src={photo} seed={seed} size={size} />
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------- Minimised
+
+function MiniShell({ onExpand, children }: { onExpand: () => void; children: React.ReactNode }) {
+  return (
+    <motion.div
+      drag
+      dragMomentum={false}
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="fixed z-[110] bottom-24 right-4 sm:bottom-6 sm:right-6 flex items-center gap-2 p-2 pl-2.5 rounded-full bg-neutral-900/95 backdrop-blur-xl border border-white/10 shadow-2xl text-white cursor-grab active:cursor-grabbing"
+    >
+      <button onClick={onExpand} className="flex items-center gap-2.5 min-w-0 pr-1" aria-label="Open call">
+        {children}
+      </button>
+    </motion.div>
+  );
+}
+
+function MiniBar({ call, label, onExpand, onEnd }: { call: CallSession; label: string; onExpand: () => void; onEnd: () => void }) {
+  const other = otherPartyOf(call, auth.currentUser?.uid);
+  return (
+    <div className="contents">
+      <MiniShell onExpand={onExpand}>
+        <Avatar src={other.photo} seed={other.id} size={36} />
+        <span className="text-left min-w-0">
+          <span className="block text-sm font-semibold truncate max-w-[140px]">{other.name}</span>
+          <span className="block text-xs text-white/60">{label}</span>
+        </span>
+        <span onClick={e => { e.stopPropagation(); onEnd(); }} role="button" aria-label="End call" className="ml-1 w-9 h-9 rounded-full bg-red-500 hover:bg-red-600 flex items-center justify-center"><PhoneOff size={16} /></span>
+      </MiniShell>
+    </div>
+  );
+}
+
+function LiveMiniBar({ call, onExpand, onEnd }: { call: CallSession; onExpand: () => void; onEnd: () => void }) {
+  const other = otherPartyOf(call, auth.currentUser?.uid);
+  const timer = useTimer(call.answeredAt ?? call.createdAt);
+  const remote = useRemoteParticipants()[0];
+  const { localParticipant, isMicrophoneEnabled } = useLocalParticipant();
+  return (
+    <MiniShell onExpand={onExpand}>
+      <SpeakingAvatar participant={remote} photo={other.photo} seed={other.id} size={36} />
+      <span className="text-left min-w-0">
+        <span className="block text-sm font-semibold truncate max-w-[140px]">{other.name}</span>
+        <span className="block text-xs text-green-400">{timer}</span>
+      </span>
+      <span
+        onClick={e => { e.stopPropagation(); localParticipant?.setMicrophoneEnabled(!isMicrophoneEnabled); }}
+        role="button"
+        aria-label={isMicrophoneEnabled ? 'Mute' : 'Unmute'}
+        className={`ml-1 w-9 h-9 rounded-full flex items-center justify-center ${isMicrophoneEnabled ? 'bg-white/15 hover:bg-white/25' : 'bg-white'}`}
+        style={isMicrophoneEnabled ? undefined : { color: '#111' }}
+      >
+        {isMicrophoneEnabled ? <Mic size={16} /> : <MicOff size={16} />}
+      </span>
+      <span onClick={e => { e.stopPropagation(); onEnd(); }} role="button" aria-label="End call" className="w-9 h-9 rounded-full bg-red-500 hover:bg-red-600 flex items-center justify-center"><PhoneOff size={16} /></span>
+    </MiniShell>
+  );
+}
+
+// ---------------------------------------------------------------- After the call
+
+function OutcomeNotice({ outcome }: { outcome: CallOutcome }) {
+  const first = outcome.name.split(' ')[0];
+  const text = {
+    declined: `${first} declined the call`,
+    busy: `${first} is on another call`,
+    'no-answer': `${first} didn't answer`,
+    ended: `Call ended${outcome.seconds ? ` · ${mmss(outcome.seconds)}` : ''}`,
+  }[outcome.reason];
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -16 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -16 }}
+      className="fixed top-5 left-1/2 -translate-x-1/2 z-[120] flex items-center gap-3 pl-2 pr-5 py-2 rounded-full bg-neutral-900/95 backdrop-blur-xl border border-white/10 shadow-2xl text-white"
+      role="status"
+    >
+      <Avatar src={outcome.photo} seed={outcome.name} size={32} />
+      <span className="text-sm font-medium">{text}</span>
+    </motion.div>
+  );
 }

@@ -118,12 +118,14 @@ export function LiveSessionProvider({ children }: { children: React.ReactNode })
       if (!eventSnap.exists()) return;
       const eventData = eventSnap.data();
 
+      // Members prove who they are with their ID token; guests get a guest_ identity.
+      const idToken = await auth.currentUser?.getIdToken();
       const response = await axios.post('/api/livekit-token', {
         eventId,
-        userId: auth.currentUser?.uid || `guest_${Math.random().toString(36).substring(7)}`,
+        userId: auth.currentUser?.uid || `guest_${Math.random().toString(36).substring(2, 12)}`,
         username: auth.currentUser?.displayName || auth.currentUser?.email?.split('@')[0] || gName || guestName || 'Guest',
         photoURL: auth.currentUser?.photoURL || ''
-      });
+      }, idToken ? { headers: { Authorization: `Bearer ${idToken}` } } : undefined);
 
       setSession(prev => ({
         ...prev,

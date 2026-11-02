@@ -1,65 +1,45 @@
-import { GoogleGenAI } from "@google/genai";
+/**
+ * Client for the Gemini serverless endpoints in /api/gemini.
+ * The API key lives only on the server; requests are authenticated with the user's Firebase ID token.
+ */
+import { auth } from '../firebase';
 
-let ai: GoogleGenAI | null = null;
-try {
-  if (process.env.GEMINI_API_KEY) {
-    ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-  }
-} catch (e) {
-  console.warn("Failed to initialize GoogleGenAI:", e);
-}
-
-export async function suggestHashtags(content: string, code?: string) {
-  if (!ai) {
-    console.warn("Gemini API key not configured. Returning empty hashtags.");
-    return [];
-  }
+async function callGemini<T>(endpoint: string, body: unknown): Promise<T | null> {
+  const token = await auth.currentUser?.getIdToken();
+  if (!token) return null;
   try {
-    const prompt = `
-      Analyze the following social post content and optional code snippet.
-      Suggest 3-5 relevant hashtags for a diverse social platform (not limited to coding).
-      If there is code, include technical tags. If it's about life, art, or other topics, suggest appropriate tags.
-      Return ONLY the hashtags separated by spaces, starting with #.
-      
-      Content: ${content}
-      Code: ${code || 'None'}
-    `;
-
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: prompt,
+    const res = await fetch(`/api/gemini/${endpoint}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
     });
-    
-    const text = response.text || "";
-    return text.match(/#[\w-]+/g) || [];
+    if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+    return (await res.json()) as T;
   } catch (error) {
-    console.error("Error suggesting hashtags:", error);
-    return [];
+    console.error(`Gemini ${endpoint} failed:`, error);
+    return null;
   }
 }
 
-export async function detectLanguage(code: string) {
-  if (!ai) {
-    console.warn("Gemini API key not configured. Returning 'text'.");
-    return "text";
-  }
-  try {
-    const prompt = `
-      Identify the programming language for the following code snippet.
-      Return ONLY the name of the language (e.g., 'javascript', 'python', 'typescript').
-      If unsure, return 'text'.
-      
-      Code: ${code}
-    `;
+export async function suggestHashtags(content: string, code?: string): Promise<string[]> {
+  return (await callGemini<{ hashtags: string[] }>('suggest-hashtags', { content, code }))?.hashtags ?? [];
+}
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: prompt,
-    });
-    
-    return response.text.trim().toLowerCase() || "text";
-  } catch (error) {
-    console.error("Error detecting language:", error);
-    return "text";
-  }
+export async function detectLanguage(code: string): Promise<string> {
+  return (await callGemini<{ language: string }>('detect-language', { code }))?.language ?? 'text';
+}
+
+export interface DigestItem {
+  postId: string;
+  text: string;
+}
+
+export async function generateDigest(
+  posts: { id: string; author: string; content: string; likes: number; comments: number }[],
+): Promise<DigestItem[] | null> {
+  return (await callGemini<{ items: DigestItem[] }>('digest', { posts }))?.items ?? null;
+}
+
+export async function generateProductDescription(input: { title: string; tagline: string; category: string }): Promise<string | null> {
+  return (await callGemini<{ description: string }>('product-description', input))?.description ?? null;
 }

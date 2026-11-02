@@ -1,177 +1,93 @@
-import { useState, useEffect } from 'react';
-import { collection, query, orderBy, onSnapshot, addDoc, updateDoc, doc, arrayUnion, arrayRemove, deleteDoc } from 'firebase/firestore';
-import { db, auth } from '../../firebase';
-import { MessageSquare, ThumbsUp, Pin, Trash2, Send } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { useEffect, useState } from 'react';
+import { addDoc, arrayRemove, arrayUnion, collection, deleteDoc, doc, onSnapshot, orderBy, query, updateDoc } from 'firebase/firestore';
+import { MessageCircleQuestion, Pin, Send, ThumbsUp, Trash2 } from 'lucide-react';
+import { toast } from 'react-hot-toast';
+import { auth, db } from '../../firebase';
 import { gainXP } from '../../lib/xp';
 
 interface LiveQAProps {
-  eventId: string;
+  /** Event sessions pass `eventId`; community streams pass the stream document path. */
+  eventId?: string;
+  path?: string;
   isHost: boolean;
 }
 
-export default function LiveQA({ eventId, isHost }: LiveQAProps) {
+/** Ask questions, upvote the ones you want answered; the host can pin and remove them. */
+export default function LiveQA({ eventId, path, isHost }: LiveQAProps) {
+  const base = path ?? `eventSessions/${eventId}`;
   const [questions, setQuestions] = useState<any[]>([]);
-  const [newQuestion, setNewQuestion] = useState('');
+  const [text, setText] = useState('');
+  const me = auth.currentUser?.uid;
 
-  useEffect(() => {
-    const q = query(
-      collection(db, 'eventSessions', eventId, 'questions'),
-      orderBy('createdAt', 'desc')
-    );
+  useEffect(() => onSnapshot(query(collection(db, `${base}/questions`), orderBy('createdAt', 'desc')), snap => {
+    setQuestions(snap.docs.map(d => ({ id: d.id, ...d.data(), upvotes: d.data().upvotes || [] })));
+  }, () => setQuestions([])), [base]);
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      setQuestions(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
-    });
-
-    return () => unsubscribe();
-  }, [eventId]);
-
-  const handleSubmit = async (e: React.FormEvent) => {
+  const ask = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newQuestion.trim() || !auth.currentUser) return;
-
-    const content = newQuestion;
-    setNewQuestion('');
-
+    const content = text.trim();
+    if (!content || !auth.currentUser) return;
+    setText('');
     try {
-      await addDoc(collection(db, 'eventSessions', eventId, 'questions'), {
+      await addDoc(collection(db, `${base}/questions`), {
         userId: auth.currentUser.uid,
-        userName: auth.currentUser.displayName || 'Anonymous',
-        content,
+        userName: auth.currentUser.displayName || 'Member',
+        content: content.slice(0, 300),
         createdAt: new Date().toISOString(),
         isPinned: false,
-        upvotes: []
+        upvotes: [],
       });
-      await gainXP(auth.currentUser.uid, 'ask_question', eventId);
-    } catch (error) {
-      console.error('Error submitting question:', error);
+      if (eventId) gainXP(auth.currentUser.uid, 'ask_question', eventId).catch(() => undefined);
+    } catch {
+      setText(content);
+      toast.error("Couldn't send your question");
     }
   };
 
-  const handleUpvote = async (questionId: string) => {
-    if (!auth.currentUser) return;
-    const question = questions.find(q => q.id === questionId);
-    const hasUpvoted = question.upvotes.includes(auth.currentUser.uid);
-
-    try {
-      await updateDoc(doc(db, 'eventSessions', eventId, 'questions', questionId), {
-        upvotes: hasUpvoted ? arrayRemove(auth.currentUser.uid) : arrayUnion(auth.currentUser.uid)
-      });
-    } catch (error) {
-      console.error('Error upvoting:', error);
-    }
+  const upvote = (q: any) => {
+    if (!me) return;
+    updateDoc(doc(db, `${base}/questions`, q.id), { upvotes: q.upvotes.includes(me) ? arrayRemove(me) : arrayUnion(me) }).catch(() => toast.error("Couldn't vote"));
   };
 
-  const handlePin = async (questionId: string) => {
-    if (!isHost) return;
-    const question = questions.find(q => q.id === questionId);
-    try {
-      await updateDoc(doc(db, 'eventSessions', eventId, 'questions', questionId), {
-        isPinned: !question.isPinned
-      });
-    } catch (error) {
-      console.error('Error pinning:', error);
-    }
-  };
-
-  const handleDelete = async (questionId: string) => {
-    if (!isHost) return;
-    try {
-      await deleteDoc(doc(db, 'eventSessions', eventId, 'questions', questionId));
-    } catch (error) {
-      console.error('Error deleting:', error);
-    }
-  };
-
-  const sortedQuestions = [...questions].sort((a, b) => {
-    if (a.isPinned && !b.isPinned) return -1;
-    if (!a.isPinned && b.isPinned) return 1;
-    return (b.upvotes?.length || 0) - (a.upvotes?.length || 0);
-  });
+  const sorted = [...questions].sort((a, b) => Number(!!b.isPinned) - Number(!!a.isPinned) || b.upvotes.length - a.upvotes.length);
 
   return (
-    <div className="flex flex-col h-full bg-black/40 border-l border-white/5">
-      <div className="p-4 border-b border-white/5">
-        <h3 className="font-bold text-sm uppercase tracking-widest text-white/50">Q&A</h3>
-      </div>
-
-      <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-hide">
-        {sortedQuestions.map((q) => (
-          <div 
-            key={q.id} 
-            className={`glass p-4 rounded-2xl border transition-all ${
-              q.isPinned ? 'border-primary bg-primary/5' : 'border-white/5'
-            }`}
-          >
-            <div className="flex items-start justify-between mb-2">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-white/60">{q.userName}</span>
-                {q.isPinned && <Pin size={12} className="text-primary fill-primary" />}
+    <div className="flex flex-col h-full min-h-0">
+      <div className="flex-1 overflow-y-auto p-3 space-y-2">
+        {sorted.map(q => {
+          const mine = q.upvotes.includes(me);
+          return (
+            <div key={q.id} className={`p-3 rounded-2xl border ${q.isPinned ? 'border-primary/40 bg-primary/5' : 'border-foreground/10'}`}>
+              <div className="flex items-center gap-1.5 text-xs text-foreground/55">
+                <span className="font-semibold text-foreground/80">{q.userName}</span>
+                {q.isPinned && <span className="flex items-center gap-0.5 text-primary"><Pin size={11} className="fill-current" /> Pinned</span>}
+                <span className="ml-auto">{new Date(q.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>
               </div>
-              <div className="flex items-center gap-2">
+              <p className="mt-1 text-sm leading-relaxed">{q.content}</p>
+              <div className="mt-2 flex items-center gap-1">
+                <button onClick={() => upvote(q)} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border ${mine ? 'bg-primary/10 border-primary/40 text-primary' : 'border-foreground/15 text-foreground/60 hover:bg-foreground/5'}`}>
+                  <ThumbsUp size={12} /> {q.upvotes.length}
+                </button>
                 {isHost && (
                   <>
-                    <button 
-                      onClick={() => handlePin(q.id)}
-                      className={`p-1 rounded hover:bg-white/5 transition-colors ${q.isPinned ? 'text-primary' : 'text-white/20'}`}
-                    >
-                      <Pin size={14} />
-                    </button>
-                    <button 
-                      onClick={() => handleDelete(q.id)}
-                      className="p-1 rounded hover:bg-white/5 text-white/20 hover:text-red-500 transition-colors"
-                    >
-                      <Trash2 size={14} />
-                    </button>
+                    <button onClick={() => updateDoc(doc(db, `${base}/questions`, q.id), { isPinned: !q.isPinned })} aria-label={q.isPinned ? 'Unpin' : 'Pin'} className={`ml-auto p-1.5 rounded-full hover:bg-foreground/5 ${q.isPinned ? 'text-primary' : 'text-foreground/45'}`}><Pin size={14} /></button>
+                    <button onClick={() => deleteDoc(doc(db, `${base}/questions`, q.id))} aria-label="Remove" className="p-1.5 rounded-full text-foreground/45 hover:text-red-500 hover:bg-red-500/5"><Trash2 size={14} /></button>
                   </>
                 )}
               </div>
             </div>
-            <p className="text-sm text-white/90 mb-4">{q.content}</p>
-            <div className="flex items-center justify-between">
-              <button 
-                onClick={() => handleUpvote(q.id)}
-                className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold transition-all ${
-                  q.upvotes.includes(auth.currentUser?.uid) 
-                    ? 'bg-primary text-white' 
-                    : 'bg-white/5 text-white/40 hover:bg-white/10'
-                }`}
-              >
-                <ThumbsUp size={12} /> {q.upvotes.length}
-              </button>
-              <span className="text-[10px] text-white/20">
-                {new Date(q.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-              </span>
-            </div>
-          </div>
-        ))}
-
+          );
+        })}
         {questions.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-12 text-white/20">
-            <MessageSquare size={48} className="mb-4 opacity-20" />
-            <p className="text-sm">No questions yet</p>
+          <div className="py-12 text-center text-foreground/50">
+            <MessageCircleQuestion size={28} className="mx-auto opacity-50" />
+            <p className="mt-2 text-sm">No questions yet. Ask the first one.</p>
           </div>
         )}
       </div>
-
-      <form onSubmit={handleSubmit} className="p-4 border-t border-white/5">
-        <div className="relative flex items-center gap-2">
-          <input 
-            type="text"
-            value={newQuestion}
-            onChange={(e) => setNewQuestion(e.target.value)}
-            placeholder="Ask a question..."
-            className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-2 text-sm text-white outline-none focus:border-primary transition-all"
-          />
-          <button 
-            type="submit"
-            disabled={!newQuestion.trim()}
-            className="p-2 bg-primary text-white rounded-lg hover:scale-105 transition-all disabled:opacity-50"
-          >
-            <Send size={18} />
-          </button>
-        </div>
+      <form onSubmit={ask} className="shrink-0 p-3 border-t border-foreground/10 flex items-center gap-2">
+        <input value={text} maxLength={300} onChange={e => setText(e.target.value)} placeholder="Ask a question" className="flex-1 min-w-0 px-4 py-2.5 rounded-full bg-foreground/5 border border-transparent focus:border-primary outline-none text-sm" />
+        <button type="submit" disabled={!text.trim()} aria-label="Send" className="w-10 h-10 rounded-full bg-primary text-white flex items-center justify-center disabled:opacity-30"><Send size={16} /></button>
       </form>
     </div>
   );

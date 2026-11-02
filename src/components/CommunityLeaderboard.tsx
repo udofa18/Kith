@@ -1,168 +1,112 @@
-import { useState, useEffect } from 'react';
-import { db } from '../firebase';
-import { collection, query, orderBy, limit, getDocs, doc, getDoc } from 'firebase/firestore';
-import { Trophy, Medal, Award, Flame, User as UserIcon } from 'lucide-react';
-import { motion } from 'motion/react';
+import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { collection, doc, getCountFromServer, getDoc, getDocs, limit, orderBy, query, where } from 'firebase/firestore';
+import { Trophy } from 'lucide-react';
+import { auth, db } from '../firebase';
+import Avatar from './ui/Avatar';
 import VerifiedBadge from './VerifiedBadge';
 
-interface LeaderboardProps {
-  communityId: string;
+interface Entry { id: string; xp: number; role: string; user: any }
+
+const TOP = 50;
+const MEDAL = ['bg-yellow-500 text-yellow-950', 'bg-slate-300 text-slate-800', 'bg-amber-600 text-white'];
+const nameOf = (e: Entry) => e.user?.displayName || e.user?.username || 'Member';
+const photoOf = (e: Entry) => e.user?.profileImage || e.user?.photoURL;
+
+function Row({ rank, entry, mine, top }: { rank: number; entry: Entry; mine: boolean; top: number }) {
+  return (
+    <li>
+      <Link to={`/creators/${entry.id}`} className={`flex items-center gap-3 px-4 py-3 transition-colors hover:bg-foreground/[0.04] ${mine ? 'bg-primary/5' : ''}`}>
+        <span className={`w-8 shrink-0 text-center text-sm font-semibold ${rank <= 3 ? '' : 'text-foreground/50'}`}>
+          {rank <= 3 ? <span className={`inline-flex w-7 h-7 rounded-full items-center justify-center text-xs ${MEDAL[rank - 1]}`}>{rank}</span> : rank}
+        </span>
+        <Avatar src={photoOf(entry)} seed={entry.id} size={36} />
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-1 text-sm font-medium">
+            <span className="truncate">{nameOf(entry)}</span>
+            <VerifiedBadge verified={entry.user?.verified} />
+            {mine && <span className="ml-1 px-1.5 py-0.5 rounded bg-primary/15 text-primary text-[11px] font-semibold">You</span>}
+            {entry.role !== 'member' && <span className="ml-1 text-xs text-foreground/45 capitalize">{entry.role}</span>}
+          </span>
+          <span className="block mt-1 h-1 rounded-full bg-foreground/10 overflow-hidden"><span className="block h-full bg-primary/60" style={{ width: `${top ? Math.max(2, (entry.xp / top) * 100) : 0}%` }} /></span>
+        </span>
+        <span className="text-sm font-semibold tabular-nums">{entry.xp.toLocaleString()} <span className="font-normal text-foreground/45">XP</span></span>
+      </Link>
+    </li>
+  );
 }
 
-export default function CommunityLeaderboard({ communityId }: LeaderboardProps) {
-  const [topUsers, setTopUsers] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+export default function CommunityLeaderboard({ communityId }: { communityId: string }) {
+  const [entries, setEntries] = useState<Entry[] | null>(null);
+  const [me, setMe] = useState<{ xp: number; rank: number } | null>(null);
+  const uid = auth.currentUser?.uid;
 
   useEffect(() => {
-    if (!communityId) return;
-    const fetchLeaderboard = async () => {
+    let cancelled = false;
+    (async () => {
       try {
-        const membersRef = collection(db, 'communities', communityId, 'members');
-        const q = query(membersRef, orderBy('xp', 'desc'), limit(50));
-        const snap = await getDocs(q);
-        
-        const userData = await Promise.all(snap.docs.map(async (d) => {
-          const userDoc = await getDoc(doc(db, 'users', d.id));
-          return {
-            id: d.id,
-            xp: d.data().xp || 0,
-            role: d.data().role,
-            user: userDoc.exists() ? userDoc.data() : null
-          };
+        const snap = await getDocs(query(collection(db, 'communities', communityId, 'members'), orderBy('xp', 'desc'), limit(TOP)));
+        const rows = await Promise.all(snap.docs.map(async d => {
+          const u = await getDoc(doc(db, 'users', d.id)).catch(() => null);
+          return { id: d.id, xp: Number(d.data().xp) || 0, role: d.data().role || 'member', user: u?.exists() ? u.data() : null } as Entry;
         }));
-        
-        setTopUsers(userData);
-      } catch (error) {
-        console.error("Leaderboard fetch error:", error);
-      } finally {
-        setLoading(false);
+        if (cancelled) return;
+        setEntries(rows);
+
+        // Someone outside the top list still wants to know where they stand.
+        if (uid && !rows.some(r => r.id === uid)) {
+          const mine = await getDoc(doc(db, 'communities', communityId, 'members', uid));
+          if (!mine.exists()) return;
+          const xp = Number(mine.data().xp) || 0;
+          const ahead = await getCountFromServer(query(collection(db, 'communities', communityId, 'members'), where('xp', '>', xp)));
+          if (!cancelled) setMe({ xp, rank: ahead.data().count + 1 });
+        }
+      } catch (e) {
+        console.error('Leaderboard fetch error:', e);
+        if (!cancelled) setEntries([]);
       }
-    };
+    })();
+    return () => { cancelled = true; };
+  }, [communityId, uid]);
 
-    fetchLeaderboard();
-  }, [communityId]);
+  if (!entries) return <div className="flex justify-center py-20"><div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" /></div>;
 
-  if (loading) return (
-    <div className="flex justify-center py-20">
-      <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" />
-    </div>
-  );
+  const ranked = entries.filter(e => e.xp > 0);
+  const top = ranked[0]?.xp ?? 0;
+  const myIndex = ranked.findIndex(e => e.id === uid);
+  const myRank = myIndex >= 0 ? myIndex + 1 : me?.rank ?? null;
+  const myXp = myIndex >= 0 ? ranked[myIndex].xp : me?.xp ?? 0;
+  const above = myIndex > 0 ? ranked[myIndex - 1] : null;
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-bold flex items-center gap-2">
-            <Trophy className="text-yellow-500" /> Community Hall of Fame
-          </h2>
-          <p className="text-foreground/40 text-sm">Top contributors and most active members.</p>
+    <div className="max-w-3xl mx-auto space-y-5">
+      <div>
+        <h2 className="text-xl font-semibold flex items-center gap-2"><Trophy size={20} className="text-yellow-500" />Leaderboard</h2>
+        <p className="text-sm text-foreground/55">Members ranked by XP earned in this community.</p>
+      </div>
+
+      {myRank && (
+        <div className="flex items-center gap-4 p-4 rounded-xl border border-primary/30 bg-primary/5">
+          <div className="text-center w-14"><p className="text-xs text-foreground/55">Your rank</p><p className="text-2xl font-semibold">#{myRank}</p></div>
+          <div className="min-w-0 flex-1 text-sm">
+            <p className="font-medium">{myXp.toLocaleString()} XP</p>
+            <p className="text-foreground/55">{above ? `${(above.xp - myXp + 1).toLocaleString()} XP to pass ${nameOf(above)}` : myRank === 1 ? "You're in the lead." : 'Keep chatting and posting to climb.'}</p>
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* Top 3 Podium */}
-      <div className="grid grid-cols-3 gap-4 items-end pt-8 pb-4">
-        {/* 2nd Place */}
-        {topUsers[1] && (
-          <motion.div 
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="flex flex-col items-center group"
-          >
-            <div className="relative mb-4">
-              <div className="w-16 h-16 rounded-full border-4 border-slate-300 overflow-hidden bg-foreground/10">
-                <img src={(topUsers[1].user?.profileImage && topUsers[1].user.profileImage.trim() !== '') ? topUsers[1].user.profileImage : `https://api.dicebear.com/7.x/avataaars/svg?seed=${topUsers[1].id}`} alt="" />
-              </div>
-              <div className="absolute -bottom-2 -right-2 w-8 h-8 bg-slate-300 text-slate-800 rounded-full flex items-center justify-center font-bold text-xs ring-4 ring-background">2</div>
-            </div>
-            <p className="font-bold text-sm truncate w-full text-center flex items-center justify-center gap-1">
-              <span>{topUsers[1].user?.displayName || 'Anonymous'}</span>
-              <VerifiedBadge verified={topUsers[1].user?.verified} />
-            </p>
-            <p className="text-xs text-primary font-bold">{topUsers[1].xp.toLocaleString()} XP</p>
-            <div className="w-full h-24 bg-slate-300/10 border-t-2 border-slate-300 rounded-t-2xl mt-4 group-hover:bg-slate-300/20 transition-all" />
-          </motion.div>
-        )}
-
-        {/* 1st Place */}
-        {topUsers[0] && (
-          <motion.div 
-            initial={{ opacity: 0, scale: 0.9, y: 20 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            className="flex flex-col items-center group -mx-2 z-10"
-          >
-            <div className="relative mb-6">
-              <div className="w-24 h-24 rounded-full border-4 border-yellow-500 overflow-hidden bg-foreground/10 shadow-[0_0_30px_rgba(234,179,8,0.3)]">
-                <img src={(topUsers[0].user?.profileImage && topUsers[0].user.profileImage.trim() !== '') ? topUsers[0].user.profileImage : `https://api.dicebear.com/7.x/avataaars/svg?seed=${topUsers[0].id}`} alt="" />
-              </div>
-              <div className="absolute -bottom-3 -right-3 w-10 h-10 bg-yellow-500 text-yellow-950 rounded-full flex items-center justify-center font-black text-sm ring-4 ring-background">1</div>
-              <Flame className="absolute -top-4 left-1/2 -translate-x-1/2 text-orange-500 animate-pulse" size={24} />
-            </div>
-            <p className="font-black text-base truncate w-full text-center flex items-center justify-center gap-1">
-              <span>{topUsers[0].user?.displayName || 'Anonymous'}</span>
-              <VerifiedBadge verified={topUsers[0].user?.verified} />
-            </p>
-            <p className="text-sm text-primary font-bold">{topUsers[0].xp.toLocaleString()} XP</p>
-            <div className="w-full h-40 bg-yellow-500/10 border-t-4 border-yellow-500 rounded-t-3xl mt-4 group-hover:bg-yellow-500/20 transition-all" />
-          </motion.div>
-        )}
-
-        {/* 3rd Place */}
-        {topUsers[2] && (
-          <motion.div 
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="flex flex-col items-center group"
-          >
-            <div className="relative mb-4">
-              <div className="w-16 h-16 rounded-full border-4 border-amber-600 overflow-hidden bg-foreground/10">
-                <img src={(topUsers[2].user?.profileImage && topUsers[2].user.profileImage.trim() !== '') ? topUsers[2].user.profileImage : `https://api.dicebear.com/7.x/avataaars/svg?seed=${topUsers[2].id}`} alt="" />
-              </div>
-              <div className="absolute -bottom-2 -right-2 w-8 h-8 bg-amber-600 text-white rounded-full flex items-center justify-center font-bold text-xs ring-4 ring-background">3</div>
-            </div>
-            <p className="font-bold text-sm truncate w-full text-center flex items-center justify-center gap-1">
-              <span>{topUsers[2].user?.displayName || 'Anonymous'}</span>
-              <VerifiedBadge verified={topUsers[2].user?.verified} />
-            </p>
-            <p className="text-xs text-primary font-bold">{topUsers[2].xp.toLocaleString()} XP</p>
-            <div className="w-full h-20 bg-amber-600/10 border-t-2 border-amber-600 rounded-t-2xl mt-4 group-hover:bg-amber-600/20 transition-all" />
-          </motion.div>
-        )}
-      </div>
-
-      {/* Remainder of Leaderboard */}
-      <div className="glass rounded-3xl overflow-hidden border border-foreground/5 shadow-2xl">
-        <table className="w-full">
-          <thead>
-            <tr className="bg-foreground/5 text-xs font-bold text-foreground/30 uppercase tracking-widest text-left">
-              <th className="px-6 py-4">Rank</th>
-              <th className="px-6 py-4">User</th>
-              <th className="px-6 py-4 text-right">XP</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-foreground/5">
-            {topUsers.slice(3).map((user, index) => (
-              <tr key={user.id} className="hover:bg-foreground/[0.02] transition-colors group">
-                <td className="px-6 py-4 text-sm font-bold text-foreground/40 group-hover:text-foreground">#{index + 4}</td>
-                <td className="px-6 py-4">
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-full bg-foreground/10 overflow-hidden">
-                      <img src={(user.user?.profileImage && user.user.profileImage.trim() !== '') ? user.user.profileImage : `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.id}`} alt="" />
-                    </div>
-                    <div>
-                      <p className="text-sm font-bold flex items-center gap-1">
-                        <span>{user.user?.displayName || 'Anonymous'}</span>
-                        <VerifiedBadge verified={user.user?.verified} />
-                      </p>
-                      <p className="text-[10px] text-foreground/40">{user.role}</p>
-                    </div>
-                  </div>
-                </td>
-                <td className="px-6 py-4 text-right font-mono text-primary font-bold">{user.xp.toLocaleString()}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      {ranked.length === 0 ? (
+        <div className="py-16 flex flex-col items-center gap-2 rounded-xl border border-dashed border-foreground/15 text-foreground/50">
+          <Trophy size={30} /><p className="text-sm">No one has earned XP here yet. Join the conversation to be first.</p>
+        </div>
+      ) : (
+        <>
+          <ol className="rounded-xl border border-foreground/10 divide-y divide-foreground/10 overflow-hidden">
+            {ranked.map((e, i) => <Row key={e.id} rank={i + 1} entry={e} mine={e.id === uid} top={top} />)}
+          </ol>
+          {ranked.length >= TOP && <p className="text-xs text-center text-foreground/45">Showing the top {TOP}.</p>}
+        </>
+      )}
     </div>
   );
 }

@@ -1,33 +1,18 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import * as cheerio from 'cheerio';
-import axios from 'axios';
+import { fetchMetadata, validateUrl } from './_lib/unfurl.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  const { url } = req.query;
-  if (!url || typeof url !== 'string') {
-    return res.status(400).json({ error: 'URL is required' });
-  }
+  const url = typeof req.query.url === 'string' ? validateUrl(req.query.url) : null;
+  if (!url) return res.status(400).json({ error: 'A public http(s) URL is required' });
 
   try {
-    const response = await axios.get(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; Bot/1.0; +http://example.com/bot)',
-      },
-      timeout: 5000,
-    });
-
-    const $ = cheerio.load(response.data);
-    const metadata = {
-      title: $('meta[property="og:title"]').attr('content') || $('title').text() || url,
-      description: $('meta[property="og:description"]').attr('content') || $('meta[name="description"]').attr('content') || '',
-      image: $('meta[property="og:image"]').attr('content') || $('meta[name="twitter:image"]').attr('content') || '',
-      siteName: $('meta[property="og:site_name"]').attr('content') || new URL(url).hostname,
-      url: url,
-    };
-
+    const metadata = await fetchMetadata(url);
+    // Previews rarely change; let the CDN absorb repeat requests.
+    res.setHeader('Cache-Control', 'public, s-maxage=86400, stale-while-revalidate=604800');
     res.json(metadata);
   } catch (error: any) {
     console.error('Unfurl error:', error.message);
-    res.status(500).json({ error: 'Failed to unfurl URL' });
+    res.setHeader('Cache-Control', 'public, s-maxage=3600');
+    res.status(error.status === 429 ? 429 : 502).json({ error: 'Failed to unfurl URL' });
   }
 }
