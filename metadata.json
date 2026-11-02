@@ -1,1 +1,1 @@
-{"name":"Kith","description":"A developer-focused social network and marketplace for production-ready UI components and systems.","requestFramePermissions":["camera","microphone","display-capture"],"majorCapabilities":["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]}
+{"name":"Kith","description":"A home for communities, live rooms, events, bounties and creator work. Find your people, share a room, and make something together.","requestFramePermissions":["camera","microphone","display-capture"],"majorCapabilities":["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]}

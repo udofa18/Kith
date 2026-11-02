@@ -37,9 +37,11 @@ import ArticleWrite from './pages/ArticleWrite';
 import ArticleView from './pages/ArticleView';
 import ArticlesPage from './pages/ArticlesPage';
 import AdminPage from './pages/AdminPage';
+import DesignSystemPage from './pages/DesignSystemPage';
 
 // Components
 import AppSidebar from './components/AppSidebar';
+import MobileNav from './components/MobileNav';
 import ComposeFab from './components/ComposeDialog';
 
 import { LiveSessionProvider } from './contexts/LiveSessionContext';
@@ -69,6 +71,22 @@ function RequireAuth({ user, children }: { user: any, children: ReactElement }) 
   return user ? children : <Navigate to="/login" state={{ from: location }} replace />;
 }
 
+function useMediaQuery(query: string) {
+  const [matches, setMatches] = useState(() =>
+    typeof window === 'undefined' ? false : window.matchMedia(query).matches,
+  );
+
+  useEffect(() => {
+    const media = window.matchMedia(query);
+    const onChange = () => setMatches(media.matches);
+    onChange();
+    media.addEventListener('change', onChange);
+    return () => media.removeEventListener('change', onChange);
+  }, [query]);
+
+  return matches;
+}
+
 function AppRoutes({ user, onboardingRequired }: { user: any, onboardingRequired: boolean }) {
   const location = useLocation();
   const isOnboardingPath = location.pathname === '/onboarding';
@@ -95,6 +113,7 @@ function AppRoutes({ user, onboardingRequired }: { user: any, onboardingRequired
       {/* Public */}
       <Route path="/" element={<LandingPage />} />
       <Route path="/login" element={<AuthPage />} />
+      <Route path="/design-system" element={<DesignSystemPage />} />
       <Route path="/marketplace" element={<MarketplacePage />} />
       <Route path="/explore" element={<Navigate to="/marketplace" replace />} />
       <Route path="/products/:id" element={<ComponentDetails />} />
@@ -137,6 +156,7 @@ function AppContent({ user, onboardingRequired }: { user: any, onboardingRequire
   const location = useLocation();
   const navigate = useNavigate();
   const { activeSession, leaveVoice } = useVoice();
+  const isDesktop = useMediaQuery('(min-width: 768px)');
   
   const isLandingPage = location.pathname === '/';
   const isLoginPage = location.pathname === '/login';
@@ -161,13 +181,14 @@ function AppContent({ user, onboardingRequired }: { user: any, onboardingRequire
   };
 
   const mainContent = (
-    <div className="h-screen flex bg-background overflow-hidden text-foreground">
-      {showSidebar && <AppSidebar user={user} />}
-      <main className="flex-grow h-full overflow-hidden transition-all duration-300 relative">
+    <div className="h-screen flex flex-col md:flex-row bg-background overflow-hidden text-foreground">
+      {showSidebar && isDesktop && <AppSidebar user={user} />}
+      <main className="min-h-0 flex-1 overflow-hidden transition-all duration-300 relative">
         <div className="h-full overflow-y-auto custom-scrollbar">
           <AppRoutes user={user} onboardingRequired={onboardingRequired} />
         </div>
       </main>
+      {showSidebar && !isDesktop && <MobileNav user={user} />}
       {activeSession && !isViewingVoiceChannel && (
         <PersistentVoiceOverlay onReturn={handleReturnToVoice} />
       )}

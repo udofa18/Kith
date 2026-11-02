@@ -1,576 +1,929 @@
-import { useState, useEffect } from 'react';
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { 
-  Clock, 
-  TrendingUp, 
-  Award, 
-  Users, 
-  Bell, 
-  MessageSquare, 
-  Calendar, 
-  FileText,
-  Search,
-  Settings,
-  LogOut,
-  User as UserIcon,
-  Zap,
-  Home,
-  Compass,
-  Wallet,
-  Store,
-  Plus,
-  Globe,
-  PanelLeft,
-  ChevronRight,
+import { createPortal } from 'react-dom';
+import {
+  ArrowUpRight,
+  Award,
+  Bell,
+  Calendar,
+  ChevronDown,
   ChevronLeft,
-  Layout,
+  ChevronRight,
+  FileText,
+  Globe,
   HelpCircle,
-  BarChart3,
-  UserCircle,
+  Home,
+  Layout,
+  LogOut,
+  MessageSquare,
   Moon,
+  Settings,
+  Shield,
+  Sparkles,
+  Store,
   Sun,
-  Shield
+  Users,
+  X,
 } from 'lucide-react';
-import { collection, onSnapshot, query, where, doc, getDoc, collectionGroup, updateDoc, serverTimestamp } from 'firebase/firestore';
-import { auth, db, handleFirestoreError, OperationType } from '../firebase';
+import { auth } from '../firebase';
 import { signOut } from 'firebase/auth';
 import KithLogo from './KithLogo';
 import { motion, AnimatePresence } from 'motion/react';
 import VerifiedBadge from './VerifiedBadge';
+import { avatarFor, levelFor } from '../lib/profile';
+import { useKithNavData } from '../hooks/useKithNavData';
+import { useKithTheme, type Theme } from '../hooks/useKithTheme';
+
+const TONES = {
+  feed: '#ff6b4a',
+  communities: '#82e6c8',
+  marketplace: '#b69cff',
+  bounties: '#ffb65c',
+  articles: '#f3a6c9',
+  events: '#ff9d7a',
+  notifications: '#ffcf7a',
+  messages: '#9ad8ff',
+  admin: '#ff8f8f',
+  neutral: '#ffb65c',
+};
+
+/* -------------------------------------------------------------------------- */
+
+function XpRing({
+  percent,
+  size = 44,
+  stroke = 2.5,
+  track = 'var(--sb-ring-track, rgba(247,242,232,0.14))',
+  children,
+}: {
+  percent: number;
+  size?: number;
+  stroke?: number;
+  track?: string;
+  children: ReactNode;
+}) {
+  const gradientId = useId();
+  const radius = (size - stroke) / 2 - 2;
+  const circumference = 2 * Math.PI * radius;
+  const offset = circumference - (circumference * Math.min(Math.max(percent, 0), 100)) / 100;
+
+  return (
+    <span className="relative inline-grid shrink-0 place-items-center" style={{ width: size, height: size }}>
+      <svg width={size} height={size} className="-rotate-90" aria-hidden>
+        <defs>
+          <linearGradient id={gradientId} x1="0" y1="0" x2="1" y2="1">
+            <stop stopColor="#ffb65c" />
+            <stop offset="1" stopColor="#ff6b4a" />
+          </linearGradient>
+        </defs>
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          fill="none"
+          stroke={track}
+          strokeWidth={stroke}
+        />
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          fill="none"
+          stroke={`url(#${gradientId})`}
+          strokeWidth={stroke}
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={offset}
+        />
+      </svg>
+      <span className="absolute inset-0 grid place-items-center">{children}</span>
+    </span>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+
+function ProfilePopup({
+  open,
+  user,
+  anchorRef,
+  communityCount,
+  theme,
+  onToggleTheme,
+  onClose,
+  onLogout,
+}: {
+  open: boolean;
+  user: any;
+  anchorRef: RefObject<HTMLButtonElement | null>;
+  communityCount: number;
+  theme: Theme;
+  onToggleTheme: () => void;
+  onClose: () => void;
+  onLogout: () => void;
+}) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
+  const [isNarrow, setIsNarrow] = useState(() =>
+    typeof window === 'undefined' ? false : window.innerWidth < 640,
+  );
+
+  const xp = Number(user?.xp) || 0;
+  const level = levelFor(xp);
+  const xpPercent = xp % 100;
+  const xpToNext = 100 - xpPercent;
+
+  useEffect(() => {
+    const onResize = () => setIsNarrow(window.innerWidth < 640);
+    onResize();
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setPosition(null);
+      return;
+    }
+
+    const update = () => {
+      if (window.innerWidth < 640) {
+        setPosition(null);
+        return;
+      }
+      const anchor = anchorRef.current?.getBoundingClientRect();
+      if (!anchor) return;
+
+      const width = 356;
+      const height = panelRef.current?.offsetHeight || 620;
+      const left = Math.max(12, Math.min(anchor.right + 12, window.innerWidth - width - 12));
+      const top = Math.max(12, Math.min(anchor.top - 8, window.innerHeight - height - 12));
+      setPosition({ left, top });
+    };
+
+    update();
+    const frame = requestAnimationFrame(update);
+    window.addEventListener('resize', update);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener('resize', update);
+    };
+  }, [open, anchorRef]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+
+  useEffect(() => {
+    if (!open) return;
+    const frame = requestAnimationFrame(() => panelRef.current?.focus());
+    return () => {
+      cancelAnimationFrame(frame);
+      anchorRef.current?.focus();
+    };
+  }, [open, anchorRef]);
+
+  const menuItems = [
+    {
+      to: '/dashboard',
+      icon: Layout,
+      label: 'Dashboard',
+      hint: 'Your home base',
+    },
+    {
+      to: '/settings',
+      icon: Settings,
+      label: 'Account settings',
+      hint: 'Profile, privacy, notifications',
+    },
+  ];
+
+  return createPortal(
+    <AnimatePresence>
+      {open && (
+        <>
+          <motion.div
+            key="profile-backdrop"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            onClick={onClose}
+            className={`fixed inset-0 z-[120] ${
+              isNarrow ? 'bg-[#0e0b13]/45 backdrop-blur-sm' : 'bg-[#0e0b13]/15'
+            }`}
+          />
+
+          <motion.div
+            key="profile-panel"
+            ref={panelRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Your account menu"
+            tabIndex={-1}
+            initial={{ opacity: 0, y: 8, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 6, scale: 0.98 }}
+            transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+            className={`fixed z-[121] w-[min(356px,calc(100vw-28px))] overflow-y-auto overflow-x-hidden rounded-[28px] border border-[#211a28]/10 bg-[#f7f2e8] text-[#211a28] shadow-[0_44px_120px_-32px_rgba(14,11,19,0.85)] outline-none no-scrollbar max-h-[calc(100dvh-28px)] sm:max-h-[660px] ${
+              isNarrow ? 'left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2' : ''
+            }`}
+            style={
+              isNarrow
+                ? undefined
+                : {
+                    left: position?.left ?? 96,
+                    top: position?.top ?? 16,
+                    visibility: position ? 'visible' : 'hidden',
+                  }
+            }
+          >
+            {/* Warm header */}
+            <div className="relative overflow-hidden bg-[#211a28] px-5 pb-5 pt-5 text-[#f7f2e8]">
+              <div className="pointer-events-none absolute -right-12 -top-16 h-40 w-40 rounded-full bg-[radial-gradient(circle,rgba(255,107,74,0.34),transparent_68%)] blur-2xl" />
+              <div className="pointer-events-none absolute -bottom-16 -left-12 h-36 w-36 rounded-full bg-[radial-gradient(circle,rgba(182,156,255,0.24),transparent_70%)] blur-2xl" />
+
+              <button
+                type="button"
+                onClick={onClose}
+                aria-label="Close account menu"
+                className="absolute right-3 top-3 z-10 grid h-8 w-8 place-items-center rounded-full text-[#f7f2e8]/55 transition-colors hover:bg-[#f7f2e8]/10 hover:text-[#f7f2e8]"
+              >
+                <X size={15} />
+              </button>
+
+              <div className="relative flex items-start gap-3.5">
+                <XpRing percent={xpPercent} size={62} stroke={3} track="rgba(247,242,232,0.16)">
+                  <img
+                    src={avatarFor(user)}
+                    alt=""
+                    referrerPolicy="no-referrer"
+                    className="h-[46px] w-[46px] rounded-full bg-[#2a2234] object-cover ring-2 ring-[#211a28]"
+                  />
+                  <span className="absolute bottom-0.5 right-0.5 h-3 w-3 rounded-full border-2 border-[#211a28] bg-[#82e6c8]" />
+                </XpRing>
+
+                <div className="min-w-0 flex-1 pr-5 pt-0.5">
+                  <div className="flex items-center gap-0.5">
+                    <p className="truncate font-display text-[17px] font-semibold leading-tight tracking-[-0.035em] text-[#f7f2e8]">
+                      {user?.displayName || 'Creator'}
+                    </p>
+                    <VerifiedBadge
+                      verified={user?.verified}
+                      size={13}
+                      className="shrink-0 text-[#ffb65c]"
+                    />
+                  </div>
+                  <p className="mt-0.5 truncate text-[11px] text-[#f7f2e8]/45">{user?.email}</p>
+                  <span className="mt-2 inline-flex items-center gap-1 rounded-full border border-[#ffb65c]/30 bg-[#ffb65c]/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.14em] text-[#ffb65c]">
+                    <Sparkles size={9} />
+                    Level {level}
+                  </span>
+                </div>
+              </div>
+
+              <div className="relative mt-4">
+                <div className="flex items-center justify-between text-[9px] font-semibold uppercase tracking-[0.14em] text-[#f7f2e8]/40">
+                  <span>{xp.toLocaleString()} XP</span>
+                  <span>
+                    {xpToNext} XP to level {level + 1}
+                  </span>
+                </div>
+                <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-[#f7f2e8]/10">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-[#ffb65c] to-[#ff6b4a]"
+                    style={{ width: `${xpPercent}%` }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Body */}
+            <div className="p-3">
+              <div className="grid grid-cols-3 gap-2">
+                <div className="rounded-2xl bg-[#211a28]/[0.045] px-2 py-2.5 text-center">
+                  <p className="font-display text-[17px] font-semibold leading-none tracking-[-0.04em] text-[#211a28]">
+                    {communityCount}
+                  </p>
+                  <p className="mt-1 text-[8.5px] font-bold uppercase tracking-[0.15em] text-[#211a28]/40">
+                    Circles
+                  </p>
+                </div>
+                <div className="rounded-2xl bg-[#211a28]/[0.045] px-2 py-2.5 text-center">
+                  <p className="font-display text-[17px] font-semibold leading-none tracking-[-0.04em] text-[#211a28]">
+                    {level}
+                  </p>
+                  <p className="mt-1 text-[8.5px] font-bold uppercase tracking-[0.15em] text-[#211a28]/40">
+                    Level
+                  </p>
+                </div>
+                <div className="rounded-2xl bg-[#211a28]/[0.045] px-2 py-2.5 text-center">
+                  <p className="font-display text-[17px] font-semibold leading-none tracking-[-0.04em] text-[#211a28]">
+                    {xp.toLocaleString()}
+                  </p>
+                  <p className="mt-1 text-[8.5px] font-bold uppercase tracking-[0.15em] text-[#211a28]/40">
+                    Total XP
+                  </p>
+                </div>
+              </div>
+
+              <Link
+                to={`/creators/${user?.uid}`}
+                onClick={onClose}
+                className="group mt-2 flex items-center justify-between rounded-2xl bg-[#211a28] px-4 py-3 text-[#f7f2e8] transition-all hover:bg-[#2c2233]"
+              >
+                <span className="text-[12.5px] font-semibold">View your portfolio</span>
+                <span className="grid h-7 w-7 place-items-center rounded-full bg-[#f7f2e8]/10 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5">
+                  <ArrowUpRight size={14} />
+                </span>
+              </Link>
+
+              <div className="mt-2 space-y-0.5">
+                {menuItems.map((item) => (
+                  <Link
+                    key={item.to}
+                    to={item.to}
+                    onClick={onClose}
+                    className="group flex items-center gap-3 rounded-xl px-2.5 py-2 transition-colors hover:bg-[#211a28]/[0.055]"
+                  >
+                    <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-[#211a28]/[0.05] text-[#211a28]/55 transition-colors group-hover:bg-[#ff6b4a] group-hover:text-[#f7f2e8]">
+                      <item.icon size={15} />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[12.5px] font-semibold text-[#211a28]">
+                        {item.label}
+                      </span>
+                      <span className="block truncate text-[10px] text-[#211a28]/45">
+                        {item.hint}
+                      </span>
+                    </span>
+                    <ChevronRight
+                      size={14}
+                      className="shrink-0 text-[#211a28]/25 transition-transform group-hover:translate-x-0.5"
+                    />
+                  </Link>
+                ))}
+              </div>
+
+              <div className="my-2 h-px bg-[#211a28]/8" />
+
+              <button
+                type="button"
+                onClick={onToggleTheme}
+                className="group flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left transition-colors hover:bg-[#211a28]/[0.055]"
+              >
+                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-[#211a28]/[0.05] text-[#211a28]/55 transition-colors group-hover:bg-[#ffb65c] group-hover:text-[#211a28]">
+                  {theme === 'dark' ? <Moon size={15} /> : <Sun size={15} />}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[12.5px] font-semibold text-[#211a28]">
+                    Appearance
+                  </span>
+                  <span className="block text-[10px] text-[#211a28]/45">
+                    {theme === 'dark' ? 'Warm and low-lit' : 'Bright and airy'}
+                  </span>
+                </span>
+                <span className="rounded-full border border-[#211a28]/12 px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.12em] text-[#211a28]/45">
+                  {theme}
+                </span>
+              </button>
+
+              <Link
+                to="/help"
+                onClick={onClose}
+                className="group flex items-center gap-3 rounded-xl px-2.5 py-2 transition-colors hover:bg-[#211a28]/[0.055]"
+              >
+                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-[#211a28]/[0.05] text-[#211a28]/55 transition-colors group-hover:bg-[#b69cff] group-hover:text-[#211a28]">
+                  <HelpCircle size={15} />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[12.5px] font-semibold text-[#211a28]">
+                    Help & support
+                  </span>
+                  <span className="block text-[10px] text-[#211a28]/45">
+                    Need a hand? We are around.
+                  </span>
+                </span>
+                <ChevronRight
+                  size={14}
+                  className="shrink-0 text-[#211a28]/25 transition-transform group-hover:translate-x-0.5"
+                />
+              </Link>
+
+              <button
+                type="button"
+                onClick={onLogout}
+                className="mt-2 flex w-full items-center justify-between rounded-2xl border border-[#c9452a]/25 px-4 py-2.5 text-[#b23a24] transition-colors hover:bg-[#c9452a] hover:text-[#f7f2e8]"
+              >
+                <span className="text-[12.5px] font-semibold">Sign out</span>
+                <LogOut size={15} />
+              </button>
+
+              <p className="mt-3 text-center text-[8.5px] font-bold uppercase tracking-[0.2em] text-[#211a28]/30">
+                Kith · make room for your people
+              </p>
+            </div>
+          </motion.div>
+        </>
+      )}
+    </AnimatePresence>,
+    document.body,
+  );
+}
+
+/* -------------------------------------------------------------------------- */
 
 export default function AppSidebar({ user }: { user: any }) {
   const location = useLocation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [isExpanded, setIsExpanded] = useState(false);
-  
-  const [unreadNotifications, setUnreadNotifications] = useState(0);
-  const [totalUnreadDMs, setTotalUnreadDMs] = useState(0);
-  const [joinedCommunities, setJoinedCommunities] = useState<any[]>([]);
-  const [communityUnreads, setCommunityUnreads] = useState<Record<string, number>>({});
+
   const [showProfilePopup, setShowProfilePopup] = useState(false);
-  const [theme, setTheme] = useState(document.documentElement.classList.contains('dark') ? 'dark' : 'light');
+  const { theme, toggleTheme } = useKithTheme(user);
+  const { unreadNotifications, totalUnreadDMs, joinedCommunities, communityUnreads } =
+    useKithNavData(user);
 
-  const toggleTheme = async () => {
-    const newTheme = theme === 'dark' ? 'light' : 'dark';
-    setTheme(newTheme);
-    localStorage.setItem('theme', newTheme);
-    document.documentElement.classList.remove('light', 'dark');
-    document.documentElement.classList.add(newTheme);
-    document.documentElement.style.colorScheme = newTheme;
-    
-    if (user?.uid) {
-      try {
-        await updateDoc(doc(db, 'users', user.uid), {
-          theme: newTheme,
-          updatedAt: serverTimestamp()
-        });
-      } catch (error) {
-        console.error("Error updating theme:", error);
-      }
-    }
-  };
+  const profileButtonRef = useRef<HTMLButtonElement>(null);
 
+  // Close the popup whenever the route changes.
   useEffect(() => {
-    // Keep internal theme state in sync with DOM
-    const observer = new MutationObserver(() => {
-      const isDark = document.documentElement.classList.contains('dark');
-      setTheme(isDark ? 'dark' : 'light');
-    });
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
-    return () => observer.disconnect();
-  }, []);
-
-  useEffect(() => {
-    if (!user) return;
-
-    // Fetch communities the user is a member of
-    const qMembers = query(
-      collectionGroup(db, 'members'),
-      where('userId', '==', user.uid)
-    );
-
-    const unsubscribeMembers = onSnapshot(qMembers, async (snapshot) => {
-      const communityIds = snapshot.docs.map(d => d.ref.parent.parent!.id);
-      
-      const communitiesData = await Promise.all(
-        communityIds.map(async (id) => {
-          const d = await getDoc(doc(db, 'communities', id));
-          return d.exists() ? { id: d.id, ...d.data() } : null;
-        })
-      );
-      
-      setJoinedCommunities(communitiesData.filter(c => c !== null));
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'members');
-    });
-
-    // Notifications
-    const qNotifs = query(
-      collection(db, 'notifications'),
-      where('recipientId', '==', user.uid),
-      where('read', '==', false)
-    );
-    const unsubscribeNotifs = onSnapshot(qNotifs, (notifSnap) => {
-      setUnreadNotifications(notifSnap.size);
-      
-      const unreads: Record<string, number> = {};
-      notifSnap.docs.forEach(doc => {
-        const data = doc.data();
-        if (data.type === 'message' && data.relatedId) {
-          unreads[data.relatedId] = (unreads[data.relatedId] || 0) + 1;
-        }
-      });
-      setCommunityUnreads(unreads);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'notifications');
-    });
-
-    // DMs
-    const qConvs = query(
-      collection(db, 'conversations'),
-      where('participants', 'array-contains', user.uid)
-    );
-    const unsubscribeConvs = onSnapshot(qConvs, (snapshot) => {
-      let dmCount = 0;
-      let requestCount = 0;
-      snapshot.docs.forEach(d => {
-        const data = d.data();
-        const incomingRequest = data.status === 'pending' && data.requestedBy !== user.uid;
-        const hidden = data.status === 'declined' && data.requestedBy !== user.uid;
-        if (incomingRequest) requestCount += 1;
-        else if (!hidden && !data.mutedBy?.includes(user.uid)) dmCount += data.unreadCount?.[user.uid] || 0;
-      });
-      setTotalUnreadDMs(dmCount + requestCount);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'conversations');
-    });
-
-    return () => {
-      unsubscribeMembers();
-      unsubscribeNotifs();
-      unsubscribeConvs();
-    };
-  }, [user]);
+    setShowProfilePopup(false);
+  }, [location.pathname, location.search]);
 
   const handleLogout = async () => {
+    setShowProfilePopup(false);
     await signOut(auth);
     navigate('/');
   };
 
   const isActive = (path: string) => location.pathname === path;
-  const isDashboardActive = location.pathname === '/dashboard';
-
-  const getNavGradient = (to: string, active: boolean) => {
-    let gradient = '';
-    let glowColor = '';
-    
-    if (to === '/feed' || to.startsWith('/feed?')) {
-      if (to.includes('view=communities')) {
-        gradient = 'from-emerald-400 to-teal-500 dark:from-emerald-500 dark:to-teal-600';
-        glowColor = 'rgba(16,185,129,0.35)';
-      } else if (to.includes('view=notifications')) {
-        gradient = 'from-pink-500 to-rose-600 dark:from-pink-600 dark:to-rose-700';
-        glowColor = 'rgba(236,72,153,0.35)';
-      } else if (to.includes('view=messages')) {
-        gradient = 'from-cyan-400 to-blue-500 dark:from-cyan-500 dark:to-blue-600';
-        glowColor = 'rgba(34,211,238,0.35)';
-      } else {
-        // Standard Neural Feed
-        gradient = 'from-blue-500 to-indigo-600 dark:from-blue-600 dark:to-indigo-700';
-        glowColor = 'rgba(59,130,246,0.35)';
-      }
-    } else if (to.includes('/marketplace')) {
-      gradient = 'from-teal-400 to-indigo-600 dark:from-teal-500 dark:to-indigo-700';
-      glowColor = 'rgba(20,184,166,0.35)';
-    } else if (to.includes('/challenges')) {
-      gradient = 'from-indigo-600 to-purple-600 dark:from-indigo-500 dark:to-purple-700';
-      glowColor = 'rgba(79,70,229,0.35)';
-    } else if (to.includes('/articles')) {
-      gradient = 'from-violet-500 to-fuchsia-600 dark:from-violet-600 dark:to-fuchsia-700';
-      glowColor = 'rgba(139,92,246,0.35)';
-    } else if (to.includes('/events')) {
-      gradient = 'from-rose-500 to-orange-500 dark:from-rose-600 dark:to-orange-600';
-      glowColor = 'rgba(244,63,94,0.35)';
-    } else if (to.includes('/admin')) {
-      gradient = 'from-red-600 to-rose-900 dark:from-red-500 dark:to-rose-800';
-      glowColor = 'rgba(220,38,38,0.4)';
-    } else {
-      gradient = 'from-[#7C3AED]/80 to-[#7C3AED] dark:from-[#7C3AED]/90 dark:to-[#7C3AED]';
-      glowColor = 'rgba(124,58,237,0.35)';
-    }
-
-    return { gradient, glowColor };
+  const isFeedView = (view?: string) => {
+    if (location.pathname !== '/feed') return false;
+    if (!view) return !searchParams.has('view');
+    return searchParams.get('view') === view;
   };
 
-  const NavItem = ({ to, icon: Icon, label, active, badge }: { to: string, icon: any, label: string, active: boolean, badge?: number }) => {
-    const { gradient, glowColor } = getNavGradient(to, active);
-    
-    return (
-      <Link 
-        to={to}
-        className={`relative flex items-center gap-3 p-1.5 rounded-2xl transition-all group ${
-          active 
-            ? 'bg-black/[0.04] dark:bg-white/[0.04] border border-black/5 dark:border-white/10 text-black dark:text-white font-black' 
-            : 'hover:bg-black/5 dark:hover:bg-white/5 text-black/50 dark:text-white/50 hover:text-black dark:hover:text-white font-bold'
+  const xp = Number(user?.xp) || 0;
+  const level = levelFor(xp);
+  const xpPercent = xp % 100;
+
+  const NavItem = ({
+    to,
+    icon: Icon,
+    label,
+    active,
+    badge,
+    tone = TONES.neutral,
+  }: {
+    to: string;
+    icon: any;
+    label: string;
+    active: boolean;
+    badge?: number;
+    tone?: string;
+  }) => (
+    <Link
+      to={to}
+      title={isExpanded ? undefined : label}
+      aria-label={label}
+      aria-current={active ? 'page' : undefined}
+      className={`group relative flex items-center gap-3 rounded-2xl p-1.5 transition-colors ${
+        isExpanded ? '' : 'justify-center'
+      } ${active ? 'bg-[var(--sb-active-row)]' : 'hover:bg-[var(--sb-row-hover)]'}`}
+    >
+      <span
+        className={`relative grid h-10 w-10 shrink-0 place-items-center rounded-[13px] transition-all duration-300 ${
+          active ? '' : 'bg-[var(--sb-chip)] group-hover:bg-[var(--sb-chip-hover)]'
         }`}
+        style={
+          active
+            ? {
+                background: `linear-gradient(140deg, ${tone}, ${tone}b3)`,
+                color: '#1a1210',
+                boxShadow: `0 10px 22px -12px ${tone}`,
+              }
+            : { color: tone }
+        }
       >
-        <div 
-          className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 bg-gradient-to-br ${gradient} text-white transition-all duration-300 ${
-            active ? 'scale-105 shadow-md' : 'opacity-80 group-hover:opacity-100 group-hover:scale-105'
-          }`}
-          style={active ? { boxShadow: `0 4px 14px ${glowColor}` } : {}}
-        >
-          <Icon size={18} className="!text-white" />
-        </div>
-        <AnimatePresence>
-          {isExpanded && (
-            <motion.span 
-              initial={{ opacity: 0, x: -10 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -10 }}
-              className="text-sm whitespace-nowrap"
-            >
-              {label}
-            </motion.span>
-          )}
-        </AnimatePresence>
-        {badge !== undefined && badge > 0 && !active && (
-          <span className={`absolute ${isExpanded ? 'right-4' : 'top-0 right-0'} flex h-6 w-6 items-center justify-center rounded-full bg-primary text-xs font-black text-white border-2 border-white dark:border-[#050505] shadow-lg shadow-primary/40 z-10 p-1`}>
+        <Icon size={18} strokeWidth={2.1} />
+        {badge !== undefined && badge > 0 && (
+          <span className="absolute -right-1.5 -top-1.5 z-10 grid h-[18px] min-w-[18px] place-items-center rounded-full bg-[#ff6b4a] px-1 text-[9px] font-bold leading-none text-[#1a1210] ring-2 ring-[var(--sb-bg)]">
             {badge > 9 ? '9+' : badge}
           </span>
         )}
-        {!isExpanded && (
-          <div className="absolute left-full ml-4 px-3 py-1.5 bg-white dark:bg-[#0A0A0A] border border-black/10 dark:border-white/10 rounded-xl text-xs font-bold whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-all z-[9999] shadow-2xl text-black dark:text-white">
+      </span>
+
+      <AnimatePresence initial={false}>
+        {isExpanded && (
+          <motion.span
+            initial={{ opacity: 0, x: -6 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -6 }}
+            transition={{ duration: 0.18 }}
+            className={`flex-1 truncate text-[13px] tracking-[-0.01em] ${
+              active
+                ? 'font-semibold text-[var(--sb-text)]'
+                : 'font-medium text-[var(--sb-muted)] group-hover:text-[var(--sb-text)]'
+            }`}
+          >
             {label}
-          </div>
+          </motion.span>
         )}
-      </Link>
-    );
-  };
+      </AnimatePresence>
 
-  const xpPercent = Math.min((user?.xp || 0) % 100, 100);
-
-  const PopupLink = ({ to, icon: Icon, label, onClick }: { to: string, icon: any, label: string, onClick: () => void }) => (
-    <Link 
-      to={to} 
-      onClick={onClick}
-      className="flex items-center gap-3 w-full p-3 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 text-black/70 dark:text-white/70 hover:text-black dark:hover:text-white transition-all group"
-    >
-      <Icon size={18} className="group-hover:text-primary transition-colors" />
-      <span className="text-sm font-bold">{label}</span>
+      {isExpanded && active && (
+        <span className="mr-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[#ff6b4a]" />
+      )}
     </Link>
   );
 
   return (
-    <motion.aside 
-      initial={false}
-      animate={{ width: isExpanded ? 240 : 80 }}
-      className="h-screen bg-white dark:bg-[#050505] border-r border-black/5 dark:border-white/5 flex flex-col z-50 transition-all duration-300 ease-in-out shrink-0 overflow-hidden"
+    <aside
+      className="app-sidebar relative z-50 hidden h-screen shrink-0 flex-col overflow-hidden border-r border-[var(--sb-border)] transition-[width] duration-300 ease-in-out md:flex"
+      style={{ width: isExpanded ? 264 : 80 }}
     >
-      {/* Header / Logo */}
-      <div className="p-4 flex items-center justify-between">
-        <Link to="/" className="flex items-center gap-3">
-          <KithLogo size={32} className="shrink-0" />
-          <AnimatePresence>
-            {isExpanded && (
-              <motion.span 
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="text-xl font-black italic tracking-tighter bg-gradient-to-br from-black to-black/60 dark:from-white dark:to-white/60 bg-clip-text text-transparent"
-              >
-                KITH
-              </motion.span>
-            )}
-          </AnimatePresence>
-        </Link>
-        <button 
-          onClick={() => setIsExpanded(!isExpanded)}
-          className="p-2 hover:bg-black/5 dark:hover:bg-white/5 rounded-xl text-black/30 dark:text-white/30 hover:text-black dark:hover:text-white transition-colors"
-        >
-          {isExpanded ? <ChevronLeft size={20} /> : <ChevronRight size={20} />}
-        </button>
+      {/* Warm atmosphere */}
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div className="absolute -left-16 -top-24 h-64 w-64 rounded-full bg-[radial-gradient(circle,rgba(255,107,74,0.16),transparent_70%)] blur-2xl" />
+        <div className="absolute -bottom-24 -right-16 h-56 w-56 rounded-full bg-[radial-gradient(circle,rgba(182,156,255,0.14),transparent_70%)] blur-2xl" />
       </div>
 
-      {/* User Profile / XP */}
-      <div className="px-4 py-6 relative">
-        {user ? (
-          <>
-            <div 
-              className={`relative flex items-center gap-4 p-2 rounded-2xl bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 ${isExpanded ? 'justify-start' : 'justify-center'} cursor-pointer hover:bg-black/10 dark:hover:bg-white/10 transition-all z-[101]`} 
-              onClick={() => setShowProfilePopup(!showProfilePopup)}
-            >
-              <div className="relative shrink-0">
-                 <svg className="w-10 h-10 -rotate-90">
-                    <circle
-                      cx="20"
-                      cy="20"
-                      r="18"
-                      strokeWidth="3"
-                      stroke="currentColor"
-                      fill="transparent"
-                      className="text-black/10 dark:text-white/10"
-                    />
-                    <circle
-                      cx="20"
-                      cy="20"
-                      r="18"
-                      strokeWidth="3"
-                      strokeDasharray={113}
-                      strokeDashoffset={113 - (113 * xpPercent) / 100}
-                      strokeLinecap="round"
-                      stroke="currentColor"
-                      fill="transparent"
-                      className="text-teal-500"
-                    />
-                  </svg>
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <img 
-                      src={(user?.profileImage && user.profileImage.trim() !== '') ? user.profileImage : (user?.photoURL && user.photoURL.trim() !== '' ? user.photoURL : `https://api.dicebear.com/7.x/avataaars/svg?seed=${user?.uid}`)} 
-                      alt="P"
-                      className="w-7 h-7 rounded-full object-cover"
-                      referrerPolicy="no-referrer"
-                    />
-                  </div>
-              </div>
-              <AnimatePresence>
-                {isExpanded && (
-                  <motion.div 
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    className="overflow-hidden"
-                  >
-                    <div className="text-xs font-black truncate text-black dark:text-white flex items-center gap-1">
-                      <span>{user?.displayName || 'Creator'}</span>
-                      <VerifiedBadge verified={user?.verified} />
-                    </div>
-                    <div className="text-[10px] text-teal-600 dark:text-teal-400 font-mono font-bold tracking-tighter">{user?.xp || 0} XP</div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
-
-            {/* Profile Popup */}
-            <AnimatePresence>
-              {showProfilePopup && (
-                <>
-                  <div 
-                    className="fixed inset-0 z-[110] cursor-default bg-black/5 dark:bg-black/20 backdrop-blur-[2px]" 
-                    onClick={() => setShowProfilePopup(false)} 
-                  />
-                  <motion.div
-                    initial={{ opacity: 0, x: -20, scale: 0.95 }}
-                    animate={{ opacity: 1, x: 0, scale: 1 }}
-                    exit={{ opacity: 0, x: -20, scale: 0.95 }}
-                    className="fixed z-[120] w-[280px] sm:w-[320px] bg-white dark:bg-[#0A0A0A] border border-black/10 dark:border-white/10 rounded-[32px] shadow-2xl overflow-hidden max-h-[80vh] flex flex-col"
-                    style={{ 
-                      left: window.innerWidth < 640 ? '50%' : (isExpanded ? '240px' : '90px'),
-                      top: window.innerWidth < 640 ? '50%' : '20px',
-                      transform: window.innerWidth < 640 ? 'translate(-50%, -50%)' : 'none'
-                    }}
-                  >
-                    <div className="p-6 border-b border-black/5 dark:border-white/5 bg-black/[0.02] dark:bg-white/[0.02] relative overflow-hidden">
-                      <div className="absolute top-0 right-0 w-32 h-32 bg-teal-500/5 blur-3xl rounded-full" />
-                      <div className="flex items-center gap-4 relative z-10">
-                        <div className="relative">
-                          <img 
-                            src={(user?.profileImage && user.profileImage.trim() !== '') ? user.profileImage : (user?.photoURL && user.photoURL.trim() !== '' ? user.photoURL : `https://api.dicebear.com/7.x/avataaars/svg?seed=${user?.uid}`)} 
-                            alt="" 
-                            className="w-14 h-14 rounded-2xl border-2 border-white dark:border-[#0A0A0A] shadow-xl object-cover"
-                          />
-                          <div className="absolute -bottom-1 -right-1 w-5 h-5 bg-teal-500 rounded-full border-2 border-white dark:border-[#0A0A0A] flex items-center justify-center">
-                            <Zap size={10} className="text-white fill-white" />
-                          </div>
-                        </div>
-                        <div className="min-w-0">
-                          <div className="text-base font-black truncate text-[#111] dark:text-white uppercase tracking-tighter leading-tight flex items-center gap-1.5 flex-wrap">
-                            <span>{user?.displayName || 'Creator'}</span>
-                            <VerifiedBadge verified={user?.verified} />
-                          </div>
-                          <div className="text-[10px] text-black/40 dark:text-white/40 font-bold uppercase tracking-widest truncate">{user?.email}</div>
-                          <div className="mt-1 flex items-center gap-1.5">
-                            <div className="h-1 flex-1 bg-black/5 dark:bg-white/5 rounded-full overflow-hidden">
-                              <div className="h-full bg-teal-500" style={{ width: `${xpPercent}%` }} />
-                            </div>
-                            <span className="text-[10px] font-black text-teal-600 dark:text-teal-400">{user?.xp || 0} XP</span>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="p-3">
-                      <div className="grid grid-cols-2 gap-2 mb-2">
-                        <Link 
-                          to="/dashboard" 
-                          onClick={() => setShowProfilePopup(false)}
-                          className="flex flex-col items-center justify-center gap-2 aspect-square rounded-2xl bg-black/5 dark:bg-white/5 hover:bg-teal-500 hover:text-white transition-all text-black dark:text-white"
-                        >
-                          <Layout size={24} />
-                          <span className="text-[10px] font-black uppercase tracking-widest">Dash</span>
-                        </Link>
-                        <Link 
-                          to="/dashboard?tab=overview" 
-                          onClick={() => setShowProfilePopup(false)}
-                          className="flex flex-col items-center justify-center gap-2 aspect-square rounded-2xl bg-black/5 dark:bg-white/5 hover:bg-teal-500 hover:text-white transition-all text-black dark:text-white"
-                        >
-                          <BarChart3 size={24} />
-                          <span className="text-[10px] font-black uppercase tracking-widest">Stats</span>
-                        </Link>
-                      </div>
-                      
-                      <div className="space-y-1">
-                        <PopupLink to={`/creators/${user.uid}`} icon={UserCircle} label="Creator Portfolio" onClick={() => setShowProfilePopup(false)} />
-                        <PopupLink to="/settings" icon={Settings} label="Account Settings" onClick={() => setShowProfilePopup(false)} />
-                        
-                        <button 
-                          onClick={toggleTheme}
-                          className="flex items-center gap-3 w-full p-3 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 text-black/70 dark:text-white/70 hover:text-black dark:hover:text-white transition-all group"
-                        >
-                          {theme === 'dark' ? <Sun size={18} className="text-yellow-400" /> : <Moon size={18} className="text-blue-400" />}
-                          <span className="text-sm font-bold">{theme === 'dark' ? 'Switch to Light' : 'Switch to Dark'}</span>
-                        </button>
-
-                        <PopupLink to="/help" icon={HelpCircle} label="Help & Support" onClick={() => setShowProfilePopup(false)} />
-                      </div>
-                    </div>
-
-                    <div className="p-3 pt-0">
-                      <button 
-                        onClick={handleLogout}
-                        className="flex items-center justify-between w-full p-4 rounded-2xl bg-red-500/5 hover:bg-red-500 text-red-600 hover:text-white transition-all group"
-                      >
-                        <span className="text-xs font-black uppercase tracking-widest">Terminate Session</span>
-                        <LogOut size={18} />
-                      </button>
-                    </div>
-                  </motion.div>
-                </>
-              )}
-            </AnimatePresence>
-          </>
-        ) : (
-          <Link 
-            to="/login"
-            className={`flex items-center gap-4 p-3 rounded-2xl bg-primary text-black neon-glow transition-all ${isExpanded ? 'w-full' : 'w-fit mx-auto'}`}
+      <div className="relative flex h-full min-h-0 flex-col">
+        {/* Header / Logo */}
+        <div
+          className={`shrink-0 p-3 ${
+            isExpanded ? 'flex items-center justify-between gap-2' : 'flex flex-col items-center gap-2'
+          }`}
+        >
+          <Link
+            to="/"
+            className="group flex min-w-0 items-center gap-2.5 rounded-2xl p-1 transition-colors hover:bg-[var(--sb-row-hover)]"
+            aria-label="Kith home"
           >
-            <LogOut size={22} className="shrink-0 rotate-180 text-black" />
-            <AnimatePresence>
+            <span className="grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-[13px] bg-[#f7f2e8]">
+              <KithLogo size={32} />
+            </span>
+            <AnimatePresence initial={false}>
               {isExpanded && (
-                <motion.span 
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  className="font-bold text-xs whitespace-nowrap uppercase tracking-widest text-black"
+                <motion.span
+                  initial={{ opacity: 0, x: -6 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -6 }}
+                  transition={{ duration: 0.18 }}
+                  className="flex items-center gap-1.5 whitespace-nowrap font-display text-[21px] font-semibold tracking-[-0.06em] text-[var(--sb-text)]"
                 >
-                  Log In
+                  kith
+                  <span className="h-1.5 w-1.5 rounded-full bg-[#ff6b4a]" />
                 </motion.span>
               )}
             </AnimatePresence>
           </Link>
-        )}
-      </div>
 
-      {/* Nav Section */}
-      <div className="flex-grow flex flex-col gap-1 px-3.5 py-2 overflow-y-auto no-scrollbar overflow-x-hidden">
-        <NavItem to="/feed" icon={Home} label="Neural Feed" active={location.pathname === '/feed' && !searchParams.has('view')} />
-        <NavItem to="/feed?view=communities" icon={Globe} label="Communities" active={location.pathname === '/feed' && searchParams.get('view') === 'communities'} />
-        <NavItem to="/marketplace" icon={Store} label="Marketplace" active={isActive('/marketplace')} />
-        <NavItem to="/challenges" icon={Award} label="Bounties" active={isActive('/challenges')} />
-        <NavItem to="/articles" icon={FileText} label="Articles" active={isActive('/articles')} />
-        <NavItem to="/events" icon={Calendar} label="Global Events" active={isActive('/events')} />
-        
-        {user && (
-          <>
-            <div className="h-px bg-black/5 dark:bg-white/5 my-2" />
+          <button
+            type="button"
+            onClick={() => setIsExpanded((value) => !value)}
+            aria-label={isExpanded ? 'Collapse sidebar' : 'Expand sidebar'}
+            aria-expanded={isExpanded}
+            title={isExpanded ? 'Collapse sidebar' : 'Expand sidebar'}
+            className="grid h-8 w-8 shrink-0 place-items-center rounded-xl text-[var(--sb-faint)] transition-colors hover:bg-[var(--sb-chip)] hover:text-[var(--sb-text)]"
+          >
+            {isExpanded ? <ChevronLeft size={18} /> : <ChevronRight size={18} />}
+          </button>
+        </div>
 
-            <NavItem 
-              to="/feed?view=notifications" 
-              icon={Bell} 
-              label="Notifications" 
-              active={location.pathname === '/feed' && searchParams.get('view') === 'notifications'} 
-              badge={unreadNotifications}
-            />
-            <NavItem 
-              to="/feed?view=messages" 
-              icon={MessageSquare} 
-              label="Messages" 
-              active={location.pathname === '/feed' && searchParams.get('view') === 'messages'} 
-              badge={totalUnreadDMs}
-            />
-            
-            {(user.role === 'admin' || user.email === 'danieludofa452@gmail.com') && (
-              <NavItem 
-                to="/admin" 
-                icon={Shield} 
-                label="Admin Panel" 
-                active={location.pathname === '/admin'} 
+        {/* User card / XP */}
+        <div className="relative shrink-0 px-3 pb-2 pt-1">
+          {user ? (
+            <>
+              <button
+                ref={profileButtonRef}
+                type="button"
+                onClick={() => setShowProfilePopup((value) => !value)}
+                aria-haspopup="dialog"
+                aria-expanded={showProfilePopup}
+                aria-label={showProfilePopup ? 'Close your account menu' : 'Open your account menu'}
+                className={`group relative flex w-full items-center gap-2.5 rounded-[20px] border border-[var(--sb-border)] bg-[var(--sb-chip)] p-2 text-left transition-all hover:border-[#ff6b4a]/25 hover:bg-[var(--sb-chip-hover)] ${
+                  isExpanded ? 'justify-start' : 'justify-center'
+                }`}
+              >
+                <span className="relative">
+                  <XpRing percent={xpPercent} size={44} stroke={2.5}>
+                    <img
+                      src={avatarFor(user)}
+                      alt=""
+                      referrerPolicy="no-referrer"
+                      className="h-[31px] w-[31px] rounded-full bg-[#2a2234] object-cover"
+                    />
+                  </XpRing>
+                  <span className="absolute bottom-0.5 right-0.5 h-2.5 w-2.5 rounded-full border-2 border-[var(--sb-bg)] bg-[#82e6c8]" />
+                </span>
+
+                <AnimatePresence initial={false}>
+                  {isExpanded && (
+                    <motion.span
+                      initial={{ opacity: 0, x: -6 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      exit={{ opacity: 0, x: -6 }}
+                      transition={{ duration: 0.18 }}
+                      className="min-w-0 flex-1"
+                    >
+                      <span className="flex items-center gap-0.5">
+                        <span className="truncate text-[12.5px] font-semibold tracking-[-0.01em] text-[var(--sb-text)]">
+                          {user?.displayName || 'Creator'}
+                        </span>
+                        <VerifiedBadge
+                          verified={user?.verified}
+                          size={12}
+                          className="ml-0 shrink-0 text-[#ffb65c]"
+                        />
+                      </span>
+                      <span className="mt-0.5 flex items-center gap-1 text-[10px] font-medium text-[var(--sb-muted)]">
+                        <Sparkles size={9} className="shrink-0 text-[#ffb65c]" />
+                        <span className="truncate">
+                          Level {level} · {xp.toLocaleString()} XP
+                        </span>
+                      </span>
+                    </motion.span>
+                  )}
+                </AnimatePresence>
+
+                {isExpanded && (
+                  <ChevronDown
+                    size={15}
+                    className={`shrink-0 text-[var(--sb-faint)] transition-transform duration-200 ${
+                      showProfilePopup ? 'rotate-180' : ''
+                    }`}
+                  />
+                )}
+              </button>
+
+              <ProfilePopup
+                open={showProfilePopup}
+                user={user}
+                anchorRef={profileButtonRef}
+                communityCount={joinedCommunities.length}
+                theme={theme}
+                onToggleTheme={toggleTheme}
+                onClose={() => setShowProfilePopup(false)}
+                onLogout={handleLogout}
               />
-            )}
-            
-            <div className="h-px bg-black/5 dark:bg-white/5 my-2" />
+            </>
+          ) : (
+            <Link
+              to="/login"
+              title={isExpanded ? undefined : 'Sign in to Kith'}
+              aria-label="Sign in to Kith"
+              className={`flex items-center gap-2.5 rounded-2xl bg-[#ff6b4a] p-2 font-semibold text-[#1a1210] shadow-[0_10px_24px_-12px_rgba(255,107,74,0.9)] transition-transform hover:-translate-y-0.5 ${
+                isExpanded ? 'w-full' : 'mx-auto w-fit justify-center'
+              }`}
+            >
+              <LogOut size={18} className="shrink-0 rotate-180" />
+              {isExpanded && <span className="text-[12.5px]">Sign in to Kith</span>}
+            </Link>
+          )}
+        </div>
 
-            {/* Communities List */}
-            <div className="flex flex-col gap-0 py-0.5">
-              {joinedCommunities.map(community => (
-                <Link
-                  key={community.id}
-                  to={`/feed?view=community&id=${community.id}`}
-                  className={`relative flex items-center gap-3 p-1 rounded-2xl transition-all group ${searchParams.get('id') === community.id ? 'bg-primary/10 border border-primary/20' : 'hover:bg-black/5 dark:hover:bg-white/5'}`}
-                >
-                  <div className="relative shrink-0">
-                    <div className={`w-10 h-10 rounded-xl overflow-hidden border-2 transition-all ${searchParams.get('id') === community.id ? 'border-primary shadow-[0_0_15px_rgba(124,58,237,0.3)]' : 'border-black/10 dark:border-white/10 group-hover:border-black/30 dark:group-hover:border-white/30'}`}>
-                      <img 
-                        src={(community.image && community.image.trim() !== '') ? community.image : `https://picsum.photos/seed/${community.id}/100/100`} 
-                        alt={community.name}
-                        className="w-full h-full object-cover"
-                      />
-                    </div>
-                    {communityUnreads[community.id] > 0 && (
-                      <div className="absolute -top-2 -right-2 min-w-[22px] h-6 bg-primary text-white text-xs font-black rounded-full flex items-center justify-center px-2 border-2 border-white dark:border-[#050505] shadow-lg shadow-primary/40 neon-glow z-10">
-                        {communityUnreads[community.id] > 99 ? '99+' : communityUnreads[community.id]}
-                      </div>
-                    )}
-                  </div>
-                  
-                  <AnimatePresence>
-                    {isExpanded && (
-                      <motion.div 
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        className="overflow-hidden"
-                      >
-                        <div className="text-xs font-bold truncate text-black dark:text-white">{community.name}</div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
+        {/* Navigation */}
+        <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 pb-3">
+          {isExpanded && (
+            <p className="px-3 pb-1.5 pt-2 text-[9px] font-bold uppercase tracking-[0.22em] text-[var(--sb-muted)]">
+              Explore
+            </p>
+          )}
 
-                  {!isExpanded && (
-                    <div className="absolute left-full ml-4 px-3 py-1.5 bg-white dark:bg-[#0A0A0A] border border-black/10 dark:border-white/10 rounded-xl text-xs font-bold whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-all z-[9999] shadow-2xl text-black dark:text-white">
-                      {community.name}
+          <nav className="flex flex-col gap-1" aria-label="Main navigation">
+            <NavItem
+              to="/feed"
+              icon={Home}
+              label="Your feed"
+              active={isFeedView()}
+              tone={TONES.feed}
+            />
+            <NavItem
+              to="/feed?view=communities"
+              icon={Globe}
+              label="Communities"
+              active={isFeedView('communities')}
+              tone={TONES.communities}
+            />
+            <NavItem
+              to="/marketplace"
+              icon={Store}
+              label="Marketplace"
+              active={isActive('/marketplace')}
+              tone={TONES.marketplace}
+            />
+            <NavItem
+              to="/challenges"
+              icon={Award}
+              label="Bounties"
+              active={isActive('/challenges')}
+              tone={TONES.bounties}
+            />
+            <NavItem
+              to="/articles"
+              icon={FileText}
+              label="Articles"
+              active={isActive('/articles')}
+              tone={TONES.articles}
+            />
+            <NavItem
+              to="/events"
+              icon={Calendar}
+              label="Events"
+              active={isActive('/events')}
+              tone={TONES.events}
+            />
+          </nav>
+
+          {user && (
+            <>
+              <div className="mx-2 my-2 h-px bg-[var(--sb-divider)]" />
+
+              {isExpanded && (
+                <p className="px-3 pb-1.5 text-[9px] font-bold uppercase tracking-[0.22em] text-[var(--sb-muted)]">
+                  Yours
+                </p>
+              )}
+
+              <nav className="flex flex-col gap-1" aria-label="Your activity">
+                <NavItem
+                  to="/feed?view=notifications"
+                  icon={Bell}
+                  label="Notifications"
+                  active={isFeedView('notifications')}
+                  badge={unreadNotifications}
+                  tone={TONES.notifications}
+                />
+                <NavItem
+                  to="/feed?view=messages"
+                  icon={MessageSquare}
+                  label="Messages"
+                  active={isFeedView('messages')}
+                  badge={totalUnreadDMs}
+                  tone={TONES.messages}
+                />
+                {(user.role === 'admin' || user.email === 'danieludofa452@gmail.com') && (
+                  <NavItem
+                    to="/admin"
+                    icon={Shield}
+                    label="Admin panel"
+                    active={isActive('/admin')}
+                    tone={TONES.admin}
+                  />
+                )}
+              </nav>
+
+              {joinedCommunities.length > 0 && (
+                <>
+                  <div className="mx-2 my-2 h-px bg-[var(--sb-divider)]" />
+
+                  {isExpanded && (
+                    <div className="flex items-center justify-between px-3 pb-1.5">
+                      <p className="text-[9px] font-bold uppercase tracking-[0.22em] text-[var(--sb-muted)]">
+                        Your circles
+                      </p>
+                      <span className="text-[9px] font-bold text-[var(--sb-faint)]">
+                        {joinedCommunities.length}
+                      </span>
                     </div>
                   )}
-                </Link>
-              ))}
-            </div>
-          </>
-        )}
-      </div>
 
-      {/* Footer */}
-      <div className="p-4 mt-auto">
-        {!isExpanded && (
-          <button 
-            onClick={toggleTheme}
-            className="w-12 h-12 flex items-center justify-center rounded-2xl bg-black/5 dark:bg-white/5 text-black/30 dark:text-white/30 hover:text-black dark:hover:text-white transition-all mx-auto"
-            title={theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
-          >
-            {theme === 'dark' ? <Sun size={20} /> : <Moon size={20} />}
-          </button>
-        )}
+                  <div className="flex flex-col gap-1">
+                    {joinedCommunities.map((community) => {
+                      const unreadCount = communityUnreads[community.id] || 0;
+                      const selected =
+                        searchParams.get('view') === 'community' &&
+                        searchParams.get('id') === community.id;
+
+                      return (
+                        <Link
+                          key={community.id}
+                          to={`/feed?view=community&id=${community.id}`}
+                          title={isExpanded ? undefined : community.name}
+                          aria-label={community.name}
+                          className={`group relative flex items-center gap-2.5 rounded-2xl p-1.5 transition-colors ${
+                            isExpanded ? '' : 'justify-center'
+                          } ${
+                            selected
+                              ? 'bg-[var(--sb-active-row)]'
+                              : 'hover:bg-[var(--sb-row-hover)]'
+                          }`}
+                        >
+                          <span
+                            className={`relative block shrink-0 overflow-hidden rounded-[12px] border transition-all ${
+                              isExpanded ? 'h-9 w-9' : 'h-10 w-10'
+                            } ${
+                              selected
+                                ? 'border-[#ff6b4a]/60 shadow-[0_0_0_3px_rgba(255,107,74,0.12)]'
+                                : 'border-[var(--sb-border)]'
+                            }`}
+                          >
+                            <img
+                              src={
+                                community.image && String(community.image).trim() !== ''
+                                  ? community.image
+                                  : `https://picsum.photos/seed/${community.id}/100/100`
+                              }
+                              alt=""
+                              referrerPolicy="no-referrer"
+                              className="h-full w-full object-cover"
+                            />
+                            {!isExpanded && unreadCount > 0 && (
+                              <span className="absolute -right-1 -top-1 grid h-4 min-w-4 place-items-center rounded-full bg-[#ff6b4a] px-1 text-[8px] font-bold leading-none text-[#1a1210] ring-2 ring-[var(--sb-bg)]">
+                                {unreadCount > 9 ? '9+' : unreadCount}
+                              </span>
+                            )}
+                          </span>
+
+                          {isExpanded && (
+                            <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-[var(--sb-muted)] transition-colors group-hover:text-[var(--sb-text)]">
+                              {community.name}
+                            </span>
+                          )}
+
+                          {isExpanded && unreadCount > 0 && (
+                            <span className="grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-[#ff6b4a] px-1 text-[9px] font-bold leading-none text-[#1a1210]">
+                              {unreadCount > 99 ? '99+' : unreadCount}
+                            </span>
+                          )}
+                        </Link>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </>
+          )}
+
+          {user && isExpanded && joinedCommunities.length === 0 && (
+            <div className="mt-3 rounded-2xl border border-dashed border-[var(--sb-border)] px-3 py-3">
+              <div className="flex items-center gap-2 text-[var(--sb-muted)]">
+                <Users size={14} className="text-[#82e6c8]" />
+                <span className="text-[11px] font-semibold">Find your people</span>
+              </div>
+              <p className="mt-1 text-[10px] leading-relaxed text-[var(--sb-muted)]">
+                Join a circle and it will live here.
+              </p>
+              <Link
+                to="/feed?view=communities"
+                className="mt-2 inline-flex items-center gap-1 text-[10px] font-semibold text-[#ffb65c] hover:text-[#ff6b4a]"
+              >
+                Browse communities
+                <ChevronRight size={11} />
+              </Link>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="shrink-0 border-t border-[var(--sb-divider)] p-3">
+          {isExpanded ? (
+            <button
+              type="button"
+              onClick={toggleTheme}
+              title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+              className="flex w-full items-center justify-between gap-2 rounded-2xl border border-[var(--sb-border)] bg-[var(--sb-chip)] px-3 py-2.5 text-left transition-colors hover:bg-[var(--sb-chip-hover)]"
+            >
+              <span className="flex min-w-0 items-center gap-2.5">
+                <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-[var(--sb-chip-hover)] text-[#ffb65c]">
+                  {theme === 'dark' ? <Moon size={14} /> : <Sun size={14} />}
+                </span>
+                <span className="truncate text-[11px] font-semibold text-[var(--sb-text)]">
+                  Appearance
+                </span>
+              </span>
+              <span className="shrink-0 rounded-full border border-[var(--sb-border)] px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.12em] text-[var(--sb-muted)]">
+                {theme}
+              </span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={toggleTheme}
+              title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+              aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+              className="mx-auto grid h-10 w-10 place-items-center rounded-xl bg-[var(--sb-chip)] text-[var(--sb-faint)] transition-colors hover:bg-[var(--sb-chip-hover)] hover:text-[var(--sb-text)]"
+            >
+              {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+            </button>
+          )}
+        </div>
       </div>
-    </motion.aside>
+    </aside>
   );
 }

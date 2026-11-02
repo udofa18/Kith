@@ -31,7 +31,7 @@ export default function ComposeFab({ hidden = false }: { hidden?: boolean }) {
             onClick={() => setOpen(true)}
             aria-label="Create post"
             title="Create post"
-            className="fixed bottom-5 right-5 sm:bottom-6 sm:right-6 z-40 w-14 h-14 rounded-full bg-primary text-white shadow-lg shadow-primary/30 flex items-center justify-center hover:bg-primary/90 active:scale-95 transition"
+            className="fixed bottom-[calc(4.9rem+env(safe-area-inset-bottom))] right-4 md:bottom-6 md:right-6 z-40 w-14 h-14 rounded-full bg-primary text-white shadow-lg shadow-primary/30 flex items-center justify-center hover:bg-primary/90 active:scale-95 transition"
           >
             <PenLine size={22} />
           </motion.button>

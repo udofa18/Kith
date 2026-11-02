@@ -1,25 +1,65 @@
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap');
 @import "tailwindcss";
+@import "./design-system/tokens.css";
 @variant dark (&:where(.dark, .dark *));
 @plugin "@tailwindcss/typography";
 
 @theme {
   --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
   --font-display: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Instrument Serif", ui-serif, Georgia, serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
-  
-  --color-background: #0B0F1A;
-  --color-foreground: #ffffff;
-  --color-primary: #7C3AED;
-  --color-brand-purple: #7C3AED;
-  --color-brand-pink: #EC4899;
-  --color-brand-orange: #F97316;
-  --color-brand-blue: #3B82F6;
-  --color-primary-foreground: #ffffff;
-  --color-secondary: #1e1b4b;
-  --color-accent: #3b82f6;
-  --color-muted: #1f2937;
-  --color-border: #27272a;
+}
+
+/* Expose design-system tokens as Tailwind utilities (bg-surface, rounded-card, …). */
+@theme inline {
+  --color-ink: var(--ds-brand-ink);
+  --color-ink-soft: var(--ds-brand-ink-soft);
+  --color-ink-raised: var(--ds-brand-ink-raised);
+  --color-cream: var(--ds-brand-cream);
+  --color-coral: var(--ds-brand-coral);
+  --color-amber: var(--ds-brand-amber);
+  --color-lilac: var(--ds-brand-lilac);
+  --color-mint: var(--ds-brand-mint);
+  --color-blush: var(--ds-brand-blush);
+  --color-sky: var(--ds-brand-sky);
+
+  --color-background: var(--ds-background);
+  --color-foreground: var(--ds-foreground);
+  --color-surface: var(--ds-surface);
+  --color-surface-raised: var(--ds-surface-raised);
+  --color-card: var(--ds-surface);
+  --color-popover: var(--ds-surface-raised);
+  --color-muted: var(--ds-muted);
+  --color-muted-foreground: var(--ds-muted-foreground);
+  --color-faint: var(--ds-faint);
+  --color-border: var(--ds-border);
+  --color-border-strong: var(--ds-border-strong);
+  --color-primary: var(--ds-primary);
+  --color-primary-foreground: var(--ds-primary-foreground);
+  --color-accent: var(--ds-accent);
+  --color-accent-foreground: var(--ds-accent-foreground);
+  --color-secondary: var(--ds-brand-ink-raised);
+  --color-secondary-foreground: var(--ds-brand-cream);
+  --color-success: var(--ds-success);
+  --color-success-foreground: var(--ds-success-foreground);
+  --color-warning: var(--ds-warning);
+  --color-warning-foreground: var(--ds-warning-foreground);
+  --color-info: var(--ds-info);
+  --color-info-foreground: var(--ds-info-foreground);
+  --color-destructive: var(--ds-destructive);
+  --color-destructive-foreground: var(--ds-destructive-foreground);
+  --color-ring: var(--ds-ring);
+
+  --radius-control: var(--ds-radius-md);
+  --radius-card: var(--ds-radius-xl);
+  --radius-panel: var(--ds-radius-2xl);
+  --radius-pill: var(--ds-radius-pill);
+
+  --shadow-soft: var(--ds-shadow-soft);
+  --shadow-lift: var(--ds-shadow-lift);
+  --shadow-float: var(--ds-shadow-float);
+  --shadow-glow-primary: var(--ds-shadow-glow-primary);
 }
 
 @layer base {
@@ -36,7 +76,12 @@
     color-scheme: light;
   }
   h1, h2, h3, h4, h5, h6 {
-    @apply font-display tracking-tight text-white;
+    @apply font-display tracking-tight text-foreground;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--color-primary) 32%, transparent);
+    color: var(--color-foreground);
   }
 }
 
@@ -161,14 +206,9 @@ html.light .custom-scrollbar::-webkit-scrollbar-thumb:hover {
 }
 
 /* Light Theme Overrides */
-html.light {
-  --color-background: #f8fafc;
-  --color-foreground: #0f172a;
-}
-
 html.light body {
-  background-color: #f8fafc !important;
-  color: #0f172a !important;
+  background-color: var(--ds-background) !important;
+  color: var(--ds-foreground) !important;
 }
 
 html.light h1,
@@ -177,7 +217,7 @@ html.light h3,
 html.light h4,
 html.light h5,
 html.light h6 {
-  color: #0f172a !important;
+  color: var(--ds-foreground) !important;
 }
 
 html.light .bg-gradient-to-r h1,
@@ -192,30 +232,36 @@ html.light .bg-gradient-to-r .text-white\/80 { color: rgba(255, 255, 255, 0.8) !
 html.light .bg-gradient-to-r .text-white\/60 { color: rgba(255, 255, 255, 0.6) !important; }
 
 /* Base text */
-html.light .text-white { color: #0f172a !important; }
-html.light .hover\:text-white:hover { color: #0f172a !important; }
+html.light .text-white { color: #211a28 !important; }
+html.light .hover\:text-white:hover { color: #211a28 !important; }
+/* Primary is a warm coral: its label is ink in dark mode and cream in light mode. */
 html.light .bg-primary .text-white,
+html.light .bg-primary.hover\:text-white:hover,
+html.light .text-white.bg-primary,
+.bg-primary.text-white,
+.bg-primary .text-white {
+  color: var(--ds-primary-foreground) !important;
+}
+
 html.light .bg-blue-500 .text-white,
 html.light .bg-red-500 .text-white,
 html.light .bg-green-500 .text-white,
 html.light .bg-yellow-500 .text-white,
 html.light .bg-orange-500 .text-white,
 html.light .from-blue-500 .text-white,
-html.light .from-primary .text-white,
-html.light .bg-primary.hover\:text-white:hover,
-html.light .text-white.bg-primary { 
-  color: #ffffff !important; 
+html.light .from-primary .text-white {
+  color: #ffffff !important;
 }
 
 /* Specific transparent text */
-html.light .text-white\/20 { color: rgba(15, 23, 42, 0.3) !important; }
-html.light .text-white\/30 { color: rgba(15, 23, 42, 0.4) !important; }
-html.light .text-white\/40 { color: rgba(15, 23, 42, 0.5) !important; }
-html.light .text-white\/50 { color: rgba(15, 23, 42, 0.6) !important; }
-html.light .text-white\/60 { color: rgba(15, 23, 42, 0.7) !important; }
-html.light .text-white\/70 { color: rgba(15, 23, 42, 0.8) !important; }
-html.light .text-white\/80 { color: rgba(15, 23, 42, 0.9) !important; }
-html.light .text-white\/90 { color: rgba(15, 23, 42, 0.95) !important; }
+html.light .text-white\/20 { color: rgba(33, 26, 40, 0.3) !important; }
+html.light .text-white\/30 { color: rgba(33, 26, 40, 0.4) !important; }
+html.light .text-white\/40 { color: rgba(33, 26, 40, 0.5) !important; }
+html.light .text-white\/50 { color: rgba(33, 26, 40, 0.6) !important; }
+html.light .text-white\/60 { color: rgba(33, 26, 40, 0.7) !important; }
+html.light .text-white\/70 { color: rgba(33, 26, 40, 0.8) !important; }
+html.light .text-white\/80 { color: rgba(33, 26, 40, 0.9) !important; }
+html.light .text-white\/90 { color: rgba(33, 26, 40, 0.95) !important; }
 
 /* Backgrounds */
 html.light .bg-\[\#111827\],
@@ -285,7 +331,7 @@ html.light .shadow-\[0_4px_24px_rgba\(0\,0\,0\,0\.1\)\] { box-shadow: 0 4px 24px
 html.light .shadow-\[0_0_30px_rgba\(139\,92\,246\,0\.3\)\] { box-shadow: 0 0 20px rgba(139,92,246,0.15) !important; }
 
 /* Markdown Prose Light Mode Overrides */
-html.light .prose { color: #0f172a !important; }
+html.light .prose { color: #211a28 !important; }
 html.light .prose h1,
 html.light .prose h2,
 html.light .prose h3,
@@ -295,11 +341,326 @@ html.light .prose h6,
 html.light .prose strong,
 html.light .prose b,
 html.light .prose blockquote {
-  color: #0f172a !important;
+  color: #211a28 !important;
 }
 html.light .prose pre { 
   background-color: #f1f5f9 !important; 
-  color: #0f172a !important;
+  color: #211a28 !important;
 }
-html.light .prose code { color: #0f172a !important; }
+html.light .prose code { color: #211a28 !important; }
 
+
+/* --------------------------------------------------------------------------
+   Mobile navigation
+   -------------------------------------------------------------------------- */
+
+.mobile-nav {
+  --mn-bg: #100c17;
+  --mn-text: #f7f2e8;
+  --mn-muted: rgba(247, 242, 232, 0.62);
+  --mn-border: rgba(247, 242, 232, 0.09);
+  --mn-chip: rgba(247, 242, 232, 0.055);
+  --mn-chip-hover: rgba(247, 242, 232, 0.1);
+  background-color: var(--mn-bg);
+  color: var(--mn-text);
+  color-scheme: dark;
+}
+
+html.light .mobile-nav {
+  --mn-bg: #fbf7ef;
+  --mn-text: #211a28;
+  --mn-muted: rgba(33, 26, 40, 0.66);
+  --mn-border: rgba(33, 26, 40, 0.1);
+  --mn-chip: rgba(33, 26, 40, 0.045);
+  --mn-chip-hover: rgba(33, 26, 40, 0.085);
+  background-color: var(--mn-bg);
+  color: var(--mn-text);
+  color-scheme: light;
+}
+
+.mobile-nav ::selection {
+  background: rgba(255, 107, 74, 0.32);
+  color: #ffffff;
+}
+
+.mobile-nav a:focus-visible,
+.mobile-nav button:focus-visible {
+  outline: 2px solid #ff6b4a;
+  outline-offset: 2px;
+}
+
+/* --------------------------------------------------------------------------
+   App sidebar
+   The signed-in shell uses the same warm ink / cream / coral language as the
+   landing and auth surfaces. All values are scoped so the rest of the app keeps
+   its own theme behaviour.
+   -------------------------------------------------------------------------- */
+
+.app-sidebar {
+  --sb-bg: #100c17;
+  --sb-text: #f7f2e8;
+  --sb-muted: rgba(247, 242, 232, 0.64);
+  --sb-faint: rgba(247, 242, 232, 0.46);
+  --sb-border: rgba(247, 242, 232, 0.08);
+  --sb-divider: rgba(247, 242, 232, 0.07);
+  --sb-chip: rgba(247, 242, 232, 0.055);
+  --sb-chip-hover: rgba(247, 242, 232, 0.1);
+  --sb-row-hover: rgba(247, 242, 232, 0.045);
+  --sb-active-row: rgba(255, 107, 74, 0.13);
+  --sb-ring-track: rgba(247, 242, 232, 0.14);
+  background-color: var(--sb-bg);
+  color: var(--sb-text);
+  color-scheme: dark;
+}
+
+html.light .app-sidebar {
+  --sb-bg: #fbf7ef;
+  --sb-text: #211a28;
+  --sb-muted: rgba(33, 26, 40, 0.66);
+  --sb-faint: rgba(33, 26, 40, 0.5);
+  --sb-border: rgba(33, 26, 40, 0.09);
+  --sb-divider: rgba(33, 26, 40, 0.08);
+  --sb-chip: rgba(33, 26, 40, 0.045);
+  --sb-chip-hover: rgba(33, 26, 40, 0.085);
+  --sb-row-hover: rgba(33, 26, 40, 0.04);
+  --sb-active-row: rgba(255, 107, 74, 0.12);
+  --sb-ring-track: rgba(33, 26, 40, 0.12);
+  background-color: var(--sb-bg);
+  color: var(--sb-text);
+  color-scheme: light;
+}
+
+.app-sidebar ::selection {
+  background: rgba(255, 107, 74, 0.32);
+  color: #ffffff;
+}
+
+.app-sidebar a:focus-visible,
+.app-sidebar button:focus-visible {
+  outline: 2px solid #ff6b4a;
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-sidebar,
+  .app-sidebar *,
+  .mobile-nav,
+  .mobile-nav * {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Landing page
+   A deliberately warm, always-dark editorial surface. Scoped so the rest of
+   the product keeps its own light/dark behaviour.
+   -------------------------------------------------------------------------- */
+
+.landing-page {
+  --landing-ink: #0e0b13;
+  --landing-ink-soft: #15101d;
+  --landing-cream: #f7f2e8;
+  --landing-coral: #ff6b4a;
+  --landing-amber: #ffb65c;
+  --landing-lilac: #b69cff;
+  --landing-mint: #82e6c8;
+  background-color: var(--landing-ink);
+  color: var(--landing-cream);
+  color-scheme: dark;
+  isolation: isolate;
+}
+
+.landing-page ::selection {
+  background: rgba(255, 107, 74, 0.38);
+  color: #fff;
+}
+
+html.light .landing-page {
+  background-color: #0e0b13 !important;
+}
+
+/* The global light theme forces headings dark; the landing surface stays warm ink. */
+html.light .landing-page h1,
+html.light .landing-page h2,
+html.light .landing-page h3,
+html.light .landing-page h4,
+html.light .landing-page h5,
+html.light .landing-page h6 {
+  color: #f7f2e8 !important;
+}
+
+html.light .landing-page .landing-on-light,
+html.light .landing-page .landing-on-light h1,
+html.light .landing-page .landing-on-light h2,
+html.light .landing-page .landing-on-light h3,
+html.light .landing-page .landing-on-light h4 {
+  color: #211a28 !important;
+}
+
+html.light .landing-page .landing-gradient-text {
+  color: transparent !important;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Keep white text on badges/overlays inside landing mocks (they sit on dark/colored surfaces). */
+html.light .landing-page .text-white {
+  color: #ffffff !important;
+}
+html.light .landing-page .hover\:text-white:hover {
+  color: #ffffff !important;
+}
+
+/* --------------------------------------------------------------------------
+   Auth page
+   The same warm ink surface as the landing page, with a cream form card.
+   Kept deliberately dark regardless of the app theme.
+   -------------------------------------------------------------------------- */
+
+.auth-page {
+  background-color: #0e0b13;
+  color: #f7f2e8;
+  color-scheme: dark;
+  isolation: isolate;
+}
+
+html.light .auth-page {
+  background-color: #0e0b13 !important;
+}
+
+/* White text belongs to photo overlays and colored badges on the auth surface. */
+html.light .auth-page .text-white {
+  color: #ffffff !important;
+}
+html.light .auth-page .hover\:text-white:hover {
+  color: #ffffff !important;
+}
+
+.auth-page ::selection {
+  background: rgba(255, 107, 74, 0.38);
+  color: #ffffff;
+}
+
+.auth-page a:focus-visible,
+.auth-page button:focus-visible {
+  outline: 2px solid #ff6b4a;
+  outline-offset: 3px;
+}
+
+/* Keep the cream fields cream when the browser autofills them. */
+.auth-page input:-webkit-autofill,
+.auth-page input:-webkit-autofill:hover,
+.auth-page input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 1000px #fffdf8 inset;
+  -webkit-text-fill-color: #211a28;
+  caret-color: #211a28;
+  transition: background-color 9999s ease-in-out 0s;
+}
+
+.landing-serif {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-weight: 400;
+  letter-spacing: -0.025em;
+}
+
+.landing-gradient-text {
+  background-image: linear-gradient(100deg, #ffb65c 0%, #ff6b4a 48%, #ff9d8a 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.landing-grid {
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.045) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.045) 1px, transparent 1px);
+  background-size: 72px 72px;
+  -webkit-mask-image: radial-gradient(ellipse at 50% 35%, #000 0%, transparent 72%);
+  mask-image: radial-gradient(ellipse at 50% 35%, #000 0%, transparent 72%);
+}
+
+.landing-card {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.018)),
+    #120e18;
+  border: 1px solid rgba(255, 255, 255, 0.085);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+}
+
+.landing-card:hover {
+  border-color: rgba(255, 182, 92, 0.26);
+}
+
+.landing-grain {
+  position: fixed;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  opacity: 0.045;
+  mix-blend-mode: soft-light;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.55'/%3E%3C/svg%3E");
+  background-size: 180px 180px;
+}
+
+.landing-arch {
+  border-radius: 999px 999px 32px 32px;
+}
+
+.landing-marquee-track {
+  animation: landing-marquee 42s linear infinite;
+}
+
+.landing-marquee:hover .landing-marquee-track {
+  animation-play-state: paused;
+}
+
+@keyframes landing-marquee {
+  from { transform: translate3d(0, 0, 0); }
+  to { transform: translate3d(-50%, 0, 0); }
+}
+
+.landing-float {
+  animation: landing-float 7s ease-in-out infinite;
+}
+
+.landing-float-slow {
+  animation: landing-float 9.5s ease-in-out infinite;
+  animation-delay: -3.4s;
+}
+
+@keyframes landing-float {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  50% { transform: translate3d(0, -11px, 0); }
+}
+
+.landing-spin-slow {
+  animation: landing-spin 34s linear infinite;
+}
+
+@keyframes landing-spin {
+  to { transform: rotate(360deg); }
+}
+
+.landing-pulse-dot {
+  animation: landing-pulse-dot 2.2s ease-out infinite;
+}
+
+@keyframes landing-pulse-dot {
+  0% { opacity: 0.55; transform: scale(1); }
+  70%, 100% { opacity: 0; transform: scale(2.3); }
+}
+
+.landing-page section[id] {
+  scroll-margin-top: 96px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .landing-marquee-track,
+  .landing-float,
+  .landing-float-slow,
+  .landing-spin-slow,
+  .landing-pulse-dot {
+    animation: none !important;
+  }
+}

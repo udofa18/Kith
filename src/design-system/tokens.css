@@ -1,0 +1,106 @@
+/*
+ * Kith Design System Tokens
+ * Single source of truth for color, spacing, radius, shadow, and motion.
+ */
+
+:root {
+  /* Brand */
+  --ds-brand-ink: #0e0b13;
+  --ds-brand-ink-soft: #15101d;
+  --ds-brand-ink-raised: #211a28;
+  --ds-brand-cream: #f7f2e8;
+  --ds-brand-coral: #ff6b4a;
+  --ds-brand-amber: #ffb65c;
+  --ds-brand-lilac: #b69cff;
+  --ds-brand-mint: #82e6c8;
+  --ds-brand-blush: #f3a6c9;
+  --ds-brand-sky: #9ad8ff;
+
+  /* Semantic */
+  --ds-background: var(--ds-brand-ink);
+  --ds-foreground: var(--ds-brand-cream);
+  --ds-surface: var(--ds-brand-ink-soft);
+  --ds-surface-raised: var(--ds-brand-ink-raised);
+  --ds-muted: #2a2234;
+  --ds-muted-foreground: color-mix(in oklab, var(--ds-brand-cream) 62%, transparent);
+  --ds-faint: color-mix(in oklab, var(--ds-brand-cream) 42%, transparent);
+  --ds-border: color-mix(in oklab, var(--ds-brand-cream) 12%, transparent);
+  --ds-border-strong: color-mix(in oklab, var(--ds-brand-cream) 18%, transparent);
+
+  --ds-primary: var(--ds-brand-coral);
+  --ds-primary-foreground: #1a1210;
+  --ds-primary-hover: #e85b3d;
+
+  --ds-accent: var(--ds-brand-amber);
+  --ds-accent-foreground: #1a1210;
+
+  --ds-success: var(--ds-brand-mint);
+  --ds-success-foreground: #102820;
+  --ds-info: var(--ds-brand-sky);
+  --ds-info-foreground: #10222a;
+  --ds-warning: var(--ds-brand-amber);
+  --ds-warning-foreground: #1a1210;
+  --ds-destructive: #b23a24;
+  --ds-destructive-foreground: #fff8f0;
+
+  --ds-ring: var(--ds-brand-coral);
+
+  /* Layout */
+  --ds-radius-sm: 0.625rem;
+  --ds-radius-md: 0.875rem;
+  --ds-radius-lg: 1.25rem;
+  --ds-radius-xl: 1.5rem;
+  --ds-radius-2xl: 1.875rem;
+  --ds-radius-pill: 9999px;
+
+  /* Elevation */
+  --ds-shadow-soft: 0 2px 6px -2px rgba(14, 11, 19, 0.18), 0 14px 36px -18px rgba(14, 11, 19, 0.5);
+  --ds-shadow-lift: 0 18px 48px -24px rgba(14, 11, 19, 0.62);
+  --ds-shadow-float: 0 38px 100px -34px rgba(14, 11, 19, 0.8);
+  --ds-shadow-glow-primary: 0 16px 40px -18px color-mix(in oklab, var(--ds-brand-coral) 80%, transparent);
+
+  /* Motion */
+  --ds-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ds-ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --ds-duration-fast: 150ms;
+  --ds-duration-base: 200ms;
+  --ds-duration-slow: 320ms;
+
+  color-scheme: dark;
+}
+
+html.light {
+  --ds-background: #fbf7ef;
+  --ds-foreground: var(--ds-brand-ink-raised);
+  --ds-surface: #fffaf2;
+  --ds-surface-raised: #ffffff;
+  --ds-muted: #f1e9dc;
+  --ds-muted-foreground: color-mix(in oklab, var(--ds-brand-ink-raised) 64%, transparent);
+  --ds-faint: color-mix(in oklab, var(--ds-brand-ink-raised) 44%, transparent);
+  --ds-border: color-mix(in oklab, var(--ds-brand-ink-raised) 12%, transparent);
+  --ds-border-strong: color-mix(in oklab, var(--ds-brand-ink-raised) 18%, transparent);
+
+  --ds-primary: #c9452a;
+  --ds-primary-foreground: #fff8f0;
+  --ds-primary-hover: #b23a24;
+
+  --ds-accent: #a86a1f;
+  --ds-accent-foreground: #fff8f0;
+
+  --ds-success: #1f7a5c;
+  --ds-success-foreground: #f6fff9;
+  --ds-info: #1f6f9e;
+  --ds-info-foreground: #f6fbff;
+  --ds-warning: #9a5c12;
+  --ds-warning-foreground: #fff7ed;
+  --ds-destructive-foreground: #fff8f0;
+
+  --ds-ring: #c9452a;
+
+  --ds-shadow-soft: 0 2px 6px -2px rgba(33, 26, 40, 0.1), 0 12px 32px -18px rgba(33, 26, 40, 0.22);
+  --ds-shadow-lift: 0 16px 42px -24px rgba(33, 26, 40, 0.28);
+  --ds-shadow-float: 0 34px 90px -34px rgba(33, 26, 40, 0.36);
+  --ds-shadow-glow-primary: 0 16px 40px -18px color-mix(in oklab, var(--ds-primary) 70%, transparent);
+
+  color-scheme: light;
+}
