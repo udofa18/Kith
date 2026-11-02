@@ -1,115 +1,76 @@
 import { Link } from 'react-router-dom';
-import { Calendar, Users, MapPin, Clock, ArrowRight } from 'lucide-react';
+import { ArrowUpRight, Flame, Megaphone, MapPin, Video } from 'lucide-react';
 import { formatDate } from '../lib/utils';
+import { isFillingFast, isLive, spotsLeft, startsInLabel } from '../lib/eventRanking';
+import { emojiFor } from '../lib/eventCategories';
+import { themeGradient } from '../lib/eventTheme';
+import { cityOf } from '../lib/eventCities';
 
-interface EventCardProps {
+const hasImage = (url?: string) => !!url && url.trim() !== '' && !url.includes('picsum.photos');
+
+interface Props {
   event: any;
-  viewMode?: 'grid' | 'list';
+  /** Wider, shorter poster for profile tabs. */
   compact?: boolean;
+  promoted?: boolean;
+  isRegistered?: boolean;
+  /** Render without a link (create-flow preview). */
+  preview?: boolean;
 }
 
-export default function EventCard({ event, viewMode = 'grid', compact = false }: EventCardProps) {
-  const isList = viewMode === 'list';
+/** Poster-style event card: the image (or vibe gradient) carries the card. */
+export default function EventCard({ event, compact = false, promoted = false, isRegistered = false, preview = false }: Props) {
+  const live = isLive(event);
+  const ended = event.status === 'ended';
+  const soon = live ? '' : startsInLabel(event);
+  const left = spotsLeft(event);
+  const going = event.attendeeCount || 0;
+  const city = cityOf(event);
+  const where = event.isOffline ? event.locationName || city || 'Location TBD' : 'Online';
+  const price = event.isPaid ? `$${event.price}` : 'Free';
 
-  return (
-    <Link to={`/events/${event.id}`}>
-      <div className={`glass rounded-2xl overflow-hidden group hover:border-primary/50 transition-all duration-300 ${isList ? 'flex gap-4 h-44' : 'h-full flex flex-col'}`}>
-        {/* Banner Image */}
-        <div className={`relative overflow-hidden ${isList ? 'w-64 h-full shrink-0' : compact ? 'aspect-video w-full' : 'aspect-[16/10] w-full'}`}>
-          <img 
-            src={(event.banner && event.banner.trim() !== '') ? event.banner : `https://picsum.photos/seed/${event.id}/800/400`} 
-            alt={event.title}
-            className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700"
-            referrerPolicy="no-referrer"
-          />
-          {/* Price Badge */}
-          <div className="absolute bottom-3 right-3 flex flex-col items-end gap-2">
-            <div className={`px-2 py-1 rounded-xl backdrop-blur-md border border-white/10 text-[10px] font-bold text-white shadow-xl ${
-              event.status === 'live' ? 'bg-red-500 animate-pulse border-red-400' : 
-              event.status === 'ended' ? 'bg-zinc-800 text-white/50' : 
-              'bg-black/60'
-            }`}>
-              {event.status === 'live' ? '● LIVE' : 
-               event.status === 'ended' ? 'ENDED' : 
-               'UPCOMING'}
-            </div>
-            <div className="px-2 py-1 rounded-xl bg-black/60 backdrop-blur-md border border-white/10 text-[10px] font-bold text-white">
-              {event.isPaid ? `$${event.price}` : 'FREE'}
-            </div>
-          </div>
+  const card = (
+    <article className={`group relative overflow-hidden rounded-3xl bg-black ring-1 ring-black/10 dark:ring-white/10 hover:ring-2 hover:ring-pink-500/70 hover:-translate-y-1 hover:shadow-2xl hover:shadow-pink-500/10 transition-all duration-300 ${compact ? 'aspect-[16/10]' : 'aspect-[4/5]'} ${promoted ? 'ring-2 ring-amber-400/70' : ''}`} style={{ color: '#fff' }}>
+      {hasImage(event.banner) ? (
+        <img src={event.banner} alt="" referrerPolicy="no-referrer" className="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" />
+      ) : (
+        <div className="absolute inset-0 overflow-hidden" style={{ background: themeGradient(event) }}>
+          <span className="absolute -right-4 -top-2 text-[9rem] leading-none opacity-25 rotate-12 select-none group-hover:rotate-6 group-hover:scale-110 transition-transform duration-500">{emojiFor(event.category)}</span>
         </div>
+      )}
+      <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/30 to-transparent" />
 
-        {/* Content */}
-        <div className={`${compact ? 'p-3' : 'p-3.5'} flex flex-col flex-1`}>
-          <div className={`flex items-center gap-2 ${compact ? 'mb-1.5' : 'mb-2'}`}>
-            <span className={`px-2 py-0.5 rounded text-[8px] font-bold uppercase tracking-widest ${
-              event.isOffline ? 'bg-orange-500/20 text-orange-500' : 'bg-purple-500/20 text-purple-500'
-            }`}>
-              {event.isOffline ? 'Offline' : 'Online'}
-            </span>
-            {event.category && (
-              <span className="px-2 py-0.5 rounded bg-white/5 text-white/40 text-[8px] font-bold uppercase tracking-widest">
-                {event.category}
-              </span>
-            )}
-          </div>
+      <div className="absolute top-3 left-3 right-3 flex items-start gap-2">
+        <span className="flex flex-col items-center leading-none px-2.5 py-1.5 rounded-xl bg-white text-black shadow-lg">
+          <span className="text-[10px] font-bold uppercase text-pink-600">{formatDate(event.startDate, 'MMM')}</span>
+          <span className="text-lg font-extrabold font-display">{formatDate(event.startDate, 'd')}</span>
+        </span>
+        <div className="flex flex-col items-start gap-1.5">
+          {promoted && <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-400 text-xs font-bold" style={{ color: '#000' }}><Megaphone size={11} /> Promoted</span>}
+          {live && <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-500 text-xs font-bold"><span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" /> LIVE</span>}
+          {!live && soon && <span className="px-2 py-0.5 rounded-full bg-black/55 backdrop-blur-md text-xs font-semibold">{soon}</span>}
+          {isFillingFast(event) && <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-orange-500 text-xs font-bold"><Flame size={11} /> {left} left</span>}
+          {ended && <span className="px-2 py-0.5 rounded-full bg-black/60 text-xs font-semibold">Ended</span>}
+        </div>
+        <span className="ml-auto px-2.5 py-1 rounded-full bg-black/55 backdrop-blur-md text-xs font-bold">{price}</span>
+      </div>
 
-          <h3 className={`${compact ? 'text-sm' : 'text-lg'} font-bold mb-1 group-hover:text-primary transition-colors line-clamp-2 leading-snug`}>
-            {event.title}
-          </h3>
-          
-          {!compact && (
-            <div className="flex items-center gap-2 mb-3">
-              <div className="w-4 h-4 rounded-full bg-white/10 flex items-center justify-center overflow-hidden">
-                {event.hostPhoto && event.hostPhoto.trim() !== '' ? (
-                  <img src={event.hostPhoto} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                ) : (
-                  <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${event.hostId}`} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                )}
-              </div>
-              <span className="text-[10px] text-white/40">
-                Hosted by <span className="text-white/60 font-medium">{event.hostName || 'Organizer'}</span>
-              </span>
-            </div>
-          )}
-
-          <div className={`space-y-2.5 ${compact ? 'pt-2' : 'pt-3'} border-t border-white/5 mt-auto`}>
-            {/* Date and Time */}
-            <div className="flex items-center gap-2 text-white/90">
-              <Calendar size={14} className="text-primary/60 shrink-0" />
-              <span className={`${compact ? 'text-[10px]' : 'text-[12px]'} font-bold`}>
-                {formatDate(event.startDate, 'MMM d, HH:mm')}
-              </span>
-            </div>
-
-            {!compact && (
-              /* Location / City */
-              <div className="flex items-center gap-2 text-white/70">
-                <MapPin size={14} className="text-white/30 shrink-0" />
-                <span className="text-[11px] font-medium truncate">
-                  {event.isOffline 
-                    ? (event.locationName || event.locationAddress || 'Location TBD')
-                    : 'Virtual Event'
-                  }
-                </span>
-              </div>
-            )}
-
-            {/* Participants and Action */}
-            <div className="flex items-center justify-between pt-1">
-              <div className="flex items-center gap-1.5">
-                <Users size={12} className="text-primary/60" />
-                <span className={`${compact ? 'text-[9px]' : 'text-[11px]'} font-bold text-white/80`}>
-                  {event.attendeeCount || 0} attending
-                </span>
-              </div>
-              <div className={`${compact ? 'w-6 h-6 rounded-lg' : 'w-8 h-8 rounded-xl'} bg-primary/10 text-primary flex items-center justify-center group-hover:bg-primary group-hover:text-white transition-all shadow-lg shadow-primary/5`}>
-                <ArrowRight size={compact ? 12 : 16} />
-              </div>
-            </div>
-          </div>
+      <div className="absolute bottom-0 inset-x-0 p-4">
+        {event.category && <p className="text-[11px] font-bold uppercase tracking-wider text-pink-300">{emojiFor(event.category)} {event.category}</p>}
+        <h3 className={`mt-1 font-display font-extrabold leading-tight line-clamp-2 ${compact ? 'text-lg' : 'text-2xl'}`} style={{ color: '#fff' }}>{event.title}</h3>
+        <p className="mt-1.5 flex items-center gap-1.5 text-sm text-white/80 truncate">
+          {event.isOffline ? <MapPin size={14} className="shrink-0" /> : <Video size={14} className="shrink-0" />}
+          <span className="truncate">{where}{event.isOffline && city && where !== city ? ` · ${city}` : ''}</span>
+        </p>
+        <div className="mt-3 flex items-center justify-between">
+          <span className="text-sm text-white/80">
+            {isRegistered ? <b className="text-emerald-300">✓ You’re going</b> : <><b className="text-white">{going.toLocaleString()}</b> going · {formatDate(event.startDate, 'h:mm a')}</>}
+          </span>
+          <span className="w-9 h-9 rounded-full bg-white text-black flex items-center justify-center translate-y-1 opacity-0 group-hover:translate-y-0 group-hover:opacity-100 transition-all duration-300"><ArrowUpRight size={18} /></span>
         </div>
       </div>
-    </Link>
+    </article>
   );
+
+  return preview ? <div className="pointer-events-none">{card}</div> : <Link to={`/events/${event.id}`} className="block">{card}</Link>;
 }

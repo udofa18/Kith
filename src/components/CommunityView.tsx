@@ -14,7 +14,7 @@ import {
   Info, Calendar, Hash, Lock, Search, MoreVertical, Trash2, 
   ShieldAlert, ShieldCheck, UserCog, Save, Globe, Twitter, 
   Github, Linkedin, ExternalLink, AlertCircle, Image as ImageIcon, Link as LinkIcon,
-  Upload, Layout, Clock, Trophy, BarChart3, Bell, Pin, ChevronRight, Copy, Check, ArrowLeft, X
+  Upload, Layout, Clock, Trophy, BarChart3, Bell, BellOff, Pin, ChevronRight, Copy, Check, ArrowLeft, X
 } from 'lucide-react';
 import UserHoverCard from './UserHoverCard';
 import ChannelSidebar from './ChannelSidebar';
@@ -27,6 +27,7 @@ import CommunityAnalytics from './CommunityAnalytics';
 import CommunityAbout from './community/CommunityAbout';
 import CommunityMembers from './community/CommunityMembers';
 import { useMembership } from '../lib/communityRoles';
+import { deleteChannelWithMessages } from '../lib/channelAdmin';
 import VoiceChannelView from './VoiceChannelView';
 import LiveStreamView from './LiveStreamView';
 import CommunityInviteModal from './CommunityInviteModal';
@@ -132,6 +133,7 @@ export default function CommunityView({ communityId }: { communityId: string }) 
   // The member list is tucked away until asked for; the choice is remembered.
   const [showMemberPanel, setShowMemberPanel] = useState(() => typeof localStorage !== 'undefined' && localStorage.getItem('kith.memberPanel') === '1');
   const [panelSearch, setPanelSearch] = useState('');
+  const [showNotifMenu, setShowNotifMenu] = useState(false);
   useEffect(() => {
     localStorage.setItem('kith.memberPanel', showMemberPanel ? '1' : '0');
     if (!showMemberPanel) return;
@@ -524,7 +526,8 @@ export default function CommunityView({ communityId }: { communityId: string }) 
   const handleDeleteChannel = async () => {
     if (!channelToDelete || !communityId) return;
     try {
-      await deleteDoc(doc(db, 'communities', communityId, 'channels', channelToDelete));
+      const target = channels.find(c => c.id === channelToDelete);
+      await deleteChannelWithMessages(communityId, { id: channelToDelete, name: target?.name });
       toast.success("Channel deleted successfully");
       setShowChannelDeleteConfirm(false);
       setChannelToDelete(null);
@@ -903,12 +906,12 @@ export default function CommunityView({ communityId }: { communityId: string }) 
             {upcomingEvents.length > 0 && (
               <div className="pt-4 border-t border-foreground/5 space-y-3">
                 <div className="flex items-center justify-between px-2">
-                  <h3 className="text-[10px] font-bold uppercase tracking-widest text-foreground/20">Upcoming Events</h3>
+                  <h3 className="text-xs font-semibold text-foreground/60">Upcoming events</h3>
                   <button 
                     onClick={() => setActiveTab('events')}
-                    className="text-[10px] font-bold text-primary hover:underline"
+                    className="text-xs font-medium text-primary hover:underline"
                   >
-                    See All
+                    See all
                   </button>
                 </div>
                 <div className="space-y-2">
@@ -916,12 +919,12 @@ export default function CommunityView({ communityId }: { communityId: string }) 
                     <Link 
                       key={event.id} 
                       to={`/events/${event.id}`}
-                      className="block p-2 rounded-xl bg-foreground/5 border border-foreground/5 hover:border-primary/30 hover:bg-foreground/10 transition-all group"
+                      className="block p-2.5 rounded-xl border border-foreground/10 hover:border-primary/40 hover:bg-foreground/5 transition-colors group"
                     >
                       <div className="flex flex-col gap-1">
-                        <h4 className="text-[11px] font-bold truncate group-hover:text-primary transition-colors text-foreground">{event.title}</h4>
+                        <h4 className="text-sm font-medium truncate group-hover:text-primary transition-colors text-foreground">{event.title}</h4>
                         <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2 text-[9px] text-foreground/40">
+                            <div className="flex items-center gap-2 text-xs text-foreground/60">
                             <div className="flex items-center gap-1">
                               <Calendar size={10} className="text-primary" />
                               <span className="text-foreground">
@@ -935,8 +938,8 @@ export default function CommunityView({ communityId }: { communityId: string }) 
                               </span>
                             </div>
                           </div>
-                          <span className={`text-[9px] font-bold ${event.isPaid ? 'text-yellow-500' : 'text-green-500'}`}>
-                            {event.isPaid ? `$${event.price}` : 'FREE'}
+                          <span className={`text-xs font-medium ${event.isPaid ? 'text-amber-600 dark:text-amber-400' : 'text-green-600 dark:text-green-400'}`}>
+                            {event.isPaid ? `$${event.price}` : 'Free'}
                           </span>
                         </div>
                       </div>
@@ -1083,12 +1086,49 @@ export default function CommunityView({ communityId }: { communityId: string }) 
                     </AnimatePresence>
                   </div>
 
-                  <button 
-                    className="p-2 hover:bg-foreground/5 rounded-xl text-foreground/40 hover:text-foreground transition-all"
-                    title="Notification Settings"
-                  >
-                    <Bell size={18} />
-                  </button>
+                  <div className="relative">
+                    <button
+                      onClick={() => setShowNotifMenu(o => !o)}
+                      aria-haspopup="menu"
+                      aria-expanded={showNotifMenu}
+                      aria-label="Notification settings"
+                      title={mutedChannels.includes(activeChannel.id) ? 'Muted: only @mentions' : 'Notification settings'}
+                      className={`p-2 hover:bg-foreground/5 rounded-xl transition-all ${mutedChannels.includes(activeChannel.id) ? 'text-foreground/40' : 'text-primary'}`}
+                    >
+                      {mutedChannels.includes(activeChannel.id) ? <BellOff size={18} /> : <Bell size={18} />}
+                    </button>
+                    <AnimatePresence>
+                      {showNotifMenu && (
+                        <>
+                          <div className="fixed inset-0 z-40" onClick={() => setShowNotifMenu(false)} />
+                          <motion.div
+                            role="menu"
+                            initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 6 }}
+                            className="absolute right-0 top-full mt-2 w-72 z-50 bg-background border border-foreground/10 rounded-xl shadow-xl overflow-hidden"
+                          >
+                            <p className="px-4 pt-3 pb-2 text-xs font-semibold text-foreground/50">Notifications for #{activeChannel.name}</p>
+                            {([
+                              { muted: false, title: 'All messages', body: 'A sound and an unread badge for every new message.' },
+                              { muted: true, title: 'Only @mentions', body: 'Muted. You still hear it when someone mentions you.' },
+                            ] as const).map(opt => {
+                              const on = mutedChannels.includes(activeChannel.id) === opt.muted;
+                              return (
+                                <button
+                                  key={opt.title} role="menuitemradio" aria-checked={on}
+                                  onClick={() => { if (!on) handleMuteChannel(activeChannel.id); setShowNotifMenu(false); }}
+                                  className="w-full flex items-start gap-3 px-4 py-2.5 text-left hover:bg-foreground/5"
+                                >
+                                  <span className={`mt-0.5 w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 ${on ? 'border-primary' : 'border-foreground/30'}`}>{on && <span className="w-2 h-2 rounded-full bg-primary" />}</span>
+                                  <span><span className="block text-sm font-medium">{opt.title}</span><span className="block text-xs text-foreground/55">{opt.body}</span></span>
+                                </button>
+                              );
+                            })}
+                            <p className="px-4 py-2.5 text-xs text-foreground/45 border-t border-foreground/10">Applies only to you.</p>
+                          </motion.div>
+                        </>
+                      )}
+                    </AnimatePresence>
+                  </div>
                 </>
               )}
 
@@ -1105,15 +1145,6 @@ export default function CommunityView({ communityId }: { communityId: string }) 
                 </button>
               )}
 
-              {activeTab === 'channels' && (
-                <button 
-                  onClick={() => setActiveTab('about')}
-                  className="p-2 hover:bg-foreground/5 rounded-xl text-foreground/40 hover:text-foreground transition-all"
-                  title="About Community"
-                >
-                  <Info size={18} />
-                </button>
-              )}
             </div>
           </div>
 
@@ -1179,6 +1210,11 @@ export default function CommunityView({ communityId }: { communityId: string }) 
                   myPermissions={myPermissions}
                   myCustomRoles={myCustomRoles}
                   timeoutUntil={myTimeoutUntil}
+                  isMuted={activeChannel ? mutedChannels.includes(activeChannel.id) : false}
+                  onOpenChannel={(id: string) => {
+                    setActiveChannelId(id);
+                    setSearchParams(prev => { const p = new URLSearchParams(prev); p.set('channelId', id); return p; }, { replace: true });
+                  }}
                   communityMembers={members}
                   roles={roles}
                   onOpenSettings={() => {
@@ -1306,6 +1342,7 @@ export default function CommunityView({ communityId }: { communityId: string }) 
         communityId={communityId}
         channel={channelToEdit}
         roles={roles}
+        welcomeChannelId={community?.welcomeConfig?.channelId}
       />
     </div>
   );

@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { X, Zap, Search, Share2, ArrowRight, Loader2 } from 'lucide-react';
+import { Check, Search, Zap } from 'lucide-react';
 import { auth, db, handleFirestoreError, OperationType } from '../firebase';
 import { collection, query, where, getDocs, addDoc, doc, serverTimestamp, getDoc, writeBatch, increment } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
 import { createNotification } from '../lib/notifications';
 import { sendDirectMessage } from '../features/messages/api';
+import Avatar from './ui/Avatar';
+import ModalShell, { fieldInput, fieldLabel, ghostBtn, primaryBtn } from './ui/ModalShell';
 
 interface CreateInstantSessionModalProps {
   isOpen: boolean;
@@ -17,14 +18,14 @@ export default function CreateInstantSessionModal({ isOpen, onClose }: CreateIns
   const navigate = useNavigate();
   const [title, setTitle] = useState('');
   const [loading, setLoading] = useState(false);
-  const [step, setStep] = useState(1); // 1: Title, 2: Invite
+  const [step, setStep] = useState(0); // 0: topic, 1: invite
   const [searchQuery, setSearchQuery] = useState('');
   const [friends, setFriends] = useState<any[]>([]);
   const [selectedFriends, setSelectedFriends] = useState<string[]>([]);
   const [friendsLoading, setFriendsLoading] = useState(false);
 
   useEffect(() => {
-    if (isOpen && step === 2) {
+    if (isOpen && step === 1) {
       const fetchFriends = async () => {
         if (!auth.currentUser) return;
         setFriendsLoading(true);
@@ -53,6 +54,8 @@ export default function CreateInstantSessionModal({ isOpen, onClose }: CreateIns
       fetchFriends();
     }
   }, [isOpen, step]);
+
+  const TOPICS = ['Open hangout', 'Ask me anything', 'Build in public', 'Chill & chat', 'Brainstorm', 'Quick Q&A'];
 
   const handleStartSession = async () => {
     if (!auth.currentUser || !title.trim()) return;
@@ -110,6 +113,7 @@ export default function CreateInstantSessionModal({ isOpen, onClose }: CreateIns
       }
 
       toast.success('Session started!');
+      setStep(0); setTitle(''); setSelectedFriends([]);
       navigate(`/live/${eventId}`);
       onClose();
     } catch (error) {
@@ -126,160 +130,79 @@ export default function CreateInstantSessionModal({ isOpen, onClose }: CreateIns
 
   if (!isOpen) return null;
 
+  const close = () => { if (!loading) { setStep(0); onClose(); } };
+
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-      <motion.div 
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        onClick={onClose}
-        className="absolute inset-0 bg-background/80 backdrop-blur-sm"
-      />
-      
-      <motion.div 
-        initial={{ opacity: 0, scale: 0.9, y: 20 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.9, y: 20 }}
-        className="relative w-full max-w-lg bg-background border border-white/10 rounded-[32px] overflow-hidden shadow-2xl"
-      >
-        <div className="p-8">
-          <div className="flex items-center justify-between mb-8">
-            <div>
-              <h2 className="text-2xl font-bold flex items-center gap-2">
-                <Zap className="text-yellow-400 fill-yellow-400" size={24} />
-                Instant Session
-              </h2>
-              <p className="text-foreground/40 text-sm">Start a 30-minute live room</p>
-            </div>
-            <button onClick={onClose} className="p-2 hover:bg-white/5 rounded-full transition-colors">
-              <X size={24} />
-            </button>
+    <ModalShell
+      title="Instant session"
+      subtitle={step === 0 ? 'A 30-minute live room' : 'Invite people you follow'}
+      step={step} steps={2} busy={loading} wide={false}
+      onBack={step > 0 ? () => setStep(0) : undefined} onClose={close}
+      status={loading ? 'Starting your room…' : ''}
+      footer={step === 0 ? (<>
+        <button onClick={() => setStep(1)} disabled={!title.trim() || loading} className={ghostBtn}>Invite first</button>
+        <button onClick={handleStartSession} disabled={!title.trim() || loading} className={primaryBtn}>Go live</button>
+      </>) : (<>
+        <button onClick={() => setStep(0)} disabled={loading} className={ghostBtn}>Back</button>
+        <button onClick={handleStartSession} disabled={loading} className={primaryBtn}>
+          {selectedFriends.length > 0 ? `Go live & invite ${selectedFriends.length}` : 'Go live'}
+        </button>
+      </>)}
+    >
+      {step === 0 ? (<>
+        <div>
+          <label htmlFor="is-title" className={fieldLabel}>What's it about?</label>
+          <input
+            id="is-title" autoFocus maxLength={80} value={title}
+            onChange={e => setTitle(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && title.trim() && !loading) handleStartSession(); }}
+            placeholder="Name your room" className={fieldInput}
+          />
+          <div className="mt-3 flex flex-wrap gap-2">
+            {TOPICS.map(t => (
+              <button key={t} type="button" onClick={() => setTitle(t)} aria-pressed={title === t}
+                className={`px-3.5 py-1.5 rounded-full text-sm font-medium transition-colors ${title === t ? 'bg-primary text-white' : 'bg-black/5 dark:bg-white/[0.07] hover:bg-black/10 dark:hover:bg-white/10'}`}>
+                {t}
+              </button>
+            ))}
           </div>
-
-          <AnimatePresence mode="wait">
-            {step === 1 ? (
-              <motion.div 
-                key="step1"
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -20 }}
-                className="space-y-6"
-              >
-                <div>
-                  <label className="block text-xs font-bold text-foreground/30 uppercase tracking-widest mb-2">Session Title</label>
-                  <input 
-                    type="text"
-                    autoFocus
-                    value={title}
-                    onChange={(e) => setTitle(e.target.value)}
-                    placeholder="What are we talking about?"
-                    className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-4 outline-none focus:border-primary transition-all text-lg font-bold"
-                  />
-                </div>
-
-                <div className="p-4 rounded-2xl bg-yellow-500/5 border border-yellow-500/20">
-                  <div className="flex gap-3">
-                    <Zap size={18} className="text-yellow-500 shrink-0 mt-0.5" />
-                    <p className="text-xs text-foreground/60 leading-relaxed">
-                      Instant sessions are fast, public, and automatically end after <span className="text-yellow-500 font-bold">30 minutes</span> to keep things energetic!
-                    </p>
-                  </div>
-                </div>
-
-                <button
-                  disabled={!title.trim()}
-                  onClick={() => setStep(2)}
-                  className="w-full bg-foreground text-background py-4 rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-foreground/90 transition-all disabled:opacity-50"
-                >
-                  Continue to Invites
-                  <ArrowRight size={20} />
-                </button>
-              </motion.div>
-            ) : (
-              <motion.div 
-                key="step2"
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -20 }}
-                className="space-y-6"
-              >
-                <div className="relative">
-                  <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-white/30" size={18} />
-                  <input 
-                    type="text"
-                    placeholder="Search followers..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full bg-white/5 border border-white/10 rounded-2xl pl-12 pr-4 py-3 outline-none focus:border-primary transition-all text-sm"
-                  />
-                </div>
-
-                <div className="space-y-2 max-h-60 overflow-y-auto pr-2 custom-scrollbar">
-                  {friendsLoading ? (
-                    <div className="flex items-center justify-center py-10">
-                      <Loader2 className="animate-spin text-primary" size={24} />
-                    </div>
-                  ) : filteredFriends.length > 0 ? (
-                    filteredFriends.map(friend => (
-                      <button
-                        key={friend.id}
-                        onClick={() => {
-                          setSelectedFriends(prev => 
-                            prev.includes(friend.id) 
-                              ? prev.filter(id => id !== friend.id)
-                              : [...prev, friend.id]
-                          );
-                        }}
-                        className={`w-full flex items-center justify-between p-3 rounded-2xl transition-all border ${
-                          selectedFriends.includes(friend.id) 
-                            ? 'bg-primary/20 border-primary/50' 
-                            : 'bg-white/5 border-white/5 hover:bg-white/10'
-                        }`}
-                      >
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-full overflow-hidden bg-white/10 border border-white/10">
-                            <img src={friend.profileImage || `https://api.dicebear.com/7.x/avataaars/svg?seed=${friend.id}`} alt="" />
-                          </div>
-                          <div className="text-left">
-                            <p className="text-sm font-bold">{friend.displayName || friend.username}</p>
-                            <p className="text-[10px] text-foreground/40">@{friend.username}</p>
-                          </div>
-                        </div>
-                        <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all ${
-                          selectedFriends.includes(friend.id) ? 'bg-primary border-primary text-white' : 'border-white/20'
-                        }`}>
-                          {selectedFriends.includes(friend.id) && <Share2 size={12} />}
-                        </div>
-                      </button>
-                    ))
-                  ) : (
-                    <div className="text-center py-10 text-foreground/30 italic text-sm">
-                      No followers found to invite.
-                    </div>
-                  )}
-                </div>
-
-                <div className="flex gap-3">
-                  <button
-                    onClick={() => setStep(1)}
-                    className="flex-1 bg-white/5 text-white py-4 rounded-2xl font-bold hover:bg-white/10 transition-all border border-white/10 text-sm"
-                  >
-                    Back
-                  </button>
-                  <button
-                    onClick={handleStartSession}
-                    disabled={loading}
-                    className="flex-[2] bg-primary text-white py-4 rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-primary/90 transition-all shadow-[0_0_30px_rgba(var(--primary),0.3)] text-sm"
-                  >
-                    {loading ? <Loader2 className="animate-spin" size={20} /> : <Zap size={20} fill="currentColor" />}
-                    Start & Send {selectedFriends.length > 0 ? `(${selectedFriends.length})` : ''} Invites
-                  </button>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
         </div>
-      </motion.div>
-    </div>
+        <p className="flex items-start gap-2 text-xs text-black/55 dark:text-white/55">
+          <Zap size={15} className="shrink-0 text-primary" />
+          Anyone with the link can drop in. The room wraps up on its own after 30 minutes and never appears in the events list.
+        </p>
+      </>) : (<>
+        <div className="relative">
+          <Search size={17} className="absolute left-4 top-1/2 -translate-y-1/2 text-black/40 dark:text-white/40 pointer-events-none" />
+          <input type="search" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search people you follow" aria-label="Search people you follow"
+            className="w-full pl-11 pr-4 py-2.5 rounded-full bg-black/5 dark:bg-white/[0.06] border border-transparent text-sm outline-none focus:border-primary focus:bg-transparent transition-colors" />
+        </div>
+        <div className="space-y-1 max-h-72 overflow-y-auto -mx-2">
+          {friendsLoading ? (
+            Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-14 mx-2 rounded-xl bg-black/5 dark:bg-white/5 animate-pulse" />)
+          ) : filteredFriends.length > 0 ? filteredFriends.map(f => {
+            const on = selectedFriends.includes(f.id);
+            return (
+              <button key={f.id} type="button" aria-pressed={on}
+                onClick={() => setSelectedFriends(prev => on ? prev.filter(id => id !== f.id) : [...prev, f.id])}
+                className="w-full flex items-center gap-3 px-2 py-2 rounded-xl hover:bg-black/[0.03] dark:hover:bg-white/[0.04] transition-colors text-left">
+                <Avatar src={f.profileImage} seed={f.id} size={40} />
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm font-semibold truncate">{f.displayName || f.username}</span>
+                  <span className="block text-xs text-black/50 dark:text-white/50 truncate">@{f.username}</span>
+                </span>
+                <span className={`w-5 h-5 rounded-full border flex items-center justify-center transition-colors ${on ? 'bg-primary border-primary text-white' : 'border-black/20 dark:border-white/25'}`}>
+                  {on && <Check size={13} />}
+                </span>
+              </button>
+            );
+          }) : (
+            <p className="py-10 text-center text-sm text-black/50 dark:text-white/50">
+              {friends.length === 0 ? "You're not following anyone yet. You can still go live and share the link." : 'No one matches that search.'}
+            </p>
+          )}
+        </div>
+      </>)}
+    </ModalShell>
   );
 }

@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { doc, getDoc, setDoc, deleteDoc, onSnapshot, collection, query, where, increment, updateDoc, limit } from 'firebase/firestore';
 import { db, auth, handleFirestoreError, OperationType } from '../firebase';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Calendar, Clock, MapPin, Users, Globe, ShieldCheck,
-  ArrowLeft, Share2, AlertCircle, Check, Lock, X,
+  ArrowLeft, Rocket, Share2, AlertCircle, Check, Lock, X,
   ExternalLink, MessageSquare, Award, DollarSign,
   ArrowRight, Info, CalendarPlus, Map as MapIcon,
   Trash2
@@ -20,11 +20,15 @@ import CreateEventModal from '../components/CreateEventModal';
 import { updateEventStatus } from '../lib/eventUtils';
 import ConfirmModal from '../components/ConfirmModal';
 import CoHostManagementModal from '../components/CoHostManagementModal';
+import BoostEventModal from '../components/events/BoostEventModal';
+import { isPromoted } from '../lib/eventRanking';
 
 export default function EventDetails() {
   const [isLoaded, setIsLoaded] = useState(false);
   const { eventId } = useParams();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [isBoostOpen, setIsBoostOpen] = useState(false);
   const [event, setEvent] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [isRegisteredState, setIsRegisteredState] = useState(false);
@@ -142,6 +146,28 @@ export default function EventDetails() {
 
     return () => unsubscribe();
   }, [eventId, auth.currentUser]);
+
+  // Returning from Stripe: the server verifies the paid session and applies the boost.
+  const boostSession = searchParams.get('boost_session');
+  useEffect(() => {
+    if (!boostSession || !auth.currentUser) return;
+    (async () => {
+      try {
+        const res = await fetch('/api/boost-confirm', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await auth.currentUser!.getIdToken()}` },
+          body: JSON.stringify({ sessionId: boostSession }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Could not confirm boost');
+        toast.success('Your event is boosted! 🚀');
+      } catch (e: any) {
+        toast.error(e.message);
+      } finally {
+        setSearchParams({}, { replace: true });
+      }
+    })();
+  }, [boostSession, auth.currentUser?.uid]);
 
   const handleRegister = async () => {
     if (!auth.currentUser) {
@@ -534,6 +560,14 @@ export default function EventDetails() {
                       >
                         <Info size={18} /> Edit Event
                       </button>
+                      {event.visibility === 'public' && event.status !== 'ended' && (
+                        <button
+                          onClick={() => setIsBoostOpen(true)}
+                          className="w-full py-4 rounded-2xl font-bold bg-amber-400 text-black hover:bg-amber-300 active:scale-[0.98] transition-all flex items-center justify-center gap-2 text-sm"
+                        >
+                          <Rocket size={18} /> {isPromoted(event) ? 'Extend boost' : 'Boost Event'}
+                        </button>
+                      )}
                       <button 
                         onClick={() => setIsCoHostModalOpen(true)}
                         className="w-full py-4 rounded-2xl font-bold bg-foreground/5 border border-foreground/10 text-foreground hover:bg-foreground/10 active:scale-[0.98] transition-all flex items-center justify-center gap-2 text-sm"
@@ -697,6 +731,7 @@ export default function EventDetails() {
             </div>
           </div>
         </div>
+        <BoostEventModal event={{ ...event, id: eventId }} isOpen={isBoostOpen} onClose={() => setIsBoostOpen(false)} />
         <CreateEventModal 
           isOpen={isEditModalOpen}
           onClose={() => setIsEditModalOpen(false)}

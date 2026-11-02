@@ -464,7 +464,7 @@ service cloud.firestore {
 
     function isValidEvent(data) {
       let requiredFields = ['title', 'hostId', 'eventType', 'visibility', 'startDate', 'endDate', 'timezone', 'status', 'createdAt'];
-      let optionalFields = ['category', 'description', 'banner', 'communityId', 'isPaid', 'price', 'isOffline', 'locationName', 'locationAddress', 'locationCoords', 'onlineType', 'externalPlatform', 'externalUrl', 'maxAttendees', 'attendeeCount', 'coHostIds', 'allowEarlyAccess', 'lastStartedAt', 'type', 'isInstant', 'expiresAt'];
+      let optionalFields = ['category', 'description', 'banner', 'communityId', 'isPaid', 'price', 'isOffline', 'locationName', 'locationAddress', 'locationCoords', 'onlineType', 'externalPlatform', 'externalUrl', 'maxAttendees', 'attendeeCount', 'coHostIds', 'allowEarlyAccess', 'lastStartedAt', 'type', 'isInstant', 'expiresAt', 'promotion', 'city', 'theme'];
       let allFields = requiredFields.concat(optionalFields);
 
       return data.keys().hasAll(requiredFields) &&
@@ -479,6 +479,8 @@ service cloud.firestore {
              data.timezone is string &&
              (data.createdAt is string || data.createdAt is timestamp) &&
              (!('category' in data) || data.category is string) &&
+             (!('city' in data) || (data.city is string && data.city.size() < 100)) &&
+             (!('theme' in data) || (data.theme is string && data.theme.size() < 30)) &&
              (!('description' in data) || (data.description is string && data.description.size() < 5000)) &&
              (!('banner' in data) || (data.banner is string && data.banner.size() < 1000000)) &&
              (!('communityId' in data) || data.communityId is string) &&
@@ -645,6 +647,15 @@ service cloud.firestore {
              (actorPerms.hasAny(['manage_roles']) &&
               oldOrder > rankOf(actor) && newOrder > rankOf(actor) &&
               perms.toSet().difference(actorPerms.toSet().union(['post_messages', 'create_threads', 'upload_files', 'start_voice'].toSet())).size() == 0);
+    }
+
+    function isValidVote(communityId, channelId, messageId, data) {
+      let poll = get(/databases/$(database)/documents/communities/$(communityId)/channels/$(channelId)/messages/$(messageId)).data.get('poll', null);
+      return poll != null && poll.get('v', 1) == 2 && poll.get('closed', false) == false &&
+             (!(poll.get('expiresAt', null) is timestamp) || poll.expiresAt > request.time) &&
+             data.keys().hasOnly(['option', 'votedAt']) && data.keys().hasAll(['option', 'votedAt']) &&
+             data.option is int && data.option >= 0 && data.option < poll.options.size() &&
+             data.votedAt == request.time;
     }
 
     function isValidBan(data, uid) {
@@ -899,13 +910,17 @@ service cloud.firestore {
                       isRegisteredForEvent(eventId)
                     ));
       allow create: if isAuthenticated() && isValidEvent(request.resource.data) && 
+                    !('promotion' in request.resource.data) &&
                     (request.resource.data.eventType == 'user' || 
                      (request.resource.data.eventType == 'community' && 'communityId' in request.resource.data && (isCommunityAdmin(request.resource.data.communityId) || hasPermission(request.resource.data.communityId, 'create_event'))));
       allow update: if isAuthenticated() && (
         isAdmin() ||
-        (resource.data.hostId == request.auth.uid && isValidEvent(request.resource.data)) ||
-        (resource.data.get('coHostIds', []).hasAny([request.auth.uid]) && isValidEvent(request.resource.data)) ||
-        (request.resource.data.diff(resource.data).affectedKeys().hasAny(['attendeeCount', 'impressions']))
+        // `promotion` is only ever written by the boost API (Admin SDK); hosts cannot touch it.
+        (resource.data.hostId == request.auth.uid && isValidEvent(request.resource.data) &&
+          request.resource.data.get('promotion', null) == resource.data.get('promotion', null)) ||
+        (resource.data.get('coHostIds', []).hasAny([request.auth.uid]) && isValidEvent(request.resource.data) &&
+          request.resource.data.get('promotion', null) == resource.data.get('promotion', null)) ||
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['attendeeCount', 'impressions']))
       );
       allow delete: if isAuthenticated() && (resource.data.hostId == request.auth.uid || isAdmin());
 
@@ -993,7 +1008,10 @@ service cloud.firestore {
              (data.createdAt is timestamp || data.createdAt is string) &&
              (!('updatedAt' in data) || (data.updatedAt is timestamp || data.updatedAt is string)) &&
              (!('channelId' in data) || data.channelId == null || data.channelId is string) &&
-             (!('targetAuthorId' in data) || data.targetAuthorId == null || data.targetAuthorId is string);
+             (!('targetAuthorId' in data) || data.targetAuthorId == null || data.targetAuthorId is string) &&
+             (!('targetType' in data) || data.targetType in ['message', 'user']) &&
+             (!('details' in data) || (data.details is string && data.details.size() <= 1000)) &&
+             (!('contentSnippet' in data) || (data.contentSnippet is string && data.contentSnippet.size() <= 500));
     }
 
     match /communities/{communityId} {
@@ -1143,13 +1161,34 @@ service cloud.firestore {
                 incoming().diff(existing()).affectedKeys().hasOnly(['content', 'updatedAt', 'isEdited', 'codeSnippet', 'language', 'attachments', 'poll']) &&
                 isValidChannelMessage(communityId, incoming())) ||
                (incoming().diff(existing()).affectedKeys().hasOnly(['reactions'])) ||
-               (incoming().diff(existing()).affectedKeys().hasOnly(['poll'])) ||
+               // Older polls keep their counts on the message, so anyone can vote through it, but only
+               // the votes: the question, the number of options and the format can't be rewritten.
+               (incoming().diff(existing()).affectedKeys().hasOnly(['poll']) &&
+                existing().get('poll', null) != null &&
+                existing().poll.get('v', 1) != 2 &&
+                incoming().poll.get('v', 1) == existing().poll.get('v', 1) &&
+                incoming().poll.get('question', '') == existing().poll.get('question', '') &&
+                incoming().poll.options.size() == existing().poll.options.size()) ||
+               // Anyone replying in a thread keeps the parent's reply count and last-reply time current.
+               (incoming().diff(existing()).affectedKeys().hasOnly(['replyCount', 'lastReplyAt', 'lastReplyByName']) &&
+                incoming().get('replyCount', 0) is number && incoming().get('replyCount', 0) >= 0 &&
+                !isTimedOut(communityId)) ||
                (isAtLeastModerator(communityId) && 
                 incoming().diff(existing()).affectedKeys().hasOnly(['isPinned', 'pinnedAt']) &&
                 isValidChannelMessage(communityId, incoming()))
              )
           );
           allow delete: if isVerified() && (resource.data.authorUid == request.auth.uid || isAtLeastModerator(communityId) || hasPermission(communityId, 'moderate_chat'));
+
+          // One vote record per member under a poll message (polls with `poll.v == 2`).
+          match /votes/{voterId} {
+            allow read: if canAccessChannel(communityId, channelId);
+            allow create, update: if isVerified() && isOwner(voterId) && amMember(communityId) &&
+                                  !isTimedOut(communityId) && canAccessChannel(communityId, channelId) &&
+                                  isValidVote(communityId, channelId, messageId, incoming());
+            // Votes can be changed but not withdrawn; moderators clear them when removing a poll.
+            allow delete: if isAtLeastModerator(communityId);
+          }
         }
         
         match /liveStreams/{streamId} {

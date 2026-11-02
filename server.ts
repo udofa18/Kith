@@ -9,6 +9,7 @@ import axios from 'axios';
 import multer from 'multer';
 import { fetchMetadata, validateUrl } from './api/_lib/unfurl';
 import { issueLivekitToken } from './api/_lib/livekitToken';
+import { createBoostCheckout, confirmBoost } from './api/_lib/boost';
 
 dotenv.config();
 
@@ -120,6 +121,19 @@ async function startServer() {
       res.status(500).json({ error: 'Failed to generate LiveKit token' });
     }
   });
+
+  // Event boosts (mirrors api/boost-checkout.ts and api/boost-confirm.ts)
+  for (const [route, fn] of [['checkout', createBoostCheckout], ['confirm', confirmBoost]] as const) {
+    app.post(`/api/boost-${route}`, async (req, res) => {
+      try {
+        const { status, body } = await fn(req.body, req.headers.authorization);
+        res.status(status).json(body);
+      } catch (error: any) {
+        console.error('Boost error:', error);
+        res.status(500).json({ error: 'Boost failed' });
+      }
+    });
+  }
 
   // Simple in-memory cache for unfurl results
   const unfurlCache = new Map<string, { data: any, timestamp: number }>();

@@ -1,6 +1,6 @@
-import { useState } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { X, Plus, Trash2, BarChart2 } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { BarChart2, Plus, Trash2, X } from 'lucide-react';
 
 interface PollModalProps {
   isOpen: boolean;
@@ -8,165 +8,107 @@ interface PollModalProps {
   onSubmit: (pollData: { question: string; options: string[]; expiresAt: string }) => void;
 }
 
+const DURATIONS = [
+  { id: '1h', label: '1 hour', ms: 3600e3 },
+  { id: '24h', label: '1 day', ms: 86400e3 },
+  { id: '3d', label: '3 days', ms: 3 * 86400e3 },
+  { id: '7d', label: '1 week', ms: 7 * 86400e3 },
+];
+const MIN_OPTIONS = 2;
+const MAX_OPTIONS = 10;
+const field = 'w-full rounded-lg bg-background border border-black/15 dark:border-white/15 px-3 py-2 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary/30';
+
 export default function CreatePollModal({ isOpen, onClose, onSubmit }: PollModalProps) {
   const [question, setQuestion] = useState('');
   const [options, setOptions] = useState(['', '']);
   const [duration, setDuration] = useState('24h');
 
-  const handleAddOption = () => {
-    if (options.length < 5) {
-      setOptions([...options, '']);
-    }
-  };
+  useEffect(() => {
+    if (!isOpen) return;
+    setQuestion(''); setOptions(['', '']); setDuration('24h');
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [isOpen]);
 
-  const handleRemoveOption = (index: number) => {
-    if (options.length > 2) {
-      setOptions(options.filter((_, i) => i !== index));
-    }
-  };
+  if (!isOpen) return null;
 
-  const handleOptionChange = (index: number, value: string) => {
-    const newOptions = [...options];
-    newOptions[index] = value;
-    setOptions(newOptions);
-  };
+  const cleaned = options.map(o => o.trim()).filter(Boolean);
+  const duplicate = new Set(cleaned.map(o => o.toLowerCase())).size !== cleaned.length;
+  const problem = !question.trim() ? 'Ask a question.'
+    : cleaned.length < MIN_OPTIONS ? 'Add at least two options.'
+    : duplicate ? 'Each option must be different.'
+    : null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!question.trim() || options.some(opt => !opt.trim())) return;
-
-    let expiresAt;
-    const now = new Date();
-    switch (duration) {
-      case '1h': expiresAt = new Date(now.getTime() + 60 * 60 * 1000); break;
-      case '24h': expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000); break;
-      case '7d': expiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000); break;
-      default: expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-    }
-
+    if (problem) return;
     onSubmit({
-      question,
-      options,
-      expiresAt: expiresAt.toISOString()
+      question: question.trim(),
+      options: cleaned,
+      expiresAt: new Date(Date.now() + (DURATIONS.find(d => d.id === duration)?.ms ?? 86400e3)).toISOString(),
     });
-    setQuestion('');
-    setOptions(['', '']);
     onClose();
   };
 
-  return (
-    <AnimatePresence>
-      {isOpen && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 pointer-events-auto">
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={onClose}
-            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-          />
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95, y: 20 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95, y: 20 }}
-            className="relative w-full max-w-md bg-zinc-900 border border-white/10 rounded-[2.5rem] overflow-hidden shadow-2xl"
-          >
-            <div className="p-8 space-y-6">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3 text-primary">
-                  <div className="w-10 h-10 rounded-2xl bg-primary/10 flex items-center justify-center">
-                    <BarChart2 size={24} />
-                  </div>
-                  <div>
-                    <h2 className="text-xl font-black text-white">Create Poll</h2>
-                    <p className="text-[10px] uppercase tracking-widest font-bold opacity-40 text-white">Gather community feedback</p>
-                  </div>
-                </div>
-                <button 
-                  onClick={onClose}
-                  className="p-2 hover:bg-white/5 rounded-full text-white/40 hover:text-white transition-all"
-                >
-                  <X size={20} />
-                </button>
-              </div>
+  return createPortal(
+    <div className="fixed inset-0 z-[9999] flex sm:items-center justify-center bg-black/50 sm:p-4" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <form onSubmit={submit} role="dialog" aria-modal="true" aria-labelledby="poll-title"
+        className="w-full h-full sm:h-auto sm:max-h-[90vh] sm:max-w-md flex flex-col bg-background text-black dark:text-white sm:rounded-2xl sm:border border-black/10 dark:border-white/10 shadow-2xl overflow-hidden">
+        <div className="shrink-0 px-5 py-4 border-b border-black/10 dark:border-white/10 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <span className="w-9 h-9 rounded-lg bg-primary/10 text-primary flex items-center justify-center"><BarChart2 size={18} /></span>
+            <div>
+              <h2 id="poll-title" className="font-semibold leading-tight">Create a poll</h2>
+              <p className="text-xs text-black/50 dark:text-white/50">Members pick one option. They can change their vote until it closes.</p>
+            </div>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Close" className="p-2 -mr-2 rounded-full hover:bg-black/5 dark:hover:bg-white/10"><X size={18} /></button>
+        </div>
 
-              <form onSubmit={handleSubmit} className="space-y-6">
-                <div className="space-y-2">
-                  <label className="text-[10px] font-black uppercase tracking-widest text-white/40 ml-1">Question</label>
-                  <input 
-                    autoFocus
-                    value={question}
-                    onChange={(e) => setQuestion(e.target.value)}
-                    placeholder="What would you like to ask?"
-                    className="w-full bg-white/5 border border-white/10 rounded-2xl px-6 py-4 text-white placeholder:text-white/20 focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all"
-                  />
-                </div>
+        <div className="flex-1 overflow-y-auto p-5 space-y-5">
+          <label className="block">
+            <span className="text-sm font-medium">Question</span>
+            <input autoFocus value={question} onChange={e => setQuestion(e.target.value)} maxLength={200} placeholder="What would you like to ask?" className={`mt-1.5 ${field}`} />
+          </label>
 
-                <div className="space-y-3">
-                  <label className="text-[10px] font-black uppercase tracking-widest text-white/40 ml-1">Options</label>
-                  {options.map((option, idx) => (
-                    <div key={idx} className="relative group">
-                      <input 
-                        value={option}
-                        onChange={(e) => handleOptionChange(idx, e.target.value)}
-                        placeholder={`Option ${idx + 1}`}
-                        className="w-full bg-white/5 border border-white/10 rounded-2xl px-6 py-4 text-white placeholder:text-white/20 focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all"
-                      />
-                      {options.length > 2 && (
-                        <button 
-                          type="button"
-                          onClick={() => handleRemoveOption(idx)}
-                          className="absolute right-4 top-1/2 -translate-y-1/2 p-2 text-white/20 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                  {options.length < 5 && (
-                    <button 
-                      type="button"
-                      onClick={handleAddOption}
-                      className="w-full py-4 border-2 border-dashed border-white/5 rounded-2xl text-white/20 hover:text-primary hover:border-primary/50 hover:bg-primary/5 transition-all flex items-center justify-center gap-2 font-bold text-sm"
-                    >
-                      <Plus size={18} /> Add Option
-                    </button>
+          <fieldset>
+            <legend className="text-sm font-medium mb-1.5">Options</legend>
+            <div className="space-y-2">
+              {options.map((opt, i) => (
+                <div key={i} className="flex gap-2">
+                  <input value={opt} onChange={e => setOptions(options.map((o, j) => j === i ? e.target.value : o))} maxLength={80} placeholder={`Option ${i + 1}`} aria-label={`Option ${i + 1}`} className={field} />
+                  {options.length > MIN_OPTIONS && (
+                    <button type="button" onClick={() => setOptions(options.filter((_, j) => j !== i))} aria-label={`Remove option ${i + 1}`} className="p-2 rounded-lg text-black/40 dark:text-white/40 hover:text-red-500 hover:bg-red-500/10"><Trash2 size={16} /></button>
                   )}
                 </div>
-
-                <div className="space-y-2">
-                  <label className="text-[10px] font-black uppercase tracking-widest text-white/40 ml-1">Duration</label>
-                  <div className="grid grid-cols-3 gap-2">
-                    {['1h', '24h', '7d'].map((d) => (
-                      <button
-                        key={d}
-                        type="button"
-                        onClick={() => setDuration(d)}
-                        className={`py-3 rounded-2xl font-bold text-xs transition-all ${
-                          duration === d 
-                            ? 'bg-primary text-white shadow-neon' 
-                            : 'bg-white/5 text-white/40 hover:bg-white/10'
-                        }`}
-                      >
-                        {d === '1h' ? '1 Hour' : d === '24h' ? '24 Hours' : '7 Days'}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <button 
-                  type="submit"
-                  disabled={!question.trim() || options.some(opt => !opt.trim())}
-                  className="w-full py-4 bg-primary text-white rounded-2xl font-black shadow-neon hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50 disabled:scale-100 flex items-center justify-center gap-3"
-                >
-                  <BarChart2 size={20} />
-                  Create Poll
-                </button>
-              </form>
+              ))}
             </div>
-          </motion.div>
+            {options.length < MAX_OPTIONS && (
+              <button type="button" onClick={() => setOptions([...options, ''])} className="mt-2 flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"><Plus size={15} />Add option</button>
+            )}
+          </fieldset>
+
+          <fieldset>
+            <legend className="text-sm font-medium mb-1.5">Closes after</legend>
+            <div role="radiogroup" className="flex flex-wrap gap-2">
+              {DURATIONS.map(d => (
+                <button key={d.id} type="button" role="radio" aria-checked={duration === d.id} onClick={() => setDuration(d.id)}
+                  className={`px-3 py-1.5 rounded-full border text-sm transition-colors ${duration === d.id ? 'border-primary bg-primary/10 text-primary font-medium' : 'border-black/15 dark:border-white/15 hover:border-black/30 dark:hover:border-white/30'}`}>{d.label}</button>
+              ))}
+            </div>
+          </fieldset>
         </div>
-      )}
-    </AnimatePresence>
+
+        <div className="shrink-0 px-5 py-4 border-t border-black/10 dark:border-white/10 flex items-center justify-between gap-3">
+          <p className={`text-sm ${problem && (question || cleaned.length) ? 'text-black/55 dark:text-white/55' : 'text-transparent'}`}>{problem || '.'}</p>
+          <div className="flex gap-2">
+            <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-black/60 dark:text-white/60 hover:text-black dark:hover:text-white">Cancel</button>
+            <button type="submit" disabled={!!problem} className="px-4 py-2 rounded-lg bg-primary text-white text-sm font-medium disabled:opacity-40">Post poll</button>
+          </div>
+        </div>
+      </form>
+    </div>,
+    document.body,
   );
 }

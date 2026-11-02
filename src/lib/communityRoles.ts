@@ -118,6 +118,7 @@ export const AUDIT_LABELS: Record<string, { label: string; group: 'roles' | 'mem
   'channel.create': { label: 'Created channel', group: 'channels' },
   'channel.update': { label: 'Edited channel', group: 'channels' },
   'channel.delete': { label: 'Deleted channel', group: 'channels' },
+  'channel.clear': { label: 'Cleared channel messages', group: 'channels' },
   'channel.access': { label: 'Changed channel access', group: 'channels' },
   'category.create': { label: 'Created category', group: 'channels' },
   'category.update': { label: 'Renamed category', group: 'channels' },

@@ -1,1035 +1,425 @@
-import { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { 
-  X, Calendar, Users, Globe, Shield, Info, 
-  ArrowRight, ArrowLeft, Check, Image as ImageIcon,
-  Link as LinkIcon, MapPin, Clock, DollarSign, LayoutGrid,
-  Search, Map as MapIcon
-} from 'lucide-react';
-import { setOptions, importLibrary } from '@googlemaps/js-api-loader';
-import { auth, db, handleFirestoreError, OperationType } from '../firebase';
-import { collection, query, where, getDocs, addDoc, doc, getDoc, updateDoc } from 'firebase/firestore';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { addDoc, collection, doc, getDoc, getDocs, query, updateDoc, where } from 'firebase/firestore';
+import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
+import { Camera, Globe, Lock, MapPin, Users, Video } from 'lucide-react';
+import { importLibrary, setOptions } from '@googlemaps/js-api-loader';
+import { toast } from 'react-hot-toast';
+import { auth, db, storage, handleFirestoreError, OperationType } from '../firebase';
+import { EVENT_CATEGORIES } from '../lib/eventCategories';
+import EventCard from './EventCard';
+import ModalShell, { fieldInput, fieldLabel, ghostBtn, primaryBtn } from './ui/ModalShell';
 
-interface CreateEventModalProps {
+const TITLE_MAX = 100;
+const ABOUT_MAX = 1000;
+const IMAGE_MAX_MB = 5;
+const STEPS = ['Basics', 'Look', 'When & where', 'Tickets'] as const;
+const PLATFORMS = ['zoom', 'meet', 'teams', 'other'];
+
+const dayStr = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const localTz = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
+const blank = (communityId?: string) => ({
+  title: '', description: '', category: 'Tech', banner: '',
+  hostType: communityId ? 'community' : 'user', selectedCommunityId: communityId || '',
+  visibility: 'public', isPaid: false, price: 0,
+  startDate: '', startTime: '18:00', endDate: '', endTime: '20:00', timezone: localTz(),
+  isOffline: false, locationName: '', locationAddress: '', locationCoords: null as { lat: number; lng: number } | null,
+  onlineType: 'internal', externalPlatform: 'zoom', externalUrl: '', maxAttendees: 0,
+});
+
+interface Props {
   isOpen: boolean;
   onClose: () => void;
-  communityId?: string; // Optional: if opened from a community page
-  eventId?: string; // Optional: for editing
+  communityId?: string; // set when opened from a community page
+  eventId?: string; // set when editing
 }
 
-export default function CreateEventModal({ isOpen, onClose, communityId, eventId }: CreateEventModalProps) {
-  const [isLoaded, setIsLoaded] = useState(false);
-  const [step, setStep] = useState(1);
-  const [autocomplete, setAutocomplete] = useState<google.maps.places.Autocomplete | null>(null);
-  const [mapCenter, setMapCenter] = useState({ lat: 0, lng: 0 });
-  const [showMap, setShowMap] = useState(false);
-  const [loading, setLoading] = useState(false);
+/** Four short steps (basics, look, when & where, tickets) with a live preview of the event card. */
+export default function CreateEventModal({ isOpen, onClose, communityId, eventId }: Props) {
+  const navigate = useNavigate();
+  const [step, setStep] = useState(0);
+  const [form, setForm] = useState(() => blank(communityId));
+  const [bannerFile, setBannerFile] = useState<File | null>(null);
+  const [bannerUrl, setBannerUrl] = useState('');
   const [myCommunities, setMyCommunities] = useState<any[]>([]);
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [mapsReady, setMapsReady] = useState(false);
+  const [saving, setSaving] = useState<string | null>(null);
+  const bannerInput = useRef<HTMLInputElement>(null);
+  const placeInput = useRef<HTMLInputElement>(null);
+  const timezones = useMemo(() => Intl.supportedValuesOf('timeZone'), []);
+  const set = (patch: Partial<ReturnType<typeof blank>>) => setForm(f => ({ ...f, ...patch }));
 
+  // Local preview of a picked banner.
   useEffect(() => {
-    const initMaps = async () => {
-      const apiKey = (import.meta as any).env.VITE_GOOGLE_MAPS_API_KEY;
-      if (!apiKey) return;
+    if (!bannerFile) { setBannerUrl(''); return; }
+    const u = URL.createObjectURL(bannerFile);
+    setBannerUrl(u);
+    return () => URL.revokeObjectURL(u);
+  }, [bannerFile]);
 
-      try {
-        setOptions({
-          key: apiKey
-        });
-        
-        await importLibrary("places");
-        await importLibrary("maps");
-        await importLibrary("marker");
-        
-        setIsLoaded(true);
-      } catch (err) {
-        console.error("Maps load error in modal:", err);
-      }
-    };
-
-    if (isOpen) {
-      initMaps();
-    }
-  }, [isOpen]);
-  
-  const categories = [
-    { id: 'Festival', name: 'Festival', icon: '🥳' },
-    { id: 'Tech', name: 'Tech', icon: '💻' },
-    { id: 'AI', name: 'AI', icon: '🧠' },
-    { id: 'Arts', name: 'Arts', icon: '🎨' },
-    { id: 'Educational', name: 'Educational', icon: '🎓' },
-    { id: 'Pop culture', name: 'Pop culture', icon: '❤️' },
-    { id: 'Food & Drinks', name: 'Food & Drinks', icon: '🍸' },
-    { id: 'Convention', name: 'Convention', icon: '🏅' },
-    { id: 'Community', name: 'Community', icon: '👥' },
-    { id: 'Holiday', name: 'Holiday', icon: '🍃' },
-    { id: 'Markets', name: 'Markets', icon: '🥕' },
-    { id: 'Fair', name: 'Fair', icon: '🎪' },
-    { id: 'Fintech', name: 'Fintech', icon: '💳' },
-    { id: 'Fashion', name: 'Fashion', icon: '👗' },
-    { id: 'Leadership', name: 'Leadership', icon: '👑' },
-    { id: 'Coaching', name: 'Coaching', icon: '💡' },
-  ];
-
-  const [formData, setFormData] = useState({
-    title: '',
-    description: '',
-    category: 'Festival',
-    banner: '',
-    hostType: communityId ? 'community' : 'user',
-    selectedCommunityId: communityId || '',
-    visibility: 'public',
-    isPaid: false,
-    price: 0,
-    startDate: '',
-    startTime: '12:00',
-    endDate: '',
-    endTime: '13:00',
-    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    isOffline: false,
-    locationName: '',
-    locationAddress: '',
-    locationCoords: null as { lat: number, lng: number } | null,
-    onlineType: 'internal',
-    externalPlatform: 'zoom',
-    externalUrl: '',
-    maxAttendees: 0
-  });
-
-  const [timezoneSearch, setTimezoneSearch] = useState('');
-  const [showTimezoneList, setShowTimezoneList] = useState(false);
-  const timezones = Intl.supportedValuesOf('timeZone');
-  const filteredTimezones = timezones.filter(tz => 
-    tz.toLowerCase().includes(timezoneSearch.toLowerCase())
-  );
-
+  // Maps (optional: without a key, location is typed by hand).
   useEffect(() => {
-    if (isOpen) {
-      if (eventId) {
-        fetchEventData();
-      } else if (!communityId) {
-        fetchMyCommunities();
-      }
-    }
-  }, [isOpen, eventId]);
-
-  const fetchEventData = async () => {
-    if (!eventId) return;
-    setLoading(true);
-    try {
-      const docRef = doc(db, 'events', eventId);
-      const docSnap = await getDoc(docRef);
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        setFormData({
-          title: data.title || '',
-          description: data.description || '',
-          category: data.category || 'Festival',
-          banner: data.banner || '',
-          hostType: data.eventType || 'user',
-          selectedCommunityId: data.communityId || '',
-          visibility: data.visibility || 'public',
-          isPaid: data.isPaid || false,
-          price: data.price || 0,
-          startDate: data.startDate ? data.startDate.split('T')[0] : '',
-          startTime: data.startDate ? data.startDate.split('T')[1]?.slice(0, 5) : '12:00',
-          endDate: data.endDate ? data.endDate.split('T')[0] : '',
-          endTime: data.endDate ? data.endDate.split('T')[1]?.slice(0, 5) : '13:00',
-          timezone: data.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
-          isOffline: data.isOffline || false,
-          locationName: data.locationName || '',
-          locationAddress: data.locationAddress || '',
-          locationCoords: data.locationCoords || null,
-          onlineType: data.onlineType || 'internal',
-          externalPlatform: data.externalPlatform || 'zoom',
-          externalUrl: data.externalUrl || '',
-          maxAttendees: data.maxAttendees || 0
-        });
-        if (data.banner) setImagePreview(data.banner);
-        if (data.locationCoords) {
-          setMapCenter(data.locationCoords);
-          setShowMap(true);
-        }
-      }
-    } catch (error) {
-      console.error("Error fetching event:", error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (!isOpen) {
-      const containers = document.querySelectorAll('.pac-container');
-      containers.forEach(container => (container as HTMLElement).style.display = 'none');
-    }
+    const key = (import.meta as any).env.VITE_GOOGLE_MAPS_API_KEY;
+    if (!isOpen || !key) return;
+    setOptions({ key });
+    importLibrary('places').then(() => setMapsReady(true)).catch(() => undefined);
   }, [isOpen]);
 
-  const fetchMyCommunities = async () => {
-    if (!auth.currentUser) return;
-    try {
-      const q = query(
-        collection(db, 'communities'),
-        where('creatorId', '==', auth.currentUser.uid)
-      );
-      const snapshot = await getDocs(q);
-      setMyCommunities(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
-    } catch (error) {
-      console.error("Error fetching communities:", error);
-    }
-  };
-
-  const handlePlaceChanged = async () => {
-    if (autocomplete !== null) {
-      const place = autocomplete.getPlace();
-      if (place.geometry && place.geometry.location) {
-        const lat = place.geometry.location.lat();
-        const lng = place.geometry.location.lng();
-        
-        setFormData(prev => ({
-          ...prev,
-          locationName: place.name || '',
-          locationAddress: place.formatted_address || '',
-          locationCoords: { lat, lng }
-        }));
-        
-        setMapCenter({ lat, lng });
-        setShowMap(true);
-
-        // Fetch Timezone based on coordinates
-        try {
-          const timestamp = Math.floor(Date.now() / 1000);
-          const apiKey = (import.meta as any).env.VITE_GOOGLE_MAPS_API_KEY;
-          const response = await fetch(
-            `https://maps.googleapis.com/maps/api/timezone/json?location=${lat},${lng}&timestamp=${timestamp}&key=${apiKey}`
-          );
-          const tzData = await response.json();
-          if (tzData.status === 'OK') {
-            setFormData(prev => ({ ...prev, timezone: tzData.timeZoneId }));
-          }
-        } catch (error) {
-          console.error("Error fetching timezone:", error);
-        }
-        
-        // Force hide the autocomplete dropdown after selection
-        const containers = document.querySelectorAll('.pac-container');
-        containers.forEach(container => (container as HTMLElement).style.display = 'none');
-      } else {
-        // Fallback for custom address if no geometry (e.g. "Use {text}")
-        setFormData(prev => ({
-          ...prev,
-          locationName: place.name || '',
-          locationAddress: place.formatted_address || place.name || ''
-        }));
-      }
-    }
-  };
-
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const base64String = reader.result as string;
-        setImagePreview(base64String);
-        setFormData(prev => ({ ...prev, banner: base64String }));
-      };
-      reader.readAsDataURL(file);
-    }
-  };
-
-  const handleSubmit = async () => {
-    if (!auth.currentUser) return;
-    setLoading(true);
-    try {
-      const fullStartDate = `${formData.startDate}T${formData.startTime}:00`;
-      const fullEndDate = `${formData.endDate}T${formData.endTime}:00`;
-
-      const eventData: any = {
-        title: formData.title,
-        description: formData.description,
-        category: formData.category,
-        banner: formData.banner || `https://picsum.photos/seed/${formData.category}/1200/600`,
-        hostId: auth.currentUser.uid,
-        eventType: formData.hostType,
-        visibility: formData.visibility,
-        isPaid: formData.isPaid,
-        price: formData.isPaid ? Number(formData.price) : 0,
-        startDate: fullStartDate,
-        endDate: fullEndDate,
-        timezone: formData.timezone,
-        isOffline: formData.isOffline,
-        status: 'upcoming',
-        attendeeCount: 0,
-        createdAt: new Date().toISOString()
-      };
-
-      if (formData.hostType === 'community') {
-        eventData.communityId = formData.selectedCommunityId;
-      }
-
-      if (formData.isOffline) {
-        eventData.locationName = formData.locationName;
-        eventData.locationAddress = formData.locationAddress;
-        if (formData.locationCoords) {
-          eventData.locationCoords = formData.locationCoords;
-        }
-      } else {
-        eventData.onlineType = formData.onlineType;
-        if (formData.onlineType === 'external') {
-          eventData.externalPlatform = formData.externalPlatform;
-          eventData.externalUrl = formData.externalUrl;
-        }
-      }
-
-      if (formData.maxAttendees > 0) {
-        eventData.maxAttendees = Number(formData.maxAttendees);
-      }
-
-      if (eventId) {
-        // Fetch existing event to compare
-        const existingDoc = await getDoc(doc(db, 'events', eventId));
-        const existingData = existingDoc.data();
-        
-        // Update existing event
-        const { attendeeCount, status, createdAt, ...updateData } = eventData;
-        await updateDoc(doc(db, 'events', eventId), updateData);
-
-        // Check for relevant changes to notify participants
-        if (existingData) {
-          const locationChanged = existingData.locationAddress !== updateData.locationAddress || 
-                                existingData.locationName !== updateData.locationName;
-          const timeChanged = existingData.startDate !== updateData.startDate || 
-                            existingData.endDate !== updateData.endDate;
-          
-          if (locationChanged || timeChanged) {
-            // Notify all registered participants
-            const registrationsSnap = await getDocs(collection(db, 'events', eventId, 'registrations'));
-            const participants = registrationsSnap.docs.map(d => d.id);
-            
-            const notificationPromises = participants.map(participantId => {
-              return addDoc(collection(db, 'notifications'), {
-                recipientId: participantId,
-                type: 'system',
-                category: 'events',
-                content: `Event "${updateData.title}" has been updated. Please check the new ${locationChanged ? 'location' : ''} ${locationChanged && timeChanged ? 'and' : ''} ${timeChanged ? 'date/time' : ''}.`,
-                relatedId: eventId,
-                read: false,
-                createdAt: new Date().toISOString()
-              });
-            });
-            await Promise.all(notificationPromises);
-          }
-        }
-      } else {
-        // Create new event
-        await addDoc(collection(db, 'events'), eventData);
-      }
-      
-      onClose();
-      // Reset form
-      setStep(1);
-      setImagePreview(null);
-      setFormData({
-        title: '',
-        description: '',
-    category: 'Festival',
-        banner: '',
-        hostType: communityId ? 'community' : 'user',
-        selectedCommunityId: communityId || '',
-        visibility: 'public',
-        isPaid: false,
-        price: 0,
-        startDate: '',
-        startTime: '12:00',
-        endDate: '',
-        endTime: '13:00',
-        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        isOffline: false,
-        locationName: '',
-        locationAddress: '',
-        locationCoords: null,
-        onlineType: 'internal',
-        externalPlatform: 'zoom',
-        externalUrl: '',
-        maxAttendees: 0
+  // Load the event when editing, or the user's communities when creating.
+  useEffect(() => {
+    if (!isOpen) return;
+    setStep(0);
+    if (eventId) {
+      getDoc(doc(db, 'events', eventId)).then(snap => {
+        const d = snap.data();
+        if (!d) return;
+        setForm({
+          ...blank(),
+          title: d.title || '', description: d.description || '', category: d.category || 'Tech', banner: d.banner || '',
+          hostType: d.eventType || 'user', selectedCommunityId: d.communityId || '', visibility: d.visibility || 'public',
+          isPaid: !!d.isPaid, price: d.price || 0,
+          startDate: d.startDate?.split('T')[0] || '', startTime: d.startDate?.split('T')[1]?.slice(0, 5) || '18:00',
+          endDate: d.endDate?.split('T')[0] || '', endTime: d.endDate?.split('T')[1]?.slice(0, 5) || '20:00',
+          timezone: d.timezone || localTz(), isOffline: !!d.isOffline, locationName: d.locationName || '',
+          locationAddress: d.locationAddress || '', locationCoords: d.locationCoords || null,
+          onlineType: d.onlineType || 'internal', externalPlatform: d.externalPlatform || 'zoom',
+          externalUrl: d.externalUrl || '', maxAttendees: d.maxAttendees || 0,
+        });
       });
-    } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'events');
-    } finally {
-      setLoading(false);
+    } else if (!communityId && auth.currentUser) {
+      getDocs(query(collection(db, 'communities'), where('creatorId', '==', auth.currentUser.uid)))
+        .then(s => setMyCommunities(s.docs.map(d => ({ id: d.id, ...d.data() }))))
+        .catch(() => undefined);
     }
-  };
+  }, [isOpen, eventId, communityId]);
+
+  // Places autocomplete on the location field.
+  useEffect(() => {
+    if (!mapsReady || !isOpen || step !== 2 || !form.isOffline || !placeInput.current) return;
+    const ac = new google.maps.places.Autocomplete(placeInput.current, { fields: ['name', 'formatted_address', 'geometry'] });
+    const listener = ac.addListener('place_changed', async () => {
+      const p = ac.getPlace();
+      const loc = p.geometry?.location;
+      set({
+        locationName: p.name || '',
+        locationAddress: p.formatted_address || p.name || '',
+        locationCoords: loc ? { lat: loc.lat(), lng: loc.lng() } : null,
+      });
+      if (!loc) return;
+      try { // use the venue's timezone
+        const key = (import.meta as any).env.VITE_GOOGLE_MAPS_API_KEY;
+        const r = await fetch(`https://maps.googleapis.com/maps/api/timezone/json?location=${loc.lat()},${loc.lng()}&timestamp=${Math.floor(Date.now() / 1000)}&key=${key}`);
+        const t = await r.json();
+        if (t.status === 'OK') set({ timezone: t.timeZoneId });
+      } catch { /* keep current timezone */ }
+    });
+    return () => listener.remove();
+  }, [mapsReady, isOpen, step, form.isOffline]);
 
   if (!isOpen) return null;
 
-  return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 md:p-6">
-      <motion.div 
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        onClick={onClose}
-        className="absolute inset-0 bg-background/80 backdrop-blur-sm"
-      />
-      
-      <motion.div 
-        initial={{ opacity: 0, scale: 0.9, y: 20 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.9, y: 20 }}
-        className="relative w-full max-w-2xl bg-background border border-foreground/10 rounded-[32px] overflow-hidden shadow-2xl"
-      >
-        {/* Progress Bar */}
-        <div className="absolute top-0 left-0 w-full h-1 bg-foreground/5">
-          <motion.div 
-            className="h-full bg-primary"
-            initial={{ width: "0%" }}
-            animate={{ width: `${(step / 5) * 100}%` }}
-          />
+  const startIso = form.startDate ? `${form.startDate}T${form.startTime}:00` : '';
+  const endIso = form.endDate ? `${form.endDate}T${form.endTime}:00` : '';
+  const title = form.title.trim();
+
+  const stepError = [
+    form.hostType === 'community' && !form.selectedCommunityId ? 'Pick a community to host under.'
+      : title.length < 3 ? 'Give your event a title (at least 3 characters).' : null,
+    null,
+    !form.startDate || !form.endDate ? 'Choose when it starts and ends.'
+      : new Date(endIso) <= new Date(startIso) ? 'The end must be after the start.'
+      : form.isOffline && !form.locationName.trim() ? 'Add where it is happening.'
+      : !form.isOffline && form.onlineType === 'external' && !/^https?:\/\//i.test(form.externalUrl.trim()) ? 'Add the full link people should join (https://…).'
+      : null,
+    form.isPaid && !(Number(form.price) > 0) ? 'Set a ticket price above $0, or choose Free.' : null,
+  ][step];
+
+  const pickBanner = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = '';
+    if (!f) return;
+    if (!f.type.startsWith('image/')) return toast.error('Choose an image');
+    if (f.size > IMAGE_MAX_MB * 1024 * 1024) return toast.error(`Images must be under ${IMAGE_MAX_MB} MB`);
+    setBannerFile(f);
+  };
+
+  const close = () => {
+    if (saving) return;
+    if (!eventId) { setForm(blank(communityId)); setBannerFile(null); }
+    onClose();
+  };
+
+  const submit = async () => {
+    const user = auth.currentUser;
+    if (!user || stepError) return;
+    try {
+      setSaving(bannerFile ? 'Uploading banner…' : 'Saving…');
+      let banner = form.banner;
+      if (bannerFile) {
+        const r = ref(storage, `events/${user.uid}/${Date.now()}_${bannerFile.name.replace(/[^\w.-]/g, '_')}`);
+        await uploadBytes(r, bannerFile, { contentType: bannerFile.type });
+        banner = await getDownloadURL(r);
+      }
+      setSaving(eventId ? 'Saving changes…' : 'Creating your event…');
+
+      const data: any = {
+        title, description: form.description.trim(), category: form.category,
+        hostId: user.uid, eventType: form.hostType, visibility: form.visibility,
+        isPaid: form.isPaid, price: form.isPaid ? Number(form.price) : 0,
+        startDate: startIso, endDate: endIso, timezone: form.timezone, isOffline: form.isOffline,
+        status: 'upcoming', attendeeCount: 0, createdAt: new Date().toISOString(),
+      };
+      if (banner) data.banner = banner;
+      if (form.hostType === 'community') data.communityId = form.selectedCommunityId;
+      if (form.isOffline) {
+        data.locationName = form.locationName.trim();
+        data.locationAddress = form.locationAddress.trim() || form.locationName.trim();
+        if (form.locationCoords) data.locationCoords = form.locationCoords;
+      } else {
+        data.onlineType = form.onlineType;
+        if (form.onlineType === 'external') { data.externalPlatform = form.externalPlatform; data.externalUrl = form.externalUrl.trim(); }
+      }
+      if (form.maxAttendees > 0) data.maxAttendees = Number(form.maxAttendees);
+
+      if (eventId) {
+        const before = (await getDoc(doc(db, 'events', eventId))).data();
+        const { attendeeCount, status, createdAt, ...update } = data;
+        await updateDoc(doc(db, 'events', eventId), update);
+        const moved = before && (before.locationAddress !== update.locationAddress || before.locationName !== update.locationName);
+        const retimed = before && (before.startDate !== update.startDate || before.endDate !== update.endDate);
+        if (moved || retimed) {
+          const regs = await getDocs(collection(db, 'events', eventId, 'registrations'));
+          const what = [moved && 'location', retimed && 'date/time'].filter(Boolean).join(' and ');
+          await Promise.all(regs.docs.map(d => addDoc(collection(db, 'notifications'), {
+            recipientId: d.id, type: 'system', category: 'events', relatedId: eventId, read: false,
+            content: `Event "${update.title}" has been updated. Please check the new ${what}.`,
+            createdAt: new Date().toISOString(),
+          })));
+        }
+        toast.success('Event updated');
+        onClose();
+      } else {
+        const created = await addDoc(collection(db, 'events'), data);
+        toast.success(`${title} is live on Kith`);
+        setForm(blank(communityId)); setBannerFile(null);
+        onClose();
+        if (!communityId) navigate(`/events/${created.id}`);
+      }
+    } catch (error) {
+      handleFirestoreError(error, eventId ? OperationType.UPDATE : OperationType.CREATE, 'events');
+      toast.error("Couldn't save the event. Please try again.");
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const next = () => {
+    if (stepError) return toast.error(stepError);
+    if (step < STEPS.length - 1) setStep(step + 1); else submit();
+  };
+
+  const me = auth.currentUser;
+  const preview = {
+    id: title || 'preview', title: title || 'Your event title', category: form.category,
+    banner: bannerUrl || form.banner, startDate: startIso || new Date(Date.now() + 2 * 86_400_000).toISOString(),
+    isOffline: form.isOffline, locationName: form.locationName, isPaid: form.isPaid, price: form.price,
+    status: 'upcoming', attendeeCount: 0, hostName: me?.displayName, maxAttendees: form.maxAttendees,
+  };
+  const chip = (active: boolean) => `px-3.5 py-1.5 rounded-full text-sm font-medium transition-colors ${active ? 'bg-pink-500 text-white' : 'bg-black/5 dark:bg-white/[0.07] hover:bg-black/10 dark:hover:bg-white/10'}`;
+
+  const theme = themeOf({ id: 'preview', theme: form.theme });
+  const quick = (kind: 'tonight' | 'tomorrow' | 'weekend') => {
+    const d = new Date();
+    if (kind === 'tomorrow') d.setDate(d.getDate() + 1);
+    if (kind === 'weekend') d.setDate(d.getDate() + ((6 - d.getDay() + 7) % 7 || 7));
+    const day = dayStr(d);
+    const [st, en] = kind === 'tonight' ? ['19:00', '22:00'] : kind === 'tomorrow' ? ['18:00', '21:00'] : ['14:00', '18:00'];
+    set({ startDate: day, endDate: day, startTime: st, endTime: en });
+  };
+
+  return createPortal(
+    <div className="fixed inset-0 z-[100] flex sm:items-center justify-center bg-black/60 backdrop-blur-sm sm:p-4" onMouseDown={e => { if (e.target === e.currentTarget) close(); }}>
+      <div role="dialog" aria-modal="true" aria-label={eventId ? 'Edit event' : 'Create an event'} className="w-full h-full sm:h-auto sm:max-h-[92vh] sm:max-w-4xl flex bg-background text-black dark:text-white sm:rounded-3xl sm:border border-black/10 dark:border-white/10 shadow-2xl overflow-hidden">
+        {/* Poster studio */}
+        <div className="hidden lg:flex w-[340px] shrink-0 flex-col items-center justify-center p-8 relative overflow-hidden" style={{ background: `linear-gradient(160deg, ${theme.from}, ${theme.to})`, color: '#fff' }}>
+          <div className="absolute -top-16 -left-16 w-56 h-56 rounded-full bg-white/20 blur-3xl" />
+          <div className="absolute -bottom-20 -right-10 w-64 h-64 rounded-full bg-black/20 blur-3xl" />
+          <p className="relative text-xs font-bold uppercase tracking-widest text-white/80 mb-4">Live preview</p>
+          <div className="relative w-full -rotate-2 hover:rotate-0 transition-transform duration-300 shadow-2xl rounded-3xl"><EventCard event={preview} preview /></div>
+          <p className="relative mt-5 text-sm text-white/85 text-center">This is how your event shows up on Kith.</p>
         </div>
 
-        <div className="p-8">
-          <div className="flex items-center justify-between mb-8">
-            <div>
-              <h2 className="text-2xl font-bold text-foreground">Create Event</h2>
-              <p className="text-foreground/40 text-sm">Step {step} of 5</p>
+        <div className="flex-1 min-w-0 flex flex-col">
+          <div className="shrink-0 flex items-center gap-3 px-4 sm:px-6 py-4 border-b border-black/10 dark:border-white/10">
+            <button onClick={step > 0 ? () => setStep(step - 1) : close} disabled={!!saving} aria-label={step > 0 ? 'Back' : 'Close'} className="p-2 -ml-2 rounded-full hover:bg-black/5 dark:hover:bg-white/10 disabled:opacity-40">{step > 0 ? <ArrowLeft size={20} /> : <X size={20} />}</button>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-semibold text-black/50 dark:text-white/50">{eventId ? 'Edit event' : 'New event'} · Step {step + 1} of {STEPS.length}</p>
+              <h2 className="font-display font-extrabold text-xl truncate">{STEPS[step].emoji} {STEPS[step].heading}</h2>
             </div>
-            <button onClick={onClose} className="p-2 hover:bg-foreground/5 rounded-full transition-colors text-foreground">
-              <X size={24} />
-            </button>
+            <button onClick={close} disabled={!!saving} aria-label="Close" className="hidden sm:block p-2 rounded-full hover:bg-black/5 dark:hover:bg-white/10"><X size={20} /></button>
           </div>
+          <div className="h-1 bg-black/5 dark:bg-white/10"><div className="h-full transition-all duration-500" style={{ width: `${((step + 1) / STEPS.length) * 100}%`, background: SUNSET }} /></div>
 
-          <AnimatePresence mode="wait">
-            {step === 1 && (
-              <motion.div 
-                key="step1"
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -20 }}
-                className="space-y-6"
-              >
-                <div className="space-y-4">
-                  <label className="text-xs font-bold text-foreground/30 uppercase tracking-widest">Who is hosting?</label>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <button 
-                      onClick={() => setFormData(prev => ({ ...prev, hostType: 'user' }))}
-                      className={`p-6 rounded-2xl border-2 transition-all text-left group ${
-                        formData.hostType === 'user' ? 'border-primary bg-primary/5' : 'border-foreground/5 bg-foreground/5 hover:border-foreground/20'
-                      }`}
-                    >
-                      <div className={`w-12 h-12 rounded-xl flex items-center justify-center mb-4 ${
-                        formData.hostType === 'user' ? 'bg-primary text-primary-foreground' : 'bg-foreground/10 text-foreground/50'
-                      }`}>
-                        <Users size={24} />
-                      </div>
-                      <h3 className="font-bold text-lg mb-1 text-foreground">Personal</h3>
-                      <p className="text-sm text-foreground/40">Host as yourself.</p>
-                    </button>
-
-                    <button 
-                      onClick={() => setFormData(prev => ({ ...prev, hostType: 'community' }))}
-                      className={`p-6 rounded-2xl border-2 transition-all text-left group ${
-                        formData.hostType === 'community' ? 'border-primary bg-primary/5' : 'border-foreground/5 bg-foreground/5 hover:border-foreground/20'
-                      }`}
-                    >
-                      <div className={`w-12 h-12 rounded-xl flex items-center justify-center mb-4 ${
-                        formData.hostType === 'community' ? 'bg-primary text-primary-foreground' : 'bg-foreground/10 text-foreground/50'
-                      }`}>
-                        <Globe size={24} />
-                      </div>
-                      <h3 className="font-bold text-lg mb-1 text-foreground">Community</h3>
-                      <p className="text-sm text-foreground/40">Host for a community.</p>
-                    </button>
-                  </div>
-                </div>
-
-                {formData.hostType === 'community' && !communityId && (
-                  <div className="space-y-3">
-                    <label className="text-xs font-bold text-foreground/30 uppercase tracking-widest">Select Community</label>
-                    <div className="grid grid-cols-1 gap-2 max-h-40 overflow-y-auto pr-2">
-                      {myCommunities.map(comm => (
-                        <button
-                          key={comm.id}
-                          onClick={() => setFormData(prev => ({ ...prev, selectedCommunityId: comm.id }))}
-                          className={`flex items-center gap-3 p-3 rounded-xl border transition-all ${
-                            formData.selectedCommunityId === comm.id ? 'border-primary bg-primary/5' : 'border-foreground/5 bg-foreground/5 hover:bg-foreground/10'
-                          }`}
-                        >
-                          {comm.image && comm.image.trim() !== '' ? (
-                            <img src={comm.image} className="w-8 h-8 rounded-lg object-cover" referrerPolicy="no-referrer" />
-                          ) : (
-                            <div className="w-8 h-8 rounded-lg bg-foreground/10 flex items-center justify-center">
-                              <Globe size={14} className="text-foreground/30" />
-                            </div>
-                          )}
-                          <span className="font-bold text-sm text-foreground">{comm.name}</span>
-                        </button>
-                      ))}
-                      {myCommunities.length === 0 && (
-                        <p className="text-xs text-red-400">You don't manage any communities yet.</p>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                <div className="space-y-4">
-                  <label className="text-xs font-bold text-foreground/30 uppercase tracking-widest">Visibility</label>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <button 
-                      onClick={() => setFormData(prev => ({ ...prev, visibility: 'public' }))}
-                      className={`p-4 rounded-xl border-2 transition-all text-left flex items-center gap-4 ${
-                        formData.visibility === 'public' ? 'border-primary bg-primary/5' : 'border-foreground/5 bg-foreground/5 hover:border-foreground/20'
-                      }`}
-                    >
-                      <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-                        formData.visibility === 'public' ? 'bg-primary text-primary-foreground' : 'bg-foreground/10 text-foreground/50'
-                      }`}>
-                        <Globe size={20} />
-                      </div>
-                      <div>
-                        <h3 className="font-bold text-sm text-foreground">Public</h3>
-                        <p className="text-xs text-foreground/40">Visible to everyone.</p>
-                      </div>
-                    </button>
-
-                    <button 
-                      disabled={formData.hostType === 'user'}
-                      onClick={() => setFormData(prev => ({ ...prev, visibility: 'community' }))}
-                      className={`p-4 rounded-xl border-2 transition-all text-left flex items-center gap-4 ${
-                        formData.visibility === 'community' ? 'border-primary bg-primary/5' : 'border-foreground/5 bg-foreground/5 hover:border-foreground/20'
-                      } ${formData.hostType === 'user' ? 'opacity-50 cursor-not-allowed' : ''}`}
-                    >
-                      <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-                        formData.visibility === 'community' ? 'bg-primary text-primary-foreground' : 'bg-foreground/10 text-foreground/50'
-                      }`}>
-                        <Shield size={20} />
-                      </div>
-                      <div>
-                        <h3 className="font-bold text-sm text-foreground">Community Only</h3>
-                        <p className="text-xs text-foreground/40">Only for members.</p>
-                      </div>
-                    </button>
-                  </div>
-                </div>
-              </motion.div>
+          <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6 space-y-5">
+      {step === 0 && (<>
+        {!eventId && !communityId && (
+          <div>
+            <p className={fieldLabel}>Hosting as</p>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <Choice active={form.hostType === 'user'} onClick={() => set({ hostType: 'user', selectedCommunityId: '' })} icon={Users} title="You" body="Appears on your profile." />
+              <Choice active={form.hostType === 'community'} onClick={() => set({ hostType: 'community' })} icon={Globe} title="A community" body="Shared with its members." />
+            </div>
+            {form.hostType === 'community' && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {myCommunities.length === 0 && <p className="text-sm text-black/50 dark:text-white/50">You don't own a community yet.</p>}
+                {myCommunities.map(c => <button key={c.id} type="button" onClick={() => set({ selectedCommunityId: c.id })} aria-pressed={form.selectedCommunityId === c.id} className={chip(form.selectedCommunityId === c.id)}>{c.name}</button>)}
+              </div>
             )}
-
-            {step === 2 && (
-              <motion.div 
-                key="step2"
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -20 }}
-                className="space-y-6 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar"
-              >
-                <div className="space-y-6">
-                  <div>
-                    <label className="block text-xs font-bold text-foreground/30 uppercase tracking-widest mb-4">Event Category</label>
-                    <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                      {categories.map(cat => (
-                        <button
-                          key={cat.id}
-                          onClick={() => setFormData(prev => ({ ...prev, category: cat.id }))}
-                          className={`flex items-center gap-3 p-3 rounded-xl border transition-all ${
-                            formData.category === cat.id ? 'border-primary bg-primary/5' : 'border-foreground/5 bg-foreground/5 hover:border-foreground/20'
-                          }`}
-                        >
-                          <span className="text-xl">{cat.icon}</span>
-                          <span className="text-xs font-bold text-foreground">{cat.name}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-foreground/30 uppercase tracking-widest mb-2">Event Banner</label>
-                    <div className="relative group">
-                      <div className={`w-full h-48 rounded-2xl border-2 border-dashed border-foreground/10 flex flex-col items-center justify-center overflow-hidden transition-all ${imagePreview ? 'border-solid border-primary/50' : 'hover:border-foreground/20'}`}>
-                        {(imagePreview && imagePreview.trim() !== '') ? (
-                          <>
-                            <img src={imagePreview} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                            <div className="absolute inset-0 bg-background/60 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-                              <button 
-                                onClick={() => {
-                                  setImagePreview(null);
-                                  setFormData(prev => ({ ...prev, banner: '' }));
-                                }}
-                                className="bg-red-500 text-white px-4 py-2 rounded-xl text-sm font-bold"
-                              >
-                                Remove Image
-                              </button>
-                            </div>
-                          </>
-                        ) : (
-                          <div className="text-center p-6 w-full">
-                            <div className="w-12 h-12 rounded-full bg-foreground/5 flex items-center justify-center mx-auto mb-3">
-                              <ImageIcon size={24} className="text-foreground/30" />
-                            </div>
-                            <p className="text-sm text-foreground/40 mb-4">Upload an image for your event</p>
-                            <label className="cursor-pointer bg-foreground/5 hover:bg-foreground/10 border border-foreground/10 px-6 py-3 rounded-xl text-sm font-bold transition-all inline-block text-foreground">
-                              Choose File
-                              <input 
-                                type="file"
-                                accept="image/*"
-                                onChange={handleImageUpload}
-                                className="hidden"
-                              />
-                            </label>
-                            <p className="text-[10px] text-foreground/20 mt-4 uppercase tracking-widest">Or we'll use a placeholder based on category</p>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-foreground/30 uppercase tracking-widest mb-2">Event Title</label>
-                    <input 
-                      type="text"
-                      value={formData.title}
-                      onChange={(e) => setFormData(prev => ({ ...prev, title: e.target.value }))}
-                      placeholder="e.g. React Workshop 2024"
-                      className="w-full bg-foreground/5 border border-foreground/10 rounded-xl px-4 py-4 outline-none focus:border-primary transition-all text-lg font-bold text-foreground"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-foreground/30 uppercase tracking-widest mb-2">Description</label>
-                    <textarea 
-                      rows={1}
-                      value={formData.description}
-                      onChange={(e) => {
-                        setFormData(prev => ({ ...prev, description: e.target.value }));
-                        e.target.style.height = 'auto';
-                        e.target.style.height = `${Math.min(e.target.scrollHeight, 300)}px`;
-                      }}
-                      placeholder="What is this event about?"
-                      className="w-full bg-foreground/5 border border-foreground/10 rounded-xl px-4 py-4 outline-none focus:border-primary transition-all resize-none overflow-y-auto custom-scrollbar min-h-[120px] text-foreground"
-                    />
-                  </div>
-                </div>
-              </motion.div>
-            )}
-
-            {step === 3 && (
-              <motion.div 
-                key="step3"
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -20 }}
-                className="space-y-8"
-              >
-                <div className="space-y-6">
-                  <div className="space-y-4">
-                    <label className="block text-xs font-bold text-foreground/30 uppercase tracking-widest">Start Date & Time</label>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="relative">
-                        <Calendar size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-foreground/30" />
-                        <input 
-                          type="date"
-                          value={formData.startDate}
-                          onChange={(e) => setFormData(prev => ({ ...prev, startDate: e.target.value }))}
-                          className="w-full bg-foreground/5 border border-foreground/10 rounded-xl pl-12 pr-4 py-4 outline-none focus:border-primary transition-all [color-scheme:dark] text-foreground"
-                        />
-                      </div>
-                      <div className="relative">
-                        <Clock size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-foreground/30" />
-                        <input 
-                          type="time"
-                          value={formData.startTime}
-                          onChange={(e) => setFormData(prev => ({ ...prev, startTime: e.target.value }))}
-                          className="w-full bg-foreground/5 border border-foreground/10 rounded-xl pl-12 pr-4 py-4 outline-none focus:border-primary transition-all [color-scheme:dark] text-foreground"
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="space-y-4">
-                    <label className="block text-xs font-bold text-foreground/30 uppercase tracking-widest">End Date & Time</label>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="relative">
-                        <Calendar size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-foreground/30" />
-                        <input 
-                          type="date"
-                          value={formData.endDate}
-                          onChange={(e) => setFormData(prev => ({ ...prev, endDate: e.target.value }))}
-                          className="w-full bg-foreground/5 border border-foreground/10 rounded-xl pl-12 pr-4 py-4 outline-none focus:border-primary transition-all [color-scheme:dark] text-foreground"
-                        />
-                      </div>
-                      <div className="relative">
-                        <Clock size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-foreground/30" />
-                        <input 
-                          type="time"
-                          value={formData.endTime}
-                          onChange={(e) => setFormData(prev => ({ ...prev, endTime: e.target.value }))}
-                          className="w-full bg-foreground/5 border border-foreground/10 rounded-xl pl-12 pr-4 py-4 outline-none focus:border-primary transition-all [color-scheme:dark] text-foreground"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="space-y-4">
-                  <label className="block text-xs font-bold text-foreground/30 uppercase tracking-widest">Time Zone</label>
-                  <div className="relative">
-                    <Globe size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-foreground/30" />
-                    <input 
-                      type="text"
-                      placeholder="Search timezone (e.g. London, Lagos, New York)..."
-                      value={timezoneSearch}
-                      onFocus={() => setShowTimezoneList(true)}
-                      onChange={(e) => {
-                        setTimezoneSearch(e.target.value);
-                        setShowTimezoneList(true);
-                      }}
-                      className="w-full bg-foreground/5 border border-foreground/10 rounded-xl pl-12 pr-4 py-4 outline-none focus:border-primary transition-all text-foreground"
-                    />
-                    
-                    {showTimezoneList && (
-                      <div className="absolute z-50 left-0 right-0 mt-2 max-h-60 overflow-y-auto bg-background border border-foreground/10 rounded-2xl shadow-2xl custom-scrollbar">
-                        {filteredTimezones.map(tz => (
-                          <button
-                            key={tz}
-                            onClick={() => {
-                              setFormData(prev => ({ ...prev, timezone: tz }));
-                              setTimezoneSearch(tz.replace(/_/g, ' '));
-                              setShowTimezoneList(false);
-                            }}
-                            className={`w-full text-left px-6 py-3 text-sm hover:bg-primary/10 transition-colors ${
-                              formData.timezone === tz ? 'text-primary bg-primary/5' : 'text-foreground/60'
-                            }`}
-                          >
-                            {tz.replace(/_/g, ' ')}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                  <p className="text-[10px] text-foreground/20 px-1">Current: <span className="text-primary">{formData.timezone.replace(/_/g, ' ')}</span></p>
-                </div>
-
-                <div className="p-4 rounded-2xl bg-primary/5 border border-primary/20 flex items-start gap-3">
-                  <Info size={18} className="text-primary mt-0.5 shrink-0" />
-                  <p className="text-xs text-foreground/60 leading-relaxed">
-                    We use the Google Time Zone API to ensure your event time is accurate for all participants globally.
-                  </p>
-                </div>
-              </motion.div>
-            )}
-
-            {step === 4 && (
-              <motion.div 
-                key="step4"
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -20 }}
-                className="space-y-6"
-              >
-                <div className="grid grid-cols-2 gap-4">
-                  <button 
-                    onClick={() => setFormData(prev => ({ ...prev, isOffline: false }))}
-                    className={`p-6 rounded-2xl border-2 transition-all text-center ${
-                      !formData.isOffline ? 'border-primary bg-primary/5' : 'border-foreground/5 bg-foreground/5 hover:border-foreground/20'
-                    }`}
-                  >
-                    <Globe size={32} className={`mx-auto mb-3 ${!formData.isOffline ? 'text-primary' : 'text-foreground/30'}`} />
-                    <h3 className="font-bold text-foreground">Online</h3>
-                  </button>
-
-                  <button 
-                    onClick={() => setFormData(prev => ({ ...prev, isOffline: true }))}
-                    className={`p-6 rounded-2xl border-2 transition-all text-center ${
-                      formData.isOffline ? 'border-primary bg-primary/5' : 'border-foreground/5 bg-foreground/5 hover:border-foreground/20'
-                    }`}
-                  >
-                    <MapPin size={32} className={`mx-auto mb-3 ${formData.isOffline ? 'text-primary' : 'text-foreground/30'}`} />
-                    <h3 className="font-bold text-foreground">Offline</h3>
-                  </button>
-                </div>
-
-                {!formData.isOffline ? (
-                  <div className="space-y-6">
-                    <div className="grid grid-cols-2 gap-4">
-                      <button 
-                        onClick={() => setFormData(prev => ({ ...prev, onlineType: 'internal' }))}
-                        className={`p-4 rounded-xl border-2 transition-all text-left ${
-                          formData.onlineType === 'internal' ? 'border-primary bg-primary/5' : 'border-foreground/5 bg-foreground/5 hover:border-foreground/20'
-                        }`}
-                      >
-                        <LayoutGrid size={20} className="mb-2 text-foreground" />
-                        <h4 className="font-bold text-sm text-foreground">Internal</h4>
-                        <p className="text-[10px] text-foreground/40">In-app video tools</p>
-                      </button>
-                      <button 
-                        onClick={() => setFormData(prev => ({ ...prev, onlineType: 'external' }))}
-                        className={`p-4 rounded-xl border-2 transition-all text-left ${
-                          formData.onlineType === 'external' ? 'border-primary bg-primary/5' : 'border-foreground/5 bg-foreground/5 hover:border-foreground/20'
-                        }`}
-                      >
-                        <LinkIcon size={20} className="mb-2 text-foreground" />
-                        <h4 className="font-bold text-sm text-foreground">External</h4>
-                        <p className="text-[10px] text-foreground/40">Zoom, Google Meet, etc.</p>
-                      </button>
-                    </div>
-
-                    {formData.onlineType === 'external' && (
-                      <div className="space-y-4">
-                        <div className="grid grid-cols-3 gap-2">
-                          {['zoom', 'google_meet', 'discord', 'other'].map(platform => (
-                            <button
-                              key={platform}
-                              onClick={() => setFormData(prev => ({ ...prev, externalPlatform: platform }))}
-                              className={`px-3 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest border transition-all ${
-                                formData.externalPlatform === platform ? 'border-primary bg-primary/10 text-primary' : 'border-foreground/5 bg-foreground/5 text-foreground/40'
-                              }`}
-                            >
-                              {platform.replace('_', ' ')}
-                            </button>
-                          ))}
-                        </div>
-                        <input 
-                          type="url"
-                          value={formData.externalUrl}
-                          onChange={(e) => setFormData(prev => ({ ...prev, externalUrl: e.target.value }))}
-                          placeholder="Meeting link (https://...)"
-                          className="w-full bg-foreground/5 border border-foreground/10 rounded-xl px-4 py-3 outline-none focus:border-primary transition-all text-foreground"
-                        />
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                  <div className="space-y-4">
-                    <label className="block text-xs font-bold text-foreground/30 uppercase tracking-widest mb-2">Add Location</label>
-                    {isLoaded ? (
-                      <div className="relative">
-                        <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-foreground/30" />
-                        <input 
-                          type="text"
-                          placeholder="Search for a venue or address..."
-                          className="w-full bg-foreground/5 border border-foreground/10 rounded-xl pl-12 pr-4 py-3 outline-none focus:border-primary transition-all text-foreground"
-                          ref={(el) => {
-                            if (el && !autocomplete) {
-                              const ac = new google.maps.places.Autocomplete(el, {
-                                types: ['geocode', 'establishment'],
-                                fields: ['formatted_address', 'geometry', 'name']
-                              });
-                              ac.addListener('place_changed', () => {
-                                const place = ac.getPlace();
-                                if (place.geometry && place.geometry.location) {
-                                  const lat = place.geometry.location.lat();
-                                  const lng = place.geometry.location.lng();
-                                  
-                                  setFormData(prev => ({
-                                    ...prev,
-                                    locationName: place.name || '',
-                                    locationAddress: place.formatted_address || '',
-                                    locationCoords: { lat, lng }
-                                  }));
-                                  
-                                  setMapCenter({ lat, lng });
-                                  setShowMap(true);
-                                  
-                                  // Fetch Timezone
-                                  (async () => {
-                                    try {
-                                      const timestamp = Math.floor(Date.now() / 1000);
-                                      const apiKey = (import.meta as any).env.VITE_GOOGLE_MAPS_API_KEY;
-                                      const response = await fetch(
-                                        `https://maps.googleapis.com/maps/api/timezone/json?location=${lat},${lng}&timestamp=${timestamp}&key=${apiKey}`
-                                      );
-                                      const tzData = await response.json();
-                                      if (tzData.status === 'OK') {
-                                        setFormData(prev => ({ ...prev, timezone: tzData.timeZoneId }));
-                                      }
-                                    } catch (error) {
-                                      console.error("Error fetching timezone:", error);
-                                    }
-                                  })();
-                                }
-                              });
-                              setAutocomplete(ac);
-                            }
-                          }}
-                        />
-                      </div>
-                    ) : (
-                      <div className="w-full bg-foreground/5 border border-foreground/10 rounded-xl px-4 py-3 text-foreground/30 italic text-sm">
-                        Loading Google Maps...
-                      </div>
-                    )}
-                  </div>
-
-                    {formData.locationName && (
-                      <motion.div 
-                        initial={{ opacity: 0, y: 10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        className="p-4 rounded-2xl bg-foreground/5 border border-foreground/10 space-y-3"
-                      >
-                        <div className="flex items-start justify-between">
-                          <div className="flex items-start gap-3">
-                            <div className="w-8 h-8 rounded-lg bg-primary/20 flex items-center justify-center text-primary shrink-0">
-                              <MapPin size={16} />
-                            </div>
-                            <div>
-                              <h4 className="font-bold text-sm text-foreground">{formData.locationName}</h4>
-                              <p className="text-[10px] text-foreground/40">{formData.locationAddress}</p>
-                            </div>
-                          </div>
-                          <button 
-                            onClick={() => {
-                              setFormData(prev => ({ ...prev, locationName: '', locationAddress: '', locationCoords: null }));
-                              setShowMap(false);
-                            }}
-                            className="text-foreground/20 hover:text-red-400 transition-colors"
-                          >
-                            <X size={16} />
-                          </button>
-                        </div>
-
-                        {showMap && isLoaded && formData.locationCoords && (
-                          <div className="w-full h-32 rounded-xl overflow-hidden border border-foreground/5 relative group">
-                            <div 
-                              className="w-full h-full"
-                              ref={(el) => {
-                                if (el && isLoaded && formData.locationCoords) {
-                                  const map = new google.maps.Map(el, {
-                                    center: formData.locationCoords,
-                                    zoom: 15,
-                                    disableDefaultUI: true,
-                                    styles: [
-                                      { elementType: 'geometry', stylers: [{ color: '#242f3e' }] },
-                                      { elementType: 'labels.text.stroke', stylers: [{ color: '#242f3e' }] },
-                                      { elementType: 'labels.text.fill', stylers: [{ color: '#746855' }] },
-                                      { featureType: 'administrative.locality', elementType: 'labels.text.fill', stylers: [{ color: '#d59563' }] },
-                                      { featureType: 'poi', elementType: 'labels.text.fill', stylers: [{ color: '#d59563' }] },
-                                      { featureType: 'poi.park', elementType: 'geometry', stylers: [{ color: '#263c3f' }] },
-                                      { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#38414e' }] },
-                                      { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#17263c' }] },
-                                    ]
-                                  });
-                                  new google.maps.Marker({
-                                    position: formData.locationCoords,
-                                    map
-                                  });
-                                }
-                              }}
-                            />
-                            <div className="absolute inset-0 bg-transparent group-hover:bg-background/20 transition-all pointer-events-none" />
-                          </div>
-                        )}
-                      </motion.div>
-                    )}
-                  </div>
-                )}
-              </motion.div>
-            )}
-
-            {step === 5 && (
-              <motion.div 
-                key="step5"
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -20 }}
-                className="space-y-8"
-              >
-                <div className="space-y-4">
-                  <label className="block text-xs font-bold text-foreground/30 uppercase tracking-widest">Ticket Pricing</label>
-                  <div className="grid grid-cols-2 gap-4">
-                    <button 
-                      onClick={() => setFormData(prev => ({ ...prev, isPaid: false }))}
-                      className={`p-6 rounded-2xl border-2 transition-all text-center ${
-                        !formData.isPaid ? 'border-primary bg-primary/5' : 'border-foreground/5 bg-foreground/5 hover:border-foreground/20'
-                      }`}
-                    >
-                      <Check size={32} className={`mx-auto mb-3 ${!formData.isPaid ? 'text-primary' : 'text-foreground/30'}`} />
-                      <h3 className="font-bold text-foreground">Free</h3>
-                    </button>
-
-                    <button 
-                      onClick={() => setFormData(prev => ({ ...prev, isPaid: true }))}
-                      className={`p-6 rounded-2xl border-2 transition-all text-center ${
-                        formData.isPaid ? 'border-primary bg-primary/5' : 'border-foreground/5 bg-foreground/5 hover:border-foreground/20'
-                      }`}
-                    >
-                      <DollarSign size={32} className={`mx-auto mb-3 ${formData.isPaid ? 'text-primary' : 'text-foreground/30'}`} />
-                      <h3 className="font-bold text-foreground">Paid</h3>
-                    </button>
-                  </div>
-
-                  {formData.isPaid && (
-                    <motion.div 
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className="relative"
-                    >
-                      <DollarSign size={20} className="absolute left-4 top-1/2 -translate-y-1/2 text-foreground/30" />
-                      <input 
-                        type="number"
-                        value={formData.price}
-                        onChange={(e) => setFormData(prev => ({ ...prev, price: Number(e.target.value) }))}
-                        placeholder="0.00"
-                        className="w-full bg-foreground/5 border border-primary/30 rounded-xl pl-12 pr-4 py-4 text-xl font-bold outline-none focus:border-primary transition-all text-foreground"
-                      />
-                      <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs font-bold text-foreground/20 uppercase tracking-widest">USD</span>
-                    </motion.div>
-                  )}
-                </div>
-
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <label className="block text-xs font-bold text-foreground/30 uppercase tracking-widest">Max Attendees</label>
-                    <span className="text-xs font-bold text-foreground/40">{formData.maxAttendees === 0 ? 'Unlimited' : formData.maxAttendees}</span>
-                  </div>
-                  <input 
-                    type="range"
-                    min="0"
-                    max="1000"
-                    step="10"
-                    value={formData.maxAttendees}
-                    onChange={(e) => setFormData(prev => ({ ...prev, maxAttendees: Number(e.target.value) }))}
-                    className="w-full h-2 bg-foreground/5 rounded-lg appearance-none cursor-pointer accent-primary"
-                  />
-                  <div className="flex justify-between text-[10px] text-foreground/20 font-bold uppercase tracking-widest">
-                    <span>Unlimited</span>
-                    <span>1000+</span>
-                  </div>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          <div className="flex items-center justify-between mt-12 pt-8 border-t border-foreground/5">
-            <button 
-              onClick={() => step > 1 && setStep(step - 1)}
-              disabled={step === 1}
-              className={`flex items-center gap-2 font-bold transition-all ${
-                step === 1 ? 'text-foreground/10 cursor-not-allowed' : 'text-foreground/50 hover:text-foreground'
-              }`}
-            >
-              <ArrowLeft size={20} /> Back
-            </button>
-            
-            {step < 5 ? (
-              <button 
-                onClick={() => setStep(step + 1)}
-                disabled={formData.hostType === 'community' && !formData.selectedCommunityId && step === 1}
-                className="flex items-center gap-2 bg-foreground text-background px-8 py-3 rounded-2xl font-bold hover:scale-105 transition-all disabled:opacity-50"
-              >
-                Next Step <ArrowRight size={20} />
-              </button>
-            ) : (
-              <button 
-                onClick={handleSubmit}
-                disabled={loading || !formData.title || !formData.startDate || !formData.endDate}
-                className="flex items-center gap-2 bg-primary text-primary-foreground px-8 py-3 rounded-2xl font-bold shadow-[0_0_20px_rgba(0,242,255,0.2)] hover:scale-105 transition-all disabled:opacity-50"
-              >
-                {loading ? 'Creating...' : 'Launch Event'} <Check size={20} />
-              </button>
-            )}
+          </div>
+        )}
+        <div>
+          <div className="flex justify-between"><label htmlFor="ev-title" className={fieldLabel}>Title</label><span className="text-xs text-black/40 dark:text-white/40">{form.title.length}/{TITLE_MAX}</span></div>
+          <input id="ev-title" autoFocus value={form.title} maxLength={TITLE_MAX} onChange={e => set({ title: e.target.value })} placeholder="Name your event" className="mt-1 w-full bg-transparent border-0 border-b-2 border-black/10 dark:border-white/15 focus:border-pink-500 outline-none py-2 font-display font-extrabold text-2xl sm:text-3xl placeholder:text-black/25 dark:placeholder:text-white/25 transition-colors" />
+        </div>
+        <div>
+          <div className="flex justify-between"><label htmlFor="ev-about" className={fieldLabel}>What's it about?</label><span className="text-xs text-black/40 dark:text-white/40">{form.description.length}/{ABOUT_MAX}</span></div>
+          <textarea id="ev-about" value={form.description} maxLength={ABOUT_MAX} onChange={e => set({ description: e.target.value })} rows={4} placeholder="What will happen, and who should come?" className={`${fieldInput} resize-none`} />
+        </div>
+        <div>
+          <p className={fieldLabel}>What kind of event?</p>
+          <div className="mt-2 grid grid-cols-3 sm:grid-cols-4 gap-2">
+            {EVENT_CATEGORIES.map((c, i) => {
+              const on = form.category === c.name;
+              return (
+                <button key={c.name} type="button" onClick={() => set({ category: c.name })} aria-pressed={on} className={`flex flex-col items-center gap-1 py-3 rounded-2xl text-xs font-bold transition-all ${on ? 'ring-2 ring-pink-500 scale-105' : 'hover:scale-105'}`} style={{ background: `hsl(${(i * 47) % 360} 85% 60% / ${on ? 0.28 : 0.12})` }}>
+                  <span className="text-2xl">{c.emoji}</span><span className="truncate max-w-full px-1">{c.name}</span>
+                </button>
+              );
+            })}
           </div>
         </div>
-      </motion.div>
-    </div>
+      </>)}
+
+      {step === 1 && (<>
+        <div>
+          <p className={fieldLabel}>Banner</p>
+          <p className="text-xs text-black/50 dark:text-white/50">Wide images (16:9) look best. Without one, we use a colour from your title.</p>
+          <button type="button" onClick={() => bannerInput.current?.click()} className="mt-2 w-full aspect-[16/7] rounded-2xl border-2 border-dashed border-black/15 dark:border-white/20 flex items-center justify-center overflow-hidden hover:border-primary transition-colors">
+            {bannerUrl || form.banner ? <img src={bannerUrl || form.banner} alt="" className="w-full h-full object-cover" /> : <span className="flex items-center gap-2 text-sm text-black/45 dark:text-white/45"><Camera size={18} /> Add a banner</span>}
+          </button>
+          {(bannerFile || form.banner) && <button type="button" onClick={() => { setBannerFile(null); set({ banner: '' }); }} className="mt-1.5 text-sm text-black/55 dark:text-white/55 hover:text-red-500">Remove banner</button>}
+          <input ref={bannerInput} type="file" accept="image/*" hidden onChange={pickBanner} />
+        </div>
+        <div>
+          <p className={fieldLabel}>Pick a vibe</p>
+          <p className="text-xs text-black/50 dark:text-white/50">Colours your poster when there's no banner.</p>
+          <div className="mt-2 flex flex-wrap gap-3">
+            {EVENT_THEMES.map(t => (
+              <button key={t.id} type="button" onClick={() => set({ theme: t.id })} aria-pressed={form.theme === t.id} aria-label={t.name} title={t.name} className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-transform ${form.theme === t.id ? 'ring-2 ring-offset-2 ring-offset-background ring-pink-500 scale-110' : 'hover:scale-110'}`} style={{ background: `linear-gradient(135deg, ${t.from}, ${t.to})`, color: '#fff' }}>
+                {form.theme === t.id && <Check size={18} />}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="lg:hidden max-w-[260px]"><EventCard event={preview} preview /></div>
+      </>)}
+
+      {step === 2 && (<>
+        <div className="flex flex-wrap gap-2">
+          {([['tonight', '🌙 Tonight'], ['tomorrow', '☀️ Tomorrow'], ['weekend', '🎉 This weekend']] as const).map(([k, l]) => <button key={k} type="button" onClick={() => quick(k)} className={chip(false)}>{l}</button>)}
+        </div>
+        <div className="grid sm:grid-cols-2 gap-4">
+          <div><label htmlFor="ev-sd" className={fieldLabel}>Starts</label>
+            <div className="flex gap-2"><input id="ev-sd" type="date" min={dayStr(new Date())} value={form.startDate} onChange={e => set({ startDate: e.target.value, endDate: form.endDate || e.target.value })} className={fieldInput} /><input aria-label="Start time" type="time" value={form.startTime} onChange={e => set({ startTime: e.target.value })} className={`${fieldInput} w-32`} /></div></div>
+          <div><label htmlFor="ev-ed" className={fieldLabel}>Ends</label>
+            <div className="flex gap-2"><input id="ev-ed" type="date" min={form.startDate} value={form.endDate} onChange={e => set({ endDate: e.target.value })} className={fieldInput} /><input aria-label="End time" type="time" value={form.endTime} onChange={e => set({ endTime: e.target.value })} className={`${fieldInput} w-32`} /></div></div>
+        </div>
+        <div>
+          <label htmlFor="ev-tz" className={fieldLabel}>Time zone</label>
+          <select id="ev-tz" value={form.timezone} onChange={e => set({ timezone: e.target.value })} className={fieldInput}>
+            {(timezones.includes(form.timezone) ? timezones : [form.timezone, ...timezones]).map(z => <option key={z} value={z}>{z.replace(/_/g, ' ')}</option>)}
+          </select>
+        </div>
+        <div>
+          <p className={fieldLabel}>Format</p>
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <Choice active={!form.isOffline} onClick={() => set({ isOffline: false })} icon={Video} title="Online" body="Join from anywhere." />
+            <Choice active={form.isOffline} onClick={() => set({ isOffline: true })} icon={MapPin} title="In person" body="At a place you choose." />
+          </div>
+        </div>
+        {form.isOffline ? (
+          <div>
+            <label htmlFor="ev-place" className={fieldLabel}>Location</label>
+            <input id="ev-place" ref={placeInput} defaultValue={form.locationName} onChange={e => !mapsReady && set({ locationName: e.target.value, locationAddress: e.target.value })} placeholder={mapsReady ? 'Search for a venue or address' : 'Venue or address'} className={fieldInput} />
+            {form.locationAddress && <p className="mt-1.5 text-xs text-black/55 dark:text-white/55 flex items-center gap-1"><MapPin size={12} /> {form.locationName}{form.locationAddress !== form.locationName && ` · ${form.locationAddress}`}</p>}
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-2">
+              <Choice active={form.onlineType === 'internal'} onClick={() => set({ onlineType: 'internal' })} icon={Video} title="On Kith" body="A live room, built in." />
+              <Choice active={form.onlineType === 'external'} onClick={() => set({ onlineType: 'external' })} icon={Globe} title="Other platform" body="Zoom, Meet and so on." />
+            </div>
+            {form.onlineType === 'external' && (
+              <div className="flex gap-2">
+                <select aria-label="Platform" value={form.externalPlatform} onChange={e => set({ externalPlatform: e.target.value })} className={`${fieldInput} w-32 mt-0`}>{PLATFORMS.map(p => <option key={p} value={p}>{p[0].toUpperCase() + p.slice(1)}</option>)}</select>
+                <input aria-label="Meeting link" value={form.externalUrl} onChange={e => set({ externalUrl: e.target.value })} placeholder="https://…" className={`${fieldInput} mt-0`} />
+              </div>
+            )}
+          </div>
+        )}
+      </>)}
+
+      {step === 3 && (<>
+        <div>
+          <p className={fieldLabel}>Who can see it?</p>
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <Choice active={form.visibility === 'public'} onClick={() => set({ visibility: 'public' })} icon={Globe} title="Public" body="Listed for everyone." />
+            <Choice active={form.visibility === 'community'} onClick={() => form.hostType === 'community' ? set({ visibility: 'community' }) : toast('Community-only needs a community host')} icon={Lock} title="Members only" body="Only your community's members." />
+          </div>
+        </div>
+        <div>
+          <p className={fieldLabel}>Tickets</p>
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <Choice active={!form.isPaid} onClick={() => set({ isPaid: false })} icon={Users} title="Free" body="Anyone can RSVP." />
+            <Choice active={form.isPaid} onClick={() => set({ isPaid: true })} icon={Lock} title="Paid" body="Charge per ticket." />
+          </div>
+          {form.isPaid && (
+            <div className="mt-3 flex items-center gap-2">
+              <span className="text-sm text-black/55 dark:text-white/55">USD</span>
+              <input aria-label="Ticket price" type="number" min={1} step={1} value={form.price || ''} onChange={e => set({ price: Number(e.target.value) })} placeholder="10" className={`${fieldInput} mt-0 w-32`} />
+            </div>
+          )}
+        </div>
+        <div>
+          <label htmlFor="ev-cap" className={fieldLabel}>Capacity</label>
+          <p className="text-xs text-black/50 dark:text-white/50">Leave empty for unlimited. We'll show "spots left" when it's nearly full.</p>
+          <input id="ev-cap" type="number" min={0} value={form.maxAttendees || ''} onChange={e => set({ maxAttendees: Math.max(0, Number(e.target.value)) })} placeholder="Unlimited" className={`${fieldInput} w-40`} />
+        </div>
+      </>)}
+          </div>
+
+          <div className="shrink-0 flex items-center justify-between gap-3 px-4 sm:px-6 py-3 border-t border-black/10 dark:border-white/10 pb-[max(12px,env(safe-area-inset-bottom))]">
+            <p className="text-xs text-black/50 dark:text-white/50 min-w-0 truncate">{saving ?? (stepError && step === 0 && title ? stepError : '')}</p>
+            <div className="flex gap-2 shrink-0">
+              {step > 0 && <button onClick={() => setStep(step - 1)} disabled={!!saving} className={ghostBtn}>Back</button>}
+              <button onClick={next} disabled={!!saving || !!stepError} className="px-6 py-2.5 rounded-full text-white text-sm font-bold hover:scale-105 active:scale-95 disabled:opacity-40 disabled:hover:scale-100 transition-transform shadow-lg shadow-pink-500/20" style={{ background: SUNSET }}>
+                {saving ? 'Saving…' : step < STEPS.length - 1 ? 'Next' : eventId ? 'Save changes' : 'Publish event 🚀'}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+function Choice({ active, onClick, icon: Icon, title, body }: { active: boolean; onClick: () => void; icon: typeof Globe; title: string; body: string }) {
+  return (
+    <button type="button" onClick={onClick} aria-pressed={active} className={`p-3.5 rounded-2xl border text-left transition-colors ${active ? 'border-pink-500 bg-pink-500/5' : 'border-black/10 dark:border-white/10 hover:bg-black/[0.03] dark:hover:bg-white/[0.04]'}`}>
+      <Icon size={18} className={active ? 'text-pink-500' : 'text-black/45 dark:text-white/45'} />
+      <p className="mt-1.5 text-sm font-semibold">{title}</p>
+      <p className="text-xs text-black/55 dark:text-white/55">{body}</p>
+    </button>
   );
 }

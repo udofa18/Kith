@@ -1,10 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
-import { Hash, MessageSquare, Code, FileText, Megaphone, Plus, Lock, Volume2, Radio, EyeOff, X, GripVertical, Shield, MoreVertical, CheckCheck, BellOff, Trash2, Unlock, Layout, ChevronDown, ChevronRight, Edit2, Copy, Settings } from 'lucide-react';
+import { Plus, Lock, EyeOff, GripVertical, MoreVertical, CheckCheck, Bell, BellOff, Trash2, Unlock, ChevronDown, ChevronRight, Edit2, Copy, Settings, FolderPlus } from 'lucide-react';
 import { motion, Reorder, AnimatePresence } from 'motion/react';
-import { collection, query, onSnapshot, orderBy, doc, updateDoc, deleteDoc, addDoc, serverTimestamp, where } from 'firebase/firestore';
+import { collection, query, onSnapshot, orderBy, doc, updateDoc, addDoc, serverTimestamp, where, writeBatch } from 'firebase/firestore';
 import { db, auth, handleFirestoreError, OperationType } from '../firebase';
 import { toast } from 'react-hot-toast';
 import { channelTypeInfo } from '../lib/channelTypes';
+import { queueAudit, useMembership } from '../lib/communityRoles';
+import ConfirmModal from './ConfirmModal';
 
 interface Category {
   id: string;
@@ -18,6 +20,7 @@ interface Channel {
   type: 'feed' | 'chat' | 'code' | 'resources' | 'announcements' | 'voice' | 'live';
   categoryId?: string;
   isPremium?: boolean;
+  description?: string;
   isHidden?: boolean;
   isLocked?: boolean;
   messageCount?: number;
@@ -76,8 +79,13 @@ export default function ChannelSidebar({
   const [editCategoryName, setEditCategoryName] = useState('');
   const [voiceParticipants, setVoiceParticipants] = useState<Record<string, any[]>>({});
   const [activeLiveStreams, setActiveLiveStreams] = useState<Record<string, any[]>>({});
-  const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
+  // The channel menu is positioned on screen (not inside the scrolling list), so the last channels' menus aren't clipped.
+  const [menu, setMenu] = useState<{ id: string; x: number; y: number; up: boolean } | null>(null);
+  const [pendingCategory, setPendingCategory] = useState<Category | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const me = useMembership(communityId);
+  // Moderators see the whole list, but only admins can organise it (the rules agree).
+  const canOrganise = me.isAdmin;
 
   useEffect(() => {
     localStorage.setItem(`collapsed_${communityId}`, JSON.stringify(collapsedCategories));
@@ -100,55 +108,74 @@ export default function ChannelSidebar({
   };
 
   const handleAddCategory = async () => {
-    if (!isAdmin) return;
+    if (!canOrganise) return;
     try {
-      await addDoc(collection(db, 'communities', communityId, 'categories'), {
-        name: 'New Category',
-        order: categories.length,
-        createdAt: serverTimestamp()
-      });
-      toast.success("Category created!");
+      const ref = doc(collection(db, 'communities', communityId, 'categories'));
+      const batch = writeBatch(db);
+      batch.set(ref, { name: 'New category', order: categories.length, createdAt: serverTimestamp() });
+      queueAudit(batch, communityId, { action: 'category.create', targetName: 'New category' });
+      await batch.commit();
+      // Straight into renaming, since nobody wants to keep "New category".
+      setEditingCategoryId(ref.id);
+      setEditCategoryName('');
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, `communities/${communityId}/categories`);
-      toast.error("Failed to create category");
+      toast.error("Couldn't create the category");
     }
   };
 
   const handleRenameCategory = async (id: string) => {
-    if (!editCategoryName.trim()) return;
+    const name = editCategoryName.trim();
+    setEditingCategoryId(null);
+    if (!name) return;
     try {
-      await updateDoc(doc(db, 'communities', communityId, 'categories', id), {
-        name: editCategoryName
-      });
-      setEditingCategoryId(null);
-      toast.success("Category renamed!");
+      const batch = writeBatch(db);
+      batch.update(doc(db, 'communities', communityId, 'categories', id), { name });
+      queueAudit(batch, communityId, { action: 'category.update', targetName: name });
+      await batch.commit();
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `communities/${communityId}/categories/${id}`);
-      toast.error("Failed to rename category");
+      toast.error("Couldn't rename the category");
     }
   };
 
-  const handleDeleteCategory = async (id: string, name: string) => {
-    if (!window.confirm(`Are you sure you want to delete "${name}"? Channels within this category will become uncategorized.`)) return;
+  const confirmDeleteCategory = async () => {
+    const category = pendingCategory;
+    if (!category) return;
     try {
-      await deleteDoc(doc(db, 'communities', communityId, 'categories', id));
-      toast.success("Category deleted!");
+      // Its channels move to Uncategorized so none of them drop out of the list.
+      const batch = writeBatch(db);
+      channels.filter(c => c.categoryId === category.id)
+        .forEach(c => batch.update(doc(db, 'communities', communityId, 'channels', c.id), { categoryId: 'uncategorized' }));
+      batch.delete(doc(db, 'communities', communityId, 'categories', category.id));
+      queueAudit(batch, communityId, { action: 'category.delete', targetName: category.name });
+      await batch.commit();
+      toast.success('Category deleted');
     } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `communities/${communityId}/categories/${id}`);
-      toast.error("Failed to delete category");
+      handleFirestoreError(error, OperationType.DELETE, `communities/${communityId}/categories/${category.id}`);
+      toast.error("Couldn't delete the category");
+    } finally {
+      setPendingCategory(null);
     }
   };
 
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-        setActiveMenuId(null);
-      }
+    if (!menu) return;
+    const close = () => setMenu(null);
+    const onDown = (e: MouseEvent) => { if (!menuRef.current?.contains(e.target as Node)) close(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+    window.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('resize', close);
+    window.addEventListener('scroll', close, true);
+    return () => {
+      window.removeEventListener('mousedown', onDown);
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', close);
+      window.removeEventListener('scroll', close, true);
     };
-    window.addEventListener('mousedown', handleClickOutside);
-    return () => window.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-  
+  }, [menu]);
+
   useEffect(() => {
     if (!communityId || !channels.length) return;
 
@@ -203,167 +230,145 @@ export default function ChannelSidebar({
     return () => allUnsubs.forEach(unsub => unsub());
   }, [channels, communityId]);
 
-  const getIcon = (type: string) => {
-    const Icon = channelTypeInfo(type).icon;
-    return <Icon size={18} />;
-  };
-
   const visibleChannels = channels.filter(c => {
     if (isAdmin) return true;
     if (hiddenChannels.includes(c.id)) return false;
     if (c.allowedRoles && c.allowedRoles.length > 0) {
       if (!c.allowedRoles.some(roleId => myCustomRoles.includes(roleId))) return false;
     }
-    if ((c as any).isHidden) return false;
+    if (c.isHidden) return false;
     return true;
   });
 
+  // A channel pointing at a category that no longer exists belongs under "Uncategorized".
+  const knownCategories = new Set(categories.map(c => c.id));
+  const groupOf = (c: Channel) => (c.categoryId && knownCategories.has(c.categoryId) ? c.categoryId : 'uncategorized');
+  const sortedIn = (categoryId: string) =>
+    visibleChannels.filter(c => groupOf(c) === categoryId).sort((a, b) => ((a as any).order ?? 0) - ((b as any).order ?? 0));
+
+  const openMenu = (e: React.MouseEvent<HTMLButtonElement>, id: string) => {
+    e.stopPropagation();
+    if (menu?.id === id) return setMenu(null);
+    const r = e.currentTarget.getBoundingClientRect();
+    const up = r.bottom + 280 > window.innerHeight;
+    setMenu({ id, x: Math.max(8, Math.min(r.right - 208, window.innerWidth - 216)), y: up ? r.top - 4 : r.bottom + 4, up });
+  };
+
+  const menuItem = 'w-full flex items-center gap-2.5 px-3 py-2 text-sm font-medium text-foreground/80 hover:bg-foreground/5 hover:text-foreground transition-colors text-left';
+
+  const renderMenu = () => {
+    const channel = channels.find(c => c.id === menu?.id);
+    if (!menu || !channel) return null;
+    const unread = Math.max(0, (channel.messageCount || 0) - (userChannelStats[channel.id] || 0));
+    const muted = mutedChannels.includes(channel.id);
+    const done = () => setMenu(null);
+    return (
+      <div
+        ref={menuRef} role="menu" aria-label={`${channel.name} options`}
+        className="fixed w-52 rounded-xl border border-foreground/10 bg-background py-1 z-[100] shadow-xl overflow-hidden"
+        style={{ left: menu.x, top: menu.y, transform: menu.up ? 'translateY(-100%)' : undefined }}
+      >
+        {unread > 0 && onMarkAsRead && (
+          <button role="menuitem" onClick={() => { onMarkAsRead(channel.id); done(); }} className={menuItem}><CheckCheck size={15} className="text-green-500" />Mark as read</button>
+        )}
+        {onMuteChannel && (
+          <button role="menuitem" onClick={() => { onMuteChannel(channel.id); done(); }} className={menuItem}>
+            {muted ? <><Bell size={15} />Unmute</> : <><BellOff size={15} />Mute channel</>}
+          </button>
+        )}
+        <button
+          role="menuitem"
+          onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/feed?view=community&id=${communityId}&channelId=${channel.id}`); toast.success('Channel link copied'); done(); }}
+          className={menuItem}
+        ><Copy size={15} />Copy link</button>
+        {isAdmin && (
+          <>
+            <div className="h-px bg-foreground/10 my-1" />
+            <button role="menuitem" onClick={() => { onEditChannel?.(channel); done(); }} className={menuItem}><Settings size={15} />Channel settings</button>
+            {canOrganise && (
+              <>
+                {channel.type !== 'voice' && channel.type !== 'live' && (
+                  <button role="menuitem" onClick={() => { onToggleLock?.(channel.id); done(); }} className={menuItem}>
+                    {channel.isLocked ? <><Unlock size={15} />Unlock</> : <><Lock size={15} />Lock channel</>}
+                  </button>
+                )}
+                <button role="menuitem" onClick={() => { onDeleteChannel?.(channel.id); done(); }} className={`${menuItem} !text-red-500 hover:!bg-red-500/10`}><Trash2 size={15} />Delete channel</button>
+              </>
+            )}
+          </>
+        )}
+      </div>
+    );
+  };
+
   const renderChannel = (channel: Channel) => {
-    const unreadCount = Math.max(0, (channel.messageCount || 0) - (userChannelStats[channel.id] || 0));
-    const mentions = userMentions[channel.id] || 0;
+    const Icon = channelTypeInfo(channel.type).icon;
+    const isMuted = mutedChannels.includes(channel.id);
     const isVoiceOnly = channel.type === 'voice';
     const isLiveChannel = channel.type === 'live';
+    const active = activeChannelId === channel.id;
+    // Muted channels stay quiet: only @mentions get a badge. Voice and live rooms have no "unread".
+    const unreadCount = isVoiceOnly || isLiveChannel || isMuted ? 0 : Math.max(0, (channel.messageCount || 0) - (userChannelStats[channel.id] || 0));
+    const mentions = userMentions[channel.id] || 0;
     const participants = voiceParticipants[channel.id] || [];
     const activeStreams = activeLiveStreams[channel.id] || [];
     const isLive = isLiveChannel && activeStreams.length > 0;
-    const totalViewers = activeStreams.reduce((acc, s) => acc + (s.viewerCount || 0), 0);
-    const isMuted = mutedChannels.includes(channel.id);
-    
+    const hasUnread = unreadCount > 0 || mentions > 0;
+
     return (
-      <Reorder.Item
-        value={channel}
-        key={channel.id}
-        id={channel.id}
-        dragListener={isAdmin}
-        className="relative group/channel-item mb-0.5"
-      >
-        <div className="flex items-center gap-1 group">
-          {isAdmin && (
-            <div className="opacity-0 group-hover:opacity-40 transition-opacity cursor-grab active:cursor-grabbing p-1">
-              <GripVertical size={12} className="text-foreground/40" />
-            </div>
+      <Reorder.Item value={channel} key={channel.id} id={channel.id} dragListener={canOrganise} className="relative mb-0.5">
+        <div className="group flex items-center">
+          {canOrganise && (
+            <span aria-hidden className="w-4 shrink-0 flex justify-center opacity-0 group-hover:opacity-60 transition-opacity cursor-grab active:cursor-grabbing"><GripVertical size={13} /></span>
           )}
-          
+
           <button
             onClick={() => onChannelSelect(channel.id)}
-            className={`flex-1 flex items-center justify-between px-2 py-1.5 rounded-lg transition-all relative ${
-              activeChannelId === channel.id 
-                ? 'bg-foreground/10 text-foreground' 
-                : 'text-foreground/40 hover:bg-foreground/5 hover:text-foreground/70'
-            } ${channel.isHidden ? 'opacity-30' : ''} ${unreadCount > 0 ? 'bg-foreground/[0.03]' : ''}`}
+            aria-current={active ? 'page' : undefined}
+            title={channel.description || undefined}
+            className={`flex-1 min-w-0 flex items-center justify-between gap-2 pl-2 pr-2 py-1.5 rounded-lg transition-colors ${
+              active ? 'bg-foreground/10 text-foreground' : 'text-foreground/70 hover:bg-foreground/5 hover:text-foreground'
+            }`}
           >
-            <div className="flex items-center gap-2 min-w-0">
-              <span className={`text-foreground/20 group-hover:text-foreground/40 shrink-0 ${isLive ? 'text-rose-500 animate-pulse' : ''}`}>
-                {getIcon(channel.type)}
-              </span>
-              <span className={`text-[15px] font-bold tracking-tight truncate ${unreadCount > 0 && !isVoiceOnly && !isLiveChannel ? 'text-foreground font-black' : ''}`}>
+            <span className="flex items-center gap-2 min-w-0">
+              <Icon size={16} className={`shrink-0 ${isLive ? 'text-rose-500' : active ? 'text-foreground/70' : 'text-foreground/45'}`} />
+              <span className={`text-sm truncate ${active ? 'font-semibold' : hasUnread ? 'font-semibold text-foreground' : 'font-medium'} ${isMuted && !active ? 'text-foreground/50' : ''}`}>
                 {channel.name}
               </span>
-            </div>
-            
-            <div className="flex items-center gap-1.5 shrink-0">
-              {isMuted && <BellOff size={10} className="text-foreground/20" />}
-              {isLive && (
-                <div className="flex items-center gap-1">
-                  <span className="px-1.5 py-0.5 rounded bg-rose-500 text-[8px] font-black text-white uppercase tracking-tighter">Live</span>
-                </div>
-              )}
+            </span>
+
+            <span className="flex items-center gap-1.5 shrink-0">
+              {channel.isHidden && <EyeOff size={13} className="text-foreground/45" aria-label="Hidden from members" />}
+              {isMuted && <BellOff size={12} className="text-foreground/40" aria-label="Muted" />}
+              {channel.isLocked && <Lock size={12} className="text-foreground/45" aria-label="Locked" />}
+              {isLive && <span className="px-1.5 py-0.5 rounded bg-rose-500 text-[10px] font-semibold text-white leading-none">Live</span>}
+              {unreadCount > 0 && mentions === 0 && !active && <span className="w-2 h-2 rounded-full bg-primary" aria-label="Unread messages" />}
               {mentions > 0 && (
-                <div className="flex items-center justify-center bg-red-500 text-white text-[10px] font-bold h-4 min-w-[16px] px-1 rounded-full shadow-sm shadow-red-500/20">
-                  {mentions}
-                </div>
+                <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[11px] font-semibold flex items-center justify-center" aria-label={`${mentions} mentions`}>
+                  {mentions > 99 ? '99+' : mentions}
+                </span>
               )}
-              {unreadCount > 0 && !isVoiceOnly && !isLiveChannel && (
-                <div className="w-2 h-2 rounded-full bg-primary shadow-sm shadow-primary/40" />
-              )}
-              {channel.isLocked && <Lock size={12} className="text-foreground/20" />}
-            </div>
+            </span>
           </button>
 
-          <div className="relative shrink-0">
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setActiveMenuId(activeMenuId === channel.id ? null : channel.id);
-              }}
-              className={`p-1.5 rounded-lg transition-all opacity-0 group-hover:opacity-100 ${
-                activeMenuId === channel.id ? 'opacity-100 bg-foreground/10 text-foreground' : 'text-foreground/30 hover:bg-foreground/5'
-              }`}
-            >
-              <MoreVertical size={14} />
-            </button>
-
-            {activeMenuId === channel.id && (
-              <div 
-                ref={menuRef}
-                className="absolute right-0 top-full mt-1 w-48 glass rounded-xl border border-foreground/10 py-1 z-[100] shadow-2xl scale-in-center overflow-hidden"
-              >
-                {unreadCount > 0 && onMarkAsRead && (
-                  <button 
-                    onClick={() => { onMarkAsRead(channel.id); setActiveMenuId(null); }}
-                    className="w-full flex items-center gap-2 px-3 py-2 text-xs font-bold text-foreground/70 hover:bg-foreground/5 hover:text-foreground transition-all"
-                  >
-                    <CheckCheck size={14} className="text-green-500" /> Mark as Read
-                  </button>
-                )}
-                
-                {onMuteChannel && (
-                  <button 
-                    onClick={() => { onMuteChannel(channel.id); setActiveMenuId(null); }}
-                    className="w-full flex items-center gap-2 px-3 py-2 text-xs font-bold text-foreground/70 hover:bg-foreground/5 hover:text-foreground transition-all"
-                  >
-                    {isMuted ? <><CheckCheck size={14} /> Unmute</> : <><BellOff size={14} /> Mute Channel</>}
-                  </button>
-                ) }
-
-                <button 
-                  onClick={() => {
-                    navigator.clipboard.writeText(`${window.location.origin}/community/${communityId}/channel/${channel.id}`);
-                    toast.success("Channel link copied!");
-                    setActiveMenuId(null);
-                  }}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-xs font-bold text-foreground/70 hover:bg-foreground/5 hover:text-foreground transition-all"
-                >
-                  <Copy size={14} /> Copy Link
-                </button>
-
-                {isAdmin && (
-                  <>
-                    <div className="h-px bg-foreground/5 my-1" />
-                    <button 
-                      onClick={() => { onEditChannel?.(channel); setActiveMenuId(null); }}
-                      className="w-full flex items-center gap-2 px-3 py-2 text-xs font-bold text-foreground/70 hover:bg-foreground/5 hover:text-foreground transition-all"
-                    >
-                      <Settings size={14} /> Channel Settings
-                    </button>
-                    <button 
-                      onClick={() => { onToggleLock?.(channel.id); setActiveMenuId(null); }}
-                      className="w-full flex items-center gap-2 px-3 py-2 text-xs font-bold text-foreground/70 hover:bg-foreground/5 hover:text-foreground transition-all"
-                    >
-                      {channel.isLocked ? <><Unlock size={14} /> Unlock</> : <><Lock size={14} /> Lock Channel</>}
-                    </button>
-                    <button 
-                      onClick={() => { onDeleteChannel?.(channel.id); setActiveMenuId(null); }}
-                      className="w-full flex items-center gap-2 px-3 py-2 text-xs font-bold text-red-400 hover:bg-red-400/10 transition-all"
-                    >
-                      <Trash2 size={14} /> Delete Channel
-                    </button>
-                  </>
-                )}
-              </div>
-            )}
-          </div>
+          <button
+            onClick={e => openMenu(e, channel.id)}
+            aria-label={`Options for ${channel.name}`} aria-haspopup="menu" aria-expanded={menu?.id === channel.id}
+            className={`ml-0.5 p-1.5 rounded-lg shrink-0 transition-opacity text-foreground/50 hover:bg-foreground/10 hover:text-foreground focus-visible:opacity-100 [@media(pointer:coarse)]:opacity-100 ${menu?.id === channel.id ? 'opacity-100 bg-foreground/10' : 'opacity-0 group-hover:opacity-100'}`}
+          >
+            <MoreVertical size={15} />
+          </button>
         </div>
 
         {(isVoiceOnly || isLiveChannel) && participants.length > 0 && (
-          <div className="ml-7 flex flex-col gap-1.5 pb-2">
+          <ul className="ml-8 mt-0.5 mb-1.5 space-y-1">
             {participants.map((p, i) => (
-              <div key={i} className="flex items-center gap-2">
-                <img src={(p.userPhoto && p.userPhoto.trim() !== '') ? p.userPhoto : `https://api.dicebear.com/7.x/avataaars/svg?seed=${p.userId}`} className="w-4 h-4 rounded-full bg-foreground/10 border border-foreground/5 shadow-sm" alt="" />
-                <span className="text-[11px] text-foreground/40 font-medium truncate">{p.userName}</span>
-              </div>
+              <li key={i} className="flex items-center gap-2">
+                <img src={(p.userPhoto && p.userPhoto.trim() !== '') ? p.userPhoto : `https://api.dicebear.com/7.x/avataaars/svg?seed=${p.userId}`} className="w-5 h-5 rounded-full bg-foreground/10" alt="" />
+                <span className="text-xs text-foreground/60 truncate">{p.userName}</span>
+              </li>
             ))}
-          </div>
+          </ul>
         )}
       </Reorder.Item>
     );
@@ -373,107 +378,85 @@ export default function ChannelSidebar({
     const categoryId = category?.id || 'uncategorized';
     const categoryName = category?.name || 'Uncategorized';
     const isCollapsed = collapsedCategories.includes(categoryId);
-    const categoryChannels = visibleChannels.filter(c => (c.categoryId || 'uncategorized') === categoryId);
+    const list = sortedIn(categoryId);
+    const hasUnreadInside = isCollapsed && list.some(c => c.type !== 'voice' && c.type !== 'live' && !mutedChannels.includes(c.id) && ((c.messageCount || 0) - (userChannelStats[c.id] || 0) > 0 || (userMentions[c.id] || 0) > 0));
 
-    if (categoryChannels.length === 0 && !isAdmin) return null;
+    // Empty categories only show for people who can add channels to them; the catch-all only when it has channels.
+    if (list.length === 0 && (!category || !isAdmin)) return null;
 
     return (
-      <div key={categoryId} className="space-y-1 mt-4">
-        <div className="flex items-center justify-between px-2 group/category">
-          <div className="flex items-center gap-1 min-w-0 flex-1">
-            <button 
-              onClick={() => toggleCategory(categoryId)}
-              className="p-0.5 hover:bg-foreground/5 rounded transition-colors text-foreground/20 hover:text-foreground/40"
+      <section key={categoryId} className="mt-4 first:mt-0" aria-label={categoryName}>
+        <div className="group/category flex items-center pr-1">
+          {editingCategoryId === categoryId ? (
+            <input
+              autoFocus value={editCategoryName} maxLength={40} aria-label="Category name" placeholder="Category name"
+              onChange={e => setEditCategoryName(e.target.value)}
+              onBlur={() => handleRenameCategory(categoryId)}
+              onKeyDown={e => { if (e.key === 'Enter') handleRenameCategory(categoryId); if (e.key === 'Escape') setEditingCategoryId(null); }}
+              className="flex-1 min-w-0 mx-1 px-2 py-1 rounded-md bg-foreground/5 text-xs font-semibold text-foreground outline-none ring-1 ring-primary/40"
+            />
+          ) : (
+            <button
+              onClick={() => toggleCategory(categoryId)} aria-expanded={!isCollapsed}
+              className="flex-1 min-w-0 flex items-center gap-1 px-1 py-1 rounded-md text-xs font-semibold text-foreground/60 hover:text-foreground transition-colors text-left"
             >
-              {isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+              {isCollapsed ? <ChevronRight size={14} className="shrink-0" /> : <ChevronDown size={14} className="shrink-0" />}
+              <span className="truncate">{categoryName}</span>
+              {hasUnreadInside && <span className="ml-1 w-1.5 h-1.5 rounded-full bg-primary shrink-0" aria-label="Unread channels inside" />}
             </button>
-            
-            {editingCategoryId === categoryId ? (
-              <input 
-                autoFocus
-                value={editCategoryName}
-                onChange={e => setEditCategoryName(e.target.value)}
-                onBlur={() => handleRenameCategory(categoryId)}
-                onKeyDown={e => e.key === 'Enter' && handleRenameCategory(categoryId)}
-                className="bg-foreground/5 border-none text-[10px] font-bold uppercase tracking-widest text-foreground outline-none px-1 rounded h-5"
-              />
-            ) : (
-              <button 
-                onClick={() => toggleCategory(categoryId)}
-                className="text-[10px] font-bold uppercase tracking-widest text-foreground/30 hover:text-foreground/50 transition-colors truncate text-left"
-              >
-                {categoryName}
-              </button>
-            )}
+          )}
 
-            {isAdmin && category && (
-              <div className="flex items-center opacity-0 group-hover/category:opacity-100 transition-opacity ml-1">
-                <button 
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setEditingCategoryId(categoryId);
-                    setEditCategoryName(categoryName);
-                  }}
-                  className="p-1 hover:bg-foreground/5 rounded text-foreground/20 hover:text-foreground/40"
-                >
-                  <Edit2 size={10} />
-                </button>
-                <button 
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleDeleteCategory(categoryId, categoryName);
-                  }}
-                  className="p-1 hover:bg-foreground/5 rounded text-foreground/20 hover:text-red-400"
-                >
-                  <Trash2 size={10} />
-                </button>
-              </div>
-            )}
-          </div>
+          {category && canOrganise && editingCategoryId !== categoryId && (
+            <span className="flex items-center opacity-0 group-hover/category:opacity-100 focus-within:opacity-100 [@media(pointer:coarse)]:opacity-100 transition-opacity">
+              <button onClick={() => { setEditingCategoryId(categoryId); setEditCategoryName(categoryName); }} aria-label={`Rename ${categoryName}`} className="p-1 rounded text-foreground/50 hover:bg-foreground/10 hover:text-foreground"><Edit2 size={12} /></button>
+              <button onClick={() => setPendingCategory(category)} aria-label={`Delete ${categoryName}`} className="p-1 rounded text-foreground/50 hover:bg-foreground/10 hover:text-red-500"><Trash2 size={12} /></button>
+            </span>
+          )}
 
           {(isAdmin || myPermissions.includes('create_channels')) && (
-            <button 
+            <button
               onClick={() => onCreateChannel(categoryId !== 'uncategorized' ? categoryId : undefined)}
-              className="p-1 hover:bg-foreground/5 rounded-md text-foreground/20 hover:text-foreground/40 transition-colors opacity-0 group-hover/category:opacity-100"
-            >
-              <Plus size={14} />
-            </button>
+              aria-label={`New channel in ${categoryName}`}
+              className="p-1 rounded text-foreground/50 hover:bg-foreground/10 hover:text-foreground opacity-0 group-hover/category:opacity-100 focus-visible:opacity-100 [@media(pointer:coarse)]:opacity-100 transition-opacity"
+            ><Plus size={15} /></button>
           )}
         </div>
 
         {!isCollapsed && (
           <Reorder.Group
-            axis="y"
-            values={categoryChannels.sort((a,b) => (a as any).order - (b as any).order)}
-            onReorder={(newOrder) => {
-              if (isAdmin && onReorderChannels) {
-                // Update order for these specific channels
-                const updatedChannels = newOrder.map((c, i) => ({ ...c, order: i }));
-                onReorderChannels(updatedChannels);
-              }
-            }}
-            className="space-y-0.5 pl-2"
+            axis="y" values={list}
+            onReorder={newOrder => { if (canOrganise && onReorderChannels) onReorderChannels(newOrder.map((c, i) => ({ ...c, order: i }))); }}
+            className="mt-0.5 space-y-0.5"
           >
-            {categoryChannels.sort((a,b) => (a as any).order - (b as any).order).map(renderChannel)}
+            {list.map(renderChannel)}
           </Reorder.Group>
         )}
-      </div>
+      </section>
     );
   };
 
   return (
-    <div className="space-y-2">
-      {isAdmin && (
-        <button 
+    <nav aria-label="Channels" className="space-y-1">
+      {categories.map(cat => renderCategory(cat))}
+      {renderCategory(null)}
+
+      {canOrganise && (
+        <button
           onClick={handleAddCategory}
-          className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest text-foreground/30 hover:text-primary hover:bg-primary/5 transition-all mb-4 border border-dashed border-foreground/10"
+          className="mt-3 w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm font-medium text-foreground/60 hover:text-foreground hover:bg-foreground/5 transition-colors"
         >
-          <Plus size={14} /> Create Category
+          <FolderPlus size={15} /> New category
         </button>
       )}
 
-      {categories.map(cat => renderCategory(cat))}
-      {renderCategory(null)}
-    </div>
+      {renderMenu()}
+
+      <ConfirmModal
+        isOpen={!!pendingCategory} onClose={() => setPendingCategory(null)} onConfirm={confirmDeleteCategory}
+        title={`Delete "${pendingCategory?.name}"?`}
+        message="Its channels move to Uncategorized. Nothing else is deleted."
+        confirmText="Delete category"
+      />
+    </nav>
   );
 }

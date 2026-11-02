@@ -1,555 +1,218 @@
-import { useState, useEffect, useRef } from 'react';
-import { collection, query, where, orderBy, onSnapshot, collectionGroup, doc, getDoc } from 'firebase/firestore';
-import { db, auth } from '../firebase';
-import { motion, AnimatePresence } from 'motion/react';
-import { 
-  Calendar, MapPin, Users, Search, Filter, Plus, 
-  Clock, Globe, Shield, ArrowRight, LayoutGrid, List,
-  PartyPopper, Palette, GraduationCap, Heart, GlassWater, Award, Leaf, Carrot, Tent,
-  DollarSign, Map as MapIcon, ChevronLeft, ChevronRight, Zap
-} from 'lucide-react';
-import { formatDate } from '../lib/utils';
-import { Link } from 'react-router-dom';
-import Sidebar from '../components/Sidebar';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { collection, collectionGroup, doc, getDoc, onSnapshot, orderBy, query, where } from 'firebase/firestore';
+import { Calendar, Megaphone, Search, Sparkles, X } from 'lucide-react';
+import { toast } from 'react-hot-toast';
+import { auth, db } from '../firebase';
+import { EVENT_CATEGORIES } from '../lib/eventCategories';
+import { cityOf, nearestCity } from '../lib/eventCities';
+import { byScore, interleavePromoted, isEnded, isLive, isPromoted } from '../lib/eventRanking';
+import EventCard from '../components/EventCard';
+import EventHero from '../components/events/EventHero';
+import EventRail from '../components/events/EventRail';
+import CityPicker, { type CityValue } from '../components/events/CityPicker';
+import DateStrip, { dayKey } from '../components/events/DateStrip';
 import CreateEventModal from '../components/CreateEventModal';
 import CreateInstantSessionModal from '../components/CreateInstantSessionModal';
-import EventCard from '../components/EventCard';
 
-import { toast } from 'react-hot-toast';
+type Sort = 'foryou' | 'soon' | 'popular';
+const GRID = 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5';
 
 export default function EventsPage() {
+  const uid = auth.currentUser?.uid ?? null;
+  const navigate = useNavigate();
   const [events, setEvents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [filter, setFilter] = useState<'all' | 'user' | 'community'>('all');
-  const [categoryFilter, setCategoryFilter] = useState<string>('All');
-  const [priceFilter, setPriceFilter] = useState<'all' | 'free' | 'paid'>('all');
-  const [locationFilter, setLocationFilter] = useState<'all' | 'online' | 'offline'>('all');
-  const [cityFilter, setCityFilter] = useState<string>('All Cities');
-  const [showFilters, setShowFilters] = useState(false);
-  const [showCreateModal, setShowCreateModal] = useState(false);
-  const [showInstantModal, setShowInstantModal] = useState(false);
-  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
-  const [registeredEvents, setRegisteredEvents] = useState<any[]>([]);
-  const categoryScrollRef = useRef<HTMLDivElement>(null);
+  const [registered, setRegistered] = useState<any[]>([]);
+  const [search, setSearch] = useState('');
+  const [city, setCity] = useState<CityValue>('all');
+  const [category, setCategory] = useState('all');
+  const [day, setDay] = useState('any');
+  const [freeOnly, setFreeOnly] = useState(false);
+  const [sort, setSort] = useState<Sort>('foryou');
+  const [showCreate, setShowCreate] = useState(false);
+  const [showInstant, setShowInstant] = useState(false);
+  const resultsRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
 
-  const scrollCategories = (direction: 'left' | 'right') => {
-    if (categoryScrollRef.current) {
-      const scrollAmount = 300;
-      categoryScrollRef.current.scrollBy({
-        left: direction === 'left' ? -scrollAmount : scrollAmount,
-        behavior: 'smooth'
-      });
-    }
-  };
+  useEffect(() => onSnapshot(
+    query(collection(db, 'events'), where('visibility', '==', 'public'), orderBy('startDate', 'asc')),
+    snap => { setEvents(snap.docs.map(d => ({ id: d.id, ...d.data() }))); setLoading(false); },
+    () => setLoading(false),
+  ), []);
 
   useEffect(() => {
-    // Query for all public events
-    const q = query(
-      collection(db, 'events'),
-      where('visibility', '==', 'public'),
-      orderBy('startDate', 'asc')
-    );
+    if (!uid) { setRegistered([]); return; }
+    return onSnapshot(query(collectionGroup(db, 'registrations'), where('userId', '==', uid)), async snap => {
+      const ids = [...new Set(snap.docs.map(d => d.data().eventId as string))];
+      const docs = await Promise.all(ids.map(id => getDoc(doc(db, 'events', id))));
+      setRegistered(docs.filter(d => d.exists()).map(d => ({ id: d.id, ...d.data() })));
+    }, () => undefined);
+  }, [uid]);
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const fetchedEvents = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      setEvents(fetchedEvents);
-      setLoading(false);
-    });
+  const now = Date.now();
+  const upcoming = useMemo(() => events.filter(e => !isEnded(e, now)), [events, now]);
+  const registeredIds = useMemo(() => new Set(registered.map(e => e.id)), [registered]);
 
-    return () => unsubscribe();
-  }, []);
+  const cities = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const e of upcoming) { const c = cityOf(e); if (c) m.set(c, (m.get(c) ?? 0) + 1); }
+    return [...m].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  }, [upcoming]);
+  const onlineCount = useMemo(() => upcoming.filter(e => !e.isOffline).length, [upcoming]);
+  const catCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const e of upcoming) if (e.category) m.set(e.category, (m.get(e.category) ?? 0) + 1);
+    return m;
+  }, [upcoming]);
+  const dayCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const e of upcoming) { const k = dayKey(new Date(e.startDate)); m.set(k, (m.get(k) ?? 0) + 1); }
+    return m;
+  }, [upcoming]);
 
-  useEffect(() => {
-    if (!auth.currentUser) {
-      setRegisteredEvents([]);
-      return;
-    }
+  const mine = useMemo(() => {
+    const hosting = upcoming.filter(e => e.hostId === uid);
+    const going = registered.filter(e => !isEnded(e, now) && e.hostId !== uid);
+    return [...hosting, ...going].sort((a, b) => +new Date(a.startDate) - +new Date(b.startDate));
+  }, [upcoming, registered, uid, now]);
+  const liveNow = useMemo(() => upcoming.filter(e => isLive(e, now)), [upcoming, now]);
 
-    const q = query(
-      collectionGroup(db, 'registrations'),
-      where('userId', '==', auth.currentUser.uid)
-    );
-
-    const unsubscribe = onSnapshot(q, async (snapshot) => {
-      const eventIds = snapshot.docs.map(d => d.data().eventId);
-      
-      if (eventIds.length === 0) {
-        setRegisteredEvents([]);
-        return;
+  const q = search.trim().toLowerCase();
+  const weekEnd = dayKey(new Date(now + 6 * 86_400_000));
+  const results = useMemo(() => {
+    const list = upcoming.filter(e => {
+      if (city === 'online' ? e.isOffline : city !== 'all' && cityOf(e).toLowerCase() !== city.toLowerCase()) return false;
+      if (category !== 'all' && e.category !== category) return false;
+      if (freeOnly && e.isPaid) return false;
+      if (day !== 'any') {
+        const k = dayKey(new Date(e.startDate));
+        if (day === 'later' ? k <= weekEnd : k !== day) return false;
       }
-
-      // Fetch the actual event data for these IDs
-      const eventPromises = eventIds.map(async (id) => {
-        const docRef = doc(db, 'events', id);
-        const docSnap = await getDoc(docRef);
-        return docSnap.exists() ? { id: docSnap.id, ...docSnap.data() } : null;
-      });
-
-      const eventsData = await Promise.all(eventPromises);
-      setRegisteredEvents(eventsData.filter(e => e !== null));
+      // City names are searchable too, even when no city is picked.
+      if (q && !`${e.title} ${e.description ?? ''} ${e.locationName ?? ''} ${e.locationAddress ?? ''} ${cityOf(e)} ${e.category ?? ''}`.toLowerCase().includes(q)) return false;
+      return true;
     });
+    if (sort === 'soon') return list;
+    if (sort === 'popular') return [...list].sort((a, b) => (b.attendeeCount || 0) - (a.attendeeCount || 0));
+    return [...list].sort(byScore([], now));
+  }, [upcoming, city, category, freeOnly, day, q, sort, now, weekEnd]);
 
-    return () => unsubscribe();
-  }, [auth.currentUser]);
+  const filtering = !!q || city !== 'all' || category !== 'all' || day !== 'any' || freeOnly;
 
-  const categories = [
-    { name: 'All', icon: '🌍' },
-    { name: 'Festival', icon: '🥳' },
-    { name: 'Tech', icon: '💻' },
-    { name: 'AI', icon: '🧠' },
-    { name: 'Arts', icon: '🎨' },
-    { name: 'Educational', icon: '🎓' },
-    { name: 'Pop culture', icon: '❤️' },
-    { name: 'Food & Drinks', icon: '🍸' },
-    { name: 'Convention', icon: '🏅' },
-    { name: 'Community', icon: '👥' },
-    { name: 'Holiday', icon: '🍃' },
-    { name: 'Markets', icon: '🥕' },
-    { name: 'Fair', icon: '🎪' },
-    { name: 'Fintech', icon: '💳' },
-    { name: 'Fashion', icon: '👗' },
-    { name: 'Leadership', icon: '👑' },
-    { name: 'Coaching', icon: '💡' },
-  ];
+  const promoted = useMemo(() => upcoming.filter(e => isPromoted(e, now)), [upcoming, now]);
+  const spotlight = promoted.filter(e => (e.promotion?.placement ?? 'spotlight') === 'spotlight').slice(0, 4);
+  const feedPromoted = promoted.filter(e => !spotlight.includes(e));
+  const topPicks = spotlight.length > 0 ? spotlight : [...upcoming].sort(byScore([], now)).slice(0, 4);
+  const arranged = useMemo(() => interleavePromoted(results, filtering ? [] : feedPromoted, 8), [results, feedPromoted, filtering]);
+  const boostable = uid ? upcoming.find(e => e.hostId === uid && !isPromoted(e, now)) : null;
 
-  // Extract unique cities from events
-  const cities = ['All Cities', ...new Set(events
-    .filter(e => e.isOffline && e.locationAddress)
-    .map(e => {
-      const parts = e.locationAddress.split(',');
-      return parts.length > 1 ? parts[parts.length - 2].trim() : parts[0].trim();
-    })
-    .filter(Boolean)
-  )].sort();
-
-  const filteredEvents = events.filter(event => {
-    const matchesSearch = event.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         event.description?.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesType = filter === 'all' || event.eventType === filter;
-    const matchesCategory = categoryFilter === 'All' || event.category === categoryFilter;
-    const matchesPrice = priceFilter === 'all' || (priceFilter === 'free' ? !event.isPaid : event.isPaid);
-    const matchesLocation = locationFilter === 'all' || (locationFilter === 'online' ? !event.isOffline : event.isOffline);
-    
-    let matchesCity = true;
-    if (cityFilter !== 'All Cities' && event.isOffline) {
-      matchesCity = event.locationAddress?.toLowerCase().includes(cityFilter.toLowerCase());
-    } else if (cityFilter !== 'All Cities' && !event.isOffline) {
-      matchesCity = false;
-    }
-
-    return matchesSearch && matchesType && matchesCategory && matchesPrice && matchesLocation && matchesCity;
-  });
-
-  const myEvents = events.filter(e => e.hostId === auth.currentUser?.uid).slice(0, 3);
-  const popularEvents = [...events].sort((a, b) => (b.attendeeCount || 0) - (a.attendeeCount || 0)).slice(0, 3);
+  const requireUser = (fn: () => void, msg: string) => (uid ? fn() : toast.error(msg));
+  const clear = () => { setSearch(''); setCity('all'); setCategory('all'); setDay('any'); setFreeOnly(false); };
 
   return (
-    <div className="w-full h-full overflow-y-auto custom-scrollbar bg-background text-foreground">
-      {/* Top Banner Area (Hero Section) */}
-      <div className="relative bg-gradient-to-r from-rose-950 via-orange-900 dark:to-[#0B0F19] w-full pt-16 pb-16 overflow-hidden border-b border-foreground/5 mb-8">
-        <div className="absolute inset-0 bg-[url('https://images.unsplash.com/photo-1540575467063-178a50c2df87?q=80&w=2070&auto=format&fit=crop')] object-cover opacity-10 mix-blend-overlay"></div>
-        <div className="max-w-[1400px] mx-auto px-4 sm:px-6 md:px-8 relative z-10">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-            <div className="max-w-2xl">
-              <h1 className="text-3xl md:text-5xl font-bold tracking-tight mb-4 text-white">
-                Discover <span className="text-orange-400">Events</span>
-              </h1>
-              <p className="text-white/80 text-lg max-w-xl leading-relaxed">
-                Connect with the community through workshops, hackathons, and meetups. Join the best events in the ecosystem.
-              </p>
-            </div>
-            
-            <div className="flex items-center gap-3">
-              <button 
-                onClick={() => {
-                  if (!auth.currentUser) {
-                    toast.error('Sign in to start a session');
-                    return;
-                  }
-                  setShowInstantModal(true);
-                }}
-                className="flex items-center gap-2 bg-white/10 text-white px-6 py-3 rounded-full font-bold hover:bg-white/20 transition-all border border-white/10"
-              >
-                <Zap size={20} className="text-yellow-400 fill-yellow-400" />
-                <span>Instant Session</span>
-              </button>
-              <button 
-                onClick={() => {
-                  if (!auth.currentUser) {
-                    toast.error('Sign in to create your own events');
-                    return;
-                  }
-                  setShowCreateModal(true);
-                }}
-                className="flex items-center gap-2 bg-foreground text-background px-6 py-3 rounded-full font-bold hover:bg-foreground/90 transition-all shadow-[0_0_20px_rgba(255,255,255,0.1)]"
-              >
-                <Plus size={20} />
-                <span>Create Event</span>
-              </button>
-            </div>
+    <div className="w-full h-full overflow-y-auto text-black dark:text-white">
+      <div className="max-w-[1200px] mx-auto px-4 sm:px-6 py-5 sm:py-8 pb-24">
+        <EventHero
+          onDiscover={() => { searchRef.current?.focus(); searchRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }); }}
+          onCreate={() => requireUser(() => setShowCreate(true), 'Sign in to create events')}
+          onInstant={() => requireUser(() => setShowInstant(true), 'Sign in to start a session')}
+          onBoost={() => (boostable ? navigate(`/events/${boostable.id}`) : requireUser(() => setShowCreate(true), 'Sign in to create events'))}
+        />
+
+        {/* Search: city + keywords */}
+        <div className="mt-6 sticky top-2 z-20 flex items-center rounded-full border border-black/10 dark:border-white/15 bg-background/90 backdrop-blur-xl shadow-lg shadow-black/5 pr-2">
+          <CityPicker value={city} onChange={setCity} cities={cities} onlineCount={onlineCount} locate={p => nearestCity(p, upcoming)} />
+          <span className="w-px h-6 bg-black/10 dark:bg-white/15" />
+          <div className="relative flex-1 min-w-0">
+            <Search size={17} className="absolute left-4 top-1/2 -translate-y-1/2 text-black/40 dark:text-white/40 pointer-events-none" />
+            <input ref={searchRef} type="search" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search events, topics or cities" aria-label="Search events" className="w-full pl-11 pr-3 py-3 bg-transparent text-sm outline-none placeholder:text-black/40 dark:placeholder:text-white/40" />
           </div>
+          {filtering && <button onClick={clear} className="shrink-0 flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-semibold bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/15"><X size={13} /> Clear</button>}
         </div>
-      </div>
 
-      <div className="max-w-[1400px] mx-auto px-4 sm:px-6 md:px-8 pb-20">
-        
-          {/* Category Filter Bar - Contained with Navigation */}
-          <div className="mb-10 w-full border-b border-foreground/5 relative group">
-            <div className="absolute left-0 top-1/2 -translate-y-1/2 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
-              <button 
-                onClick={() => scrollCategories('left')}
-                className="w-10 h-10 rounded-full bg-black/80 backdrop-blur-md border border-white/10 flex items-center justify-center text-white hover:bg-primary transition-all -ml-5 shadow-xl"
-              >
-                <ChevronLeft size={20} />
+        {/* Categories */}
+        <div className="mt-6 -mx-4 px-4 sm:mx-0 sm:px-0 flex gap-3 overflow-x-auto no-scrollbar pb-1">
+          {[{ name: 'all', emoji: '🌍' }, ...EVENT_CATEGORIES.filter(c => catCounts.get(c.name) || c.name === category)].map((c, i) => {
+            const on = category === c.name;
+            const hue = (i * 47) % 360;
+            return (
+              <button key={c.name} onClick={() => setCategory(c.name)} aria-pressed={on} className={`shrink-0 w-[84px] flex flex-col items-center gap-1.5 py-3 rounded-2xl transition-all ${on ? 'scale-105 shadow-lg ring-2 ring-pink-500' : 'hover:scale-105'}`} style={{ background: `hsl(${hue} 85% 60% / ${on ? 0.28 : 0.13})` }}>
+                <span className="text-3xl leading-none">{c.emoji}</span>
+                <span className="text-xs font-bold truncate max-w-full px-1">{c.name === 'all' ? 'All' : c.name}</span>
+                <span className="text-[10px] text-black/45 dark:text-white/50">{c.name === 'all' ? upcoming.length : catCounts.get(c.name) ?? 0}</span>
               </button>
-            </div>
+            );
+          })}
+        </div>
 
-            <div 
-              ref={categoryScrollRef}
-              className="overflow-x-auto no-scrollbar scroll-smooth"
-            >
-              <div className="flex justify-between md:justify-start items-center gap-2 md:gap-8 min-w-full py-4">
-                {categories.map((cat) => (
-                  <button
-                    key={cat.name}
-                    onClick={() => setCategoryFilter(cat.name)}
-                    className={`flex flex-col items-center gap-3 group transition-all relative pb-2 min-w-[100px] ${
-                      categoryFilter === cat.name ? 'text-white' : 'text-white/40 hover:text-white/60'
-                    }`}
-                  >
-                    <div className={`w-14 h-14 rounded-2xl flex items-center justify-center transition-all text-2xl ${
-                      categoryFilter === cat.name ? 'bg-white/10 scale-110 shadow-lg shadow-white/5' : 'bg-transparent group-hover:bg-white/5'
-                    }`}>
-                      {cat.icon}
-                    </div>
-                    <span className={`text-[11px] font-bold uppercase tracking-[0.1em] transition-all whitespace-nowrap ${
-                      categoryFilter === cat.name ? 'opacity-100' : 'opacity-60'
-                    }`}>
-                      {cat.name}
-                    </span>
-                    {categoryFilter === cat.name && (
-                      <motion.div 
-                        layoutId="activeCatUnderline" 
-                        className="absolute bottom-0 left-1/2 -translate-x-1/2 h-0.5 w-8 bg-primary rounded-full shadow-[0_0_10px_rgba(0,242,255,0.8)]" 
-                      />
-                    )}
-                  </button>
+        <div className="mt-5"><DateStrip value={day} onChange={setDay} counts={dayCounts} /></div>
+
+        {!filtering && (
+          <>
+            <EventRail title="🔴 Happening now" events={liveNow} />
+            <EventRail title="🎟️ Your events" events={mine} note={e => (e.hostId === uid ? 'You’re hosting' : 'You’re going')} />
+
+            {topPicks.length > 0 && (
+              <section className="mt-9">
+                <h2 className="flex items-center gap-2 font-display font-extrabold text-xl">
+                  {spotlight.length > 0 ? <><Megaphone size={18} className="text-amber-500" /> Promoted</> : <><Sparkles size={18} className="text-pink-500" /> Trending now</>}
+                </h2>
+                <div className={`${GRID} mt-4`}>
+                  {topPicks.map(e => <EventCard key={e.id} event={e} promoted={spotlight.length > 0} isRegistered={registeredIds.has(e.id)} />)}
+                  {spotlight.length > 0 && spotlight.length < 4 && boostable && (
+                    <Link to={`/events/${boostable.id}`} className="aspect-[4/5] rounded-3xl border-2 border-dashed border-black/15 dark:border-white/20 hover:border-pink-500 transition-colors p-6 flex flex-col items-center justify-center text-center">
+                      <span className="w-12 h-12 rounded-2xl bg-amber-500/10 text-amber-500 flex items-center justify-center"><Megaphone size={22} /></span>
+                      <p className="mt-3 font-display font-bold text-lg">Your event here</p>
+                      <p className="mt-1 text-sm text-black/55 dark:text-white/55">Boost “{boostable.title}” to the top of Events.</p>
+                    </Link>
+                  )}
+                </div>
+              </section>
+            )}
+          </>
+        )}
+
+        <section ref={resultsRef} className="mt-10 scroll-mt-20">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="font-display font-extrabold text-xl">
+              {q ? `Results for “${search.trim()}”` : city !== 'all' && city !== 'online' ? `Events in ${city}` : city === 'online' ? 'Online events' : category !== 'all' ? category : 'All events'}
+              {!loading && <span className="ml-2 text-sm font-medium text-black/40 dark:text-white/40">{results.length}</span>}
+            </h2>
+            <div className="flex items-center gap-2">
+              <button onClick={() => setFreeOnly(f => !f)} aria-pressed={freeOnly} className={`px-3.5 py-1.5 rounded-full text-sm font-semibold transition-colors ${freeOnly ? 'bg-emerald-500 text-white' : 'bg-black/5 dark:bg-white/[0.06] hover:bg-black/10 dark:hover:bg-white/10'}`}>Free only</button>
+              <div className="flex p-1 rounded-full bg-black/5 dark:bg-white/[0.06]" role="tablist">
+                {([['foryou', uid ? 'For you' : 'Top'], ['soon', 'Soonest'], ['popular', 'Popular']] as [Sort, string][]).map(([id, label]) => (
+                  <button key={id} role="tab" aria-selected={sort === id} onClick={() => setSort(id)} className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${sort === id ? 'bg-background shadow-sm' : 'text-black/55 dark:text-white/55 hover:text-black dark:hover:text-white'}`}>{label}</button>
                 ))}
               </div>
             </div>
-
-            <div className="absolute right-0 top-1/2 -translate-y-1/2 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
-              <button 
-                onClick={() => scrollCategories('right')}
-                className="w-10 h-10 rounded-full bg-black/80 backdrop-blur-md border border-white/10 flex items-center justify-center text-white hover:bg-primary transition-all -mr-5 shadow-xl"
-              >
-                <ChevronRight size={20} />
-              </button>
-            </div>
           </div>
 
-          <div className="flex flex-col xl:flex-row gap-8">
-            {/* Left Column: Search, Filters, List */}
-            <div className="flex-1 min-w-0">
-              {/* Filters & Search */}
-              <div className="flex flex-col md:flex-row gap-4 mb-8 relative">
-                <div className="relative flex-1">
-                  <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-white/30" size={20} />
-                  <input 
-                    type="text"
-                    placeholder="Search events..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full bg-white/5 border border-white/10 rounded-2xl pl-12 pr-4 py-3 outline-none focus:border-primary transition-all text-sm"
-                  />
-                </div>
-                
-                <div className="flex items-center gap-3">
-                  {/* Filter Dropdown Toggle */}
-                  <div className="relative">
-                    <button 
-                      onClick={() => setShowFilters(!showFilters)}
-                      className={`flex items-center gap-2 px-5 py-3 rounded-2xl border transition-all text-sm font-bold ${
-                        showFilters ? 'bg-white text-black border-white' : 'bg-white/5 text-white/60 border-white/10 hover:bg-white/10'
-                      }`}
-                    >
-                      <Filter size={18} />
-                      Filters
-                      {(filter !== 'all' || priceFilter !== 'all' || locationFilter !== 'all' || cityFilter !== 'All Cities') && (
-                        <span className="w-2 h-2 bg-primary rounded-full" />
-                      )}
-                    </button>
-
-                    <AnimatePresence>
-                      {showFilters && (
-                        <>
-                          <div 
-                            className="fixed inset-0 z-40" 
-                            onClick={() => setShowFilters(false)} 
-                          />
-                          <motion.div 
-                            initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                            animate={{ opacity: 1, y: 0, scale: 1 }}
-                            exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                            className="absolute right-0 top-full mt-2 w-72 bg-[#1a1a1a] border border-white/10 rounded-3xl shadow-2xl z-50 p-6 space-y-6"
-                          >
-                            {/* Host Type */}
-                            <div className="space-y-3">
-                              <label className="text-[10px] font-bold text-white/30 uppercase tracking-widest">Host Type</label>
-                              <div className="flex bg-white/5 rounded-xl p-1 border border-white/5">
-                                {(['all', 'user', 'community'] as const).map((f) => (
-                                  <button
-                                    key={f}
-                                    onClick={() => setFilter(f)}
-                                    className={`flex-1 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all ${
-                                      filter === f ? 'bg-white text-black' : 'text-white/40 hover:text-white/60'
-                                    }`}
-                                  >
-                                    {f}
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-
-                            {/* Price Filter */}
-                            <div className="space-y-3">
-                              <label className="text-[10px] font-bold text-white/30 uppercase tracking-widest">Price</label>
-                              <div className="flex bg-white/5 rounded-xl p-1 border border-white/5">
-                                {(['all', 'free', 'paid'] as const).map((p) => (
-                                  <button
-                                    key={p}
-                                    onClick={() => setPriceFilter(p)}
-                                    className={`flex-1 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all ${
-                                      priceFilter === p ? 'bg-white text-black' : 'text-white/40 hover:text-white/60'
-                                    }`}
-                                  >
-                                    {p}
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-
-                            {/* Event Type (Online/Offline) */}
-                            <div className="space-y-3">
-                              <label className="text-[10px] font-bold text-white/30 uppercase tracking-widest">Format</label>
-                              <div className="flex bg-white/5 rounded-xl p-1 border border-white/5">
-                                {(['all', 'online', 'offline'] as const).map((l) => (
-                                  <button
-                                    key={l}
-                                    onClick={() => setLocationFilter(l)}
-                                    className={`flex-1 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all ${
-                                      locationFilter === l ? 'bg-white text-black' : 'text-white/40 hover:text-white/60'
-                                    }`}
-                                  >
-                                    {l}
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-
-                            {/* City Filter */}
-                            {locationFilter !== 'online' && cities.length > 1 && (
-                              <div className="space-y-3">
-                                <label className="text-[10px] font-bold text-white/30 uppercase tracking-widest">City</label>
-                                <select 
-                                  value={cityFilter}
-                                  onChange={(e) => setCityFilter(e.target.value)}
-                                  className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs font-bold outline-none focus:border-primary transition-all [color-scheme:dark]"
-                                >
-                                  {cities.map(city => (
-                                    <option key={city} value={city}>{city}</option>
-                                  ))}
-                                </select>
-                              </div>
-                            )}
-
-                            <button 
-                              onClick={() => {
-                                setFilter('all');
-                                setPriceFilter('all');
-                                setLocationFilter('all');
-                                setCityFilter('All Cities');
-                                setCategoryFilter('All');
-                              }}
-                              className="w-full py-2 text-[10px] font-bold text-primary hover:underline"
-                            >
-                              Reset All Filters
-                            </button>
-                          </motion.div>
-                        </>
-                      )}
-                    </AnimatePresence>
-                  </div>
-
-                  <div className="flex bg-white/5 rounded-2xl p-1 border border-white/10">
-                    <button 
-                      onClick={() => setViewMode('grid')}
-                      className={`p-2 rounded-xl transition-all ${viewMode === 'grid' ? 'bg-white/10 text-white' : 'text-white/30'}`}
-                    >
-                      <LayoutGrid size={18} />
-                    </button>
-                    <button 
-                      onClick={() => setViewMode('list')}
-                      className={`p-2 rounded-xl transition-all ${viewMode === 'list' ? 'bg-white/10 text-white' : 'text-white/30'}`}
-                    >
-                      <List size={18} />
-                    </button>
-                  </div>
+          <div className="mt-4">
+            {loading ? (
+              <div className={GRID}>{Array.from({ length: 8 }).map((_, i) => <div key={i} className="aspect-[4/5] rounded-3xl bg-black/5 dark:bg-white/5 animate-pulse" />)}</div>
+            ) : arranged.length > 0 ? (
+              <div className={GRID}>
+                {arranged.map(({ event, promoted: p }) => <EventCard key={`${event.id}-${p ? 'p' : 'o'}`} event={event} promoted={p} isRegistered={registeredIds.has(event.id)} />)}
+              </div>
+            ) : (
+              <div className="py-16 px-6 text-center rounded-3xl border-2 border-dashed border-black/15 dark:border-white/15">
+                <span className="text-5xl">🎈</span>
+                <p className="mt-4 font-display font-bold text-xl">{filtering ? 'Nothing matches that yet' : 'No events yet'}</p>
+                <p className="mt-1 text-sm text-black/55 dark:text-white/55">{filtering ? 'Try another city or day, or be the one who starts something.' : 'Be the first to host one.'}</p>
+                <div className="mt-5 flex justify-center gap-2">
+                  {filtering && <button onClick={clear} className="px-4 py-2 rounded-full border border-black/15 dark:border-white/20 text-sm font-semibold hover:bg-black/5 dark:hover:bg-white/10">Clear filters</button>}
+                  {uid && <button onClick={() => setShowCreate(true)} className="px-5 py-2 rounded-full text-white text-sm font-bold" style={{ background: 'linear-gradient(135deg,#EC4899,#F97316)' }}>Create event</button>}
                 </div>
               </div>
-
-              {/* Events Grid */}
-              {loading ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {[1, 2, 3, 4, 5, 6].map(i => (
-                    <div key={i} className="h-80 glass rounded-2xl animate-pulse" />
-                  ))}
-                </div>
-              ) : filteredEvents.length > 0 ? (
-                <div className={viewMode === 'grid' ? "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" : "space-y-4"}>
-                  <AnimatePresence mode="popLayout">
-                    {filteredEvents.map((event) => (
-                      <motion.div
-                        key={event.id}
-                        layout
-                        initial={{ opacity: 0, scale: 0.9 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        exit={{ opacity: 0, scale: 0.9 }}
-                      >
-                        <EventCard event={event} viewMode={viewMode} />
-                      </motion.div>
-                    ))}
-                  </AnimatePresence>
-                </div>
-              ) : (
-                <div className="text-center py-20 glass rounded-3xl">
-                  <div className="w-16 h-16 bg-white/5 rounded-full flex items-center justify-center mx-auto mb-4">
-                    <Calendar size={32} className="text-white/20" />
-                  </div>
-                  <h3 className="text-xl font-bold mb-2">No events found</h3>
-                  <p className="text-white/40">Try adjusting your search or filters.</p>
-                </div>
-              )}
-            </div>
-
-            {/* Right Sidebar: My Events, Popular Events, Registered Events */}
-            <div className="w-full xl:w-80 space-y-8">
-              {/* Registered Events */}
-              {auth.currentUser && (
-                <div className="glass rounded-[32px] p-6 border border-primary/20 relative overflow-hidden group">
-                  <div className="absolute inset-0 bg-primary/5 opacity-0 group-hover:opacity-100 transition-opacity" />
-                  <div className="flex items-center justify-between mb-6 relative">
-                    <div className="flex items-center gap-2">
-                      <div className="w-2 h-2 bg-primary rounded-full animate-pulse" />
-                      <h3 className="text-lg font-bold">Registered</h3>
-                    </div>
-                    <span className="text-[10px] bg-primary/20 text-primary px-2 py-0.5 rounded-full font-bold">
-                      {registeredEvents.length}
-                    </span>
-                  </div>
-                  <div className="space-y-4 relative">
-                    {registeredEvents.length > 0 ? registeredEvents.map(event => (
-                      <Link key={event.id} to={`/events/${event.id}`} className="flex items-center gap-4 group/item">
-                        <div className="w-12 h-12 rounded-xl overflow-hidden shrink-0 border border-foreground/10 flex items-center justify-center bg-foreground/5">
-                          {event.banner ? (
-                            <img src={event.banner} className="w-full h-full object-cover group-hover/item:scale-110 transition-transform" referrerPolicy="no-referrer" />
-                          ) : (
-                            <Calendar size={20} className="text-foreground/20" />
-                          )}
-                        </div>
-                        <div className="min-w-0">
-                          <h4 className="text-sm font-bold truncate group-hover/item:text-primary transition-colors">{event.title}</h4>
-                          <div className="flex items-center gap-2">
-                            <span className={`w-1.5 h-1.5 rounded-full ${
-                              event.status === 'live' ? 'bg-red-500 animate-pulse' : 
-                              event.status === 'ended' ? 'bg-zinc-500' : 'bg-primary'
-                            }`} />
-                            <p className="text-[10px] text-white/40 uppercase font-bold tracking-wider">{event.status}</p>
-                          </div>
-                        </div>
-                      </Link>
-                    )) : (
-                      <div className="text-center py-4 px-2 border border-dashed border-foreground/10 rounded-2xl">
-                        <p className="text-[10px] text-white/20 italic">No registrations yet</p>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* My Events */}
-              <div className="glass rounded-[32px] p-6">
-                <div className="flex items-center justify-between mb-6">
-                  <h3 className="text-lg font-bold">My Events</h3>
-                  <Link to="/profile" className="text-[10px] font-bold text-primary uppercase tracking-widest hover:underline">View All</Link>
-                </div>
-                <div className="space-y-4">
-                  {myEvents.length > 0 ? myEvents.map(event => (
-                    <Link key={event.id} to={`/events/${event.id}`} className="flex items-center gap-4 group">
-                      <div className="w-12 h-12 rounded-xl overflow-hidden shrink-0 flex items-center justify-center bg-foreground/5">
-                        {event.banner ? (
-                          <img src={event.banner} className="w-full h-full object-cover group-hover:scale-110 transition-transform" referrerPolicy="no-referrer" />
-                        ) : (
-                          <Calendar size={20} className="text-foreground/20" />
-                        )}
-                      </div>
-                      <div className="min-w-0">
-                        <h4 className="text-sm font-bold truncate group-hover:text-primary transition-colors">{event.title}</h4>
-                        <p className="text-[10px] text-white/40">{formatDate(event.startDate, 'MMM d, HH:mm')}</p>
-                      </div>
-                    </Link>
-                  )) : (
-                    <p className="text-xs text-white/30 italic">No events hosted yet.</p>
-                  )}
-                </div>
-              </div>
-
-              {/* Popular Events */}
-              <div className="glass rounded-[32px] p-6">
-                <div className="flex items-center justify-between mb-6">
-                  <h3 className="text-lg font-bold">Popular</h3>
-                  <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary">
-                    <Award size={16} />
-                  </div>
-                </div>
-                <div className="space-y-4">
-                  {popularEvents.map(event => (
-                    <Link key={event.id} to={`/events/${event.id}`} className="flex items-center gap-4 group">
-                      <div className="w-12 h-12 rounded-xl overflow-hidden shrink-0 flex items-center justify-center bg-foreground/5">
-                        {event.banner ? (
-                          <img src={event.banner} className="w-full h-full object-cover group-hover:scale-110 transition-transform" referrerPolicy="no-referrer" />
-                        ) : (
-                          <Calendar size={20} className="text-foreground/20" />
-                        )}
-                      </div>
-                      <div className="min-w-0">
-                        <h4 className="text-sm font-bold truncate group-hover:text-primary transition-colors">{event.title}</h4>
-                        <div className="flex items-center gap-2">
-                          <Users size={10} className="text-primary/60" />
-                          <span className="text-[10px] text-white/40 font-bold">{event.attendeeCount || 0} attending</span>
-                        </div>
-                      </div>
-                    </Link>
-                  ))}
-                </div>
-              </div>
-            </div>
+            )}
           </div>
-        </div>
+        </section>
+      </div>
 
-      <CreateEventModal 
-        isOpen={showCreateModal} 
-        onClose={() => setShowCreateModal(false)} 
-      />
-
-      <CreateInstantSessionModal
-        isOpen={showInstantModal}
-        onClose={() => setShowInstantModal(false)}
-      />
+      <CreateEventModal isOpen={showCreate} onClose={() => setShowCreate(false)} />
+      <CreateInstantSessionModal isOpen={showInstant} onClose={() => setShowInstant(false)} />
     </div>
   );
 }

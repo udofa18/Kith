@@ -6,7 +6,7 @@ import { collection, query, orderBy, onSnapshot, addDoc, serverTimestamp, doc, u
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { storage } from '../firebase';
 import CreatePollModal from './CreatePollModal';
-import { ArrowDown, MoreHorizontal, Send, Image as ImageIcon, Code as CodeIcon, Paperclip, Smile, MessageSquare, Settings, Snowflake, Megaphone, Hash, MoreVertical, Edit2, Trash2, X, Check, Reply, ExternalLink, Plus, ChevronUp, Zap, Heart, ThumbsUp, PartyPopper, FileText, Video, Music, Download, Play, Film, Sparkles, Lock, Flag, Cpu, Pin, BarChart2, Copy, Globe, Twitter, Github, Linkedin, Info, Gift } from 'lucide-react';
+import { ArrowDown, MoreHorizontal, Send, Image as ImageIcon, Code as CodeIcon, Paperclip, Smile, MessageSquare, Settings, Snowflake, Megaphone, Hash, MoreVertical, Edit2, Trash2, X, Check, Reply, ExternalLink, Plus, ChevronUp, Zap, Heart, ThumbsUp, PartyPopper, FileText, Video, Music, Download, Play, Film, Sparkles, Lock, Flag, Cpu, Pin, BarChart2, Copy, Globe, Twitter, Github, Linkedin, Info, Gift, ChevronRight } from 'lucide-react';
 import PostCard from './PostCard';
 import PostEditor from './PostEditor';
 import XPGiftModal from './XPGiftModal';
@@ -26,6 +26,8 @@ import AnimatedEmojiPicker from './AnimatedEmojiPicker';
 import AnimatedEmojiRenderer, { isSoloEmoji } from './AnimatedEmojiRenderer';
 import SafeAnimatedEmoji from './SafeAnimatedEmoji';
 import { playNotificationSound } from '../lib/sounds';
+import { CHANNEL_TYPES } from '../lib/channelTypes';
+import PollCard from './chat/PollCard';
 import { createNotification } from '../lib/notifications';
 
 import { updateDailyStats } from '../lib/stats';
@@ -48,6 +50,10 @@ interface ChannelViewProps {
   myCustomRoles?: string[];
   /** Millis until which the member is timed out, if they are. */
   timeoutUntil?: number | null;
+  /** The member muted this channel: sounds only play for @mentions. */
+  isMuted?: boolean;
+  /** Opens a channel from a #tag in a message. Falls back to a link if not given. */
+  onOpenChannel?: (channelId: string) => void;
 }
 
 const MESSAGES_PER_PAGE = 30;
@@ -69,7 +75,9 @@ export default function ChannelView({
   roles = [],
   myPermissions = [],
   myCustomRoles = [],
-  timeoutUntil = null
+  timeoutUntil = null,
+  isMuted = false,
+  onOpenChannel
 }: ChannelViewProps) {
   const navigate = useNavigate();
   const [messages, setMessages] = useState<any[]>([]);
@@ -221,6 +229,11 @@ export default function ChannelView({
   const atBottomRef = useRef(true);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [isThreadViewOpen, setIsThreadViewOpen] = useState(false);
+  const notifyPrefs = useRef({ muted: false, handle: '' });
+  notifyPrefs.current = {
+    muted: isMuted,
+    handle: communityMembers?.find((m: any) => m.id === auth.currentUser?.uid)?.user?.username || '',
+  };
   const [showMentionSuggestions, setShowMentionSuggestions] = useState(false);
   const [showChannelSuggestions, setShowChannelSuggestions] = useState(false);
   const [channelsList, setChannelsList] = useState<any[]>([]);
@@ -236,6 +249,13 @@ export default function ChannelView({
     return () => unsub();
   }, [communityId]);
 
+  const canMentionEveryone = isAdmin || myPermissions.includes('mention_everyone');
+  const roleSlug = (r: any) => String(r.name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  // Anyone can mention a role its admins marked mentionable; moderators can mention any role.
+  const mentionableRoles = roles.filter((r: any) => (r.mentionable || isAdmin) && roleSlug(r));
+  // Channels a member can't open aren't offered or linked, so their names don't leak.
+  const canSeeChannel = (c: any) => isAdmin || (!c.isHidden && (!(c.allowedRoles || []).length || c.allowedRoles.some((r: string) => myCustomRoles.includes(r))));
+
   const filteredMentions = useMemo(() => {
     const specialMentions = [
       { id: 'everyone', user: { username: 'everyone', displayName: 'All Members', profileImage: '' } },
@@ -243,9 +263,13 @@ export default function ChannelView({
     ];
     
     const filter = mentionFilter.toLowerCase();
-    const filteredSpecial = specialMentions.filter(m => 
-      m.user.username.includes(filter) || m.user.displayName.toLowerCase().includes(filter)
-    );
+    const filteredSpecial = [
+      ...specialMentions.filter(m => (m.id !== 'everyone' || canMentionEveryone) &&
+        (m.user.username.includes(filter) || m.user.displayName.toLowerCase().includes(filter))),
+      ...mentionableRoles
+        .filter((r: any) => roleSlug(r).includes(filter) || String(r.name).toLowerCase().includes(filter))
+        .map((r: any) => ({ id: `role:${r.id}`, role: r, user: { username: roleSlug(r), displayName: r.name, profileImage: '' } })),
+    ];
 
     if (!communityMembers) return filteredSpecial;
     const filteredMembers = communityMembers
@@ -258,14 +282,14 @@ export default function ChannelView({
       .slice(0, 5);
     
     return [...filteredSpecial, ...filteredMembers].slice(0, 5);
-  }, [communityMembers, mentionFilter]);
+  }, [communityMembers, mentionFilter, canMentionEveryone, roles, isAdmin]);
 
   const filteredChannels = useMemo(() => {
     const filter = mentionFilter.toLowerCase();
     return channelsList
-      .filter(c => c.name.toLowerCase().includes(filter))
+      .filter(c => canSeeChannel(c) && c.name.toLowerCase().includes(filter))
       .slice(0, 5);
-  }, [channelsList, mentionFilter]);
+  }, [channelsList, mentionFilter, isAdmin, myCustomRoles]);
 
   const insertMention = (username: string) => {
     const before = newMessage.slice(0, mentionCursorPos);
@@ -350,7 +374,15 @@ export default function ChannelView({
         }
 
         const member = communityMembers?.find(m => m.user?.username?.toLowerCase() === lowerUsername);
-        
+        const mentionedRole = !member && roles.find((r: any) => roleSlug(r) === lowerUsername);
+        if (mentionedRole) {
+          return (
+            <span key={index} className="font-semibold px-1 rounded-md cursor-default" style={{ color: mentionedRole.color || undefined, backgroundColor: `${mentionedRole.color || '#7C3AED'}1f` }}>
+              @{mentionedRole.name}
+            </span>
+          );
+        }
+
         if (member) {
           return (
             <UserHoverCard key={index} userId={member?.id || ''}>
@@ -364,21 +396,22 @@ export default function ChannelView({
 
       if (part.startsWith('#')) {
         const channelName = part.slice(1).toLowerCase();
-        const linkedChannel = channelsList.find(c => c.name.toLowerCase() === channelName);
-        
-        return (
-          <span 
-            key={index} 
-            onClick={() => {
-              if (linkedChannel) {
-                navigate(`/feed?view=community&id=${communityId}&channelId=${linkedChannel.id}`);
-              }
-            }}
-            className="text-primary font-bold hover:underline cursor-pointer inline-flex items-center gap-0.5 bg-primary/5 px-1 rounded transition-all"
-          >
-            <Hash size={12} className="inline mb-0.5" />{part.slice(1)}
-          </span>
-        );
+        const linkedChannel = channelsList.find(c => c.name.toLowerCase() === channelName && canSeeChannel(c));
+        // Only real, visible channels become links; "#1" or "#blessed" stay plain text.
+        if (linkedChannel) {
+          const TypeIcon = (CHANNEL_TYPES.find(t => t.id === linkedChannel.type) ?? CHANNEL_TYPES[0]).icon;
+          return (
+            <button
+              key={index}
+              type="button"
+              onClick={() => onOpenChannel ? onOpenChannel(linkedChannel.id) : navigate(`/feed?view=community&id=${communityId}&channelId=${linkedChannel.id}`)}
+              title={linkedChannel.description || `Open #${linkedChannel.name}`}
+              className="inline-flex items-center gap-0.5 align-baseline px-1 rounded bg-primary/10 text-primary font-medium hover:bg-primary/20 transition-colors"
+            >
+              <TypeIcon size={12} className="shrink-0" />{linkedChannel.name}
+            </button>
+          );
+        }
       }
 
       // Detect and style links within the text part
@@ -453,6 +486,7 @@ export default function ChannelView({
 
     setNewMessage('');
     setReplyTo(null);
+    setIsThreadViewOpen(false);
     setEditingMessageId(null);
     setActiveMessageMenu(null);
     setMessages([]);
@@ -484,8 +518,11 @@ export default function ChannelView({
       snapshot.docChanges().forEach((change) => {
         if (change.type === 'added' && !isInitialLoad.current) {
           const msg = change.doc.data();
-          if (msg.authorUid !== auth.currentUser?.uid) {
-            playNotificationSound();
+          // Replies belong to a thread, so they don't make noise in the channel.
+          if (msg.authorUid !== auth.currentUser?.uid && !msg.threadId) {
+            const { muted, handle } = notifyPrefs.current;
+            const mentionsMe = !!handle && new RegExp(`@${handle}\\b`, 'i').test(msg.content || '');
+            if (!muted || mentionsMe) playNotificationSound();
             if (!atBottomRef.current) setNewBelow(true);
           }
         }
@@ -615,9 +652,11 @@ export default function ChannelView({
   };
 
   // Group messages by date
-  const groupedMessages = messages.reduce((groups: any[], msg, i) => {
+  // Thread replies live in the thread, not in the channel feed.
+  const feedMessages = messages.filter(m => !m.threadId);
+  const groupedMessages = feedMessages.reduce((groups: any[], msg, i) => {
     const date = msg.createdAt;
-    const prevMsg = messages[i - 1];
+    const prevMsg = feedMessages[i - 1];
     
     const showHeader = !prevMsg || 
                       prevMsg.authorUid !== msg.authorUid || 
@@ -715,10 +754,13 @@ export default function ChannelView({
     };
 
     if (pollData) {
+      // Votes are stored per member under the message (see PollCard), so the poll itself holds no counts.
       optimisticMessage.poll = {
-        ...pollData,
-        options: pollData.options.map((opt: string) => ({ text: opt, votes: 0 })),
-        voters: []
+        v: 2,
+        question: pollData.question,
+        options: pollData.options.map((opt: string) => ({ text: opt })),
+        expiresAt: Timestamp.fromDate(new Date(pollData.expiresAt)),
+        closed: false,
       };
     }
 
@@ -774,7 +816,6 @@ export default function ChannelView({
           if (!/@[a-zA-Z0-9_-]+/.test(messageContent)) return;
           const membersSnap = await getDocs(collection(db, 'communities', communityId, 'members'));
           const senderId = auth.currentUser!.uid;
-          const canMentionEveryone = isAdmin || myPermissions.includes('mention_everyone');
           const notificationBatch = writeBatch(db);
           let count = 0;
           
@@ -800,6 +841,10 @@ export default function ChannelView({
                 );
                 if (member && member.id !== senderId) {
                   mentionedMemberIds.add(member.id);
+                } else if (!member) {
+                  // @role pings everyone holding it (if the role can be mentioned).
+                  const role = mentionableRoles.find((r: any) => roleSlug(r) === lower);
+                  if (role) membersSnap.docs.forEach(d => { if (d.id !== senderId && (d.data().customRoles || []).includes(role.id) && mentionedMemberIds.size < 450) mentionedMemberIds.add(d.id); });
                 }
               }
             });
@@ -974,6 +1019,17 @@ export default function ChannelView({
     }
   };
 
+  const handleEndPoll = async (messageId: string) => {
+    const msg = messages.find(m => m.id === messageId);
+    if (!msg?.poll) return;
+    try {
+      await updateDoc(doc(db, 'communities', communityId, 'channels', channel.id, 'messages', messageId), { poll: { ...msg.poll, closed: true }, updatedAt: serverTimestamp() });
+      toast.success('Poll closed');
+    } catch {
+      toast.error("Couldn't close the poll");
+    }
+  };
+
   const handleDeleteMessage = (messageId: string) => {
     setMessageToDeleteId(messageId);
     setShowDeleteConfirm(true);
@@ -1049,11 +1105,21 @@ export default function ChannelView({
     el.animate([{ backgroundColor: 'rgba(124,58,237,0.14)' }, { backgroundColor: 'transparent' }], { duration: 1600 });
   };
 
+  const STAFF: Record<string, { label: string; cls: string }> = {
+    owner: { label: 'Owner', cls: 'bg-yellow-500/15 text-yellow-700 dark:text-yellow-400' },
+    admin: { label: 'Admin', cls: 'bg-red-500/10 text-red-600 dark:text-red-400' },
+    moderator: { label: 'Mod', cls: 'bg-blue-500/10 text-blue-600 dark:text-blue-400' },
+  };
   const roleStyle = (authorUid: string) => {
     const member = communityMembers?.find(m => m.id === authorUid);
-    const memberRoles = (member?.customRoles || []).map((rid: string) => roles.find(r => r.id === rid)).filter(Boolean);
-    return { member, memberRoles };
+    // Highest-ranked role first: its colour is the name colour.
+    const memberRoles = (member?.customRoles || [])
+      .map((rid: string) => roles.find(r => r.id === rid)).filter(Boolean)
+      .sort((a: any, b: any) => (a.order ?? 9999) - (b.order ?? 9999));
+    return { member, memberRoles, staff: member ? STAFF[member.role] : undefined };
   };
+
+  const openThread = (id: string) => { setActiveThreadId(id); setIsThreadViewOpen(true); setActiveMessageMenu(null); setShowReactionMenu(null); };
 
   const renderMessage = (msg: any) => {
     if (msg.type === 'system') {
@@ -1089,8 +1155,10 @@ export default function ChannelView({
     const canDelete = isAuthor || isAdmin || canModerate;
     const isEditing = editingMessageId === msg.id;
     const showHeader = msg.showHeader;
-    const { memberRoles } = roleStyle(msg.authorUid);
+    const { member: authorMember, memberRoles, staff } = roleStyle(msg.authorUid);
     const nameColor = memberRoles[0]?.color;
+    // Show the name as it is now, not as it was when the message was sent.
+    const authorName = authorMember?.user?.displayName || msg.authorName;
     const photo = isAuthor ? (currentUserProfile?.profileImage || msg.authorPhoto) : msg.authorPhoto;
     const actionsOpen = activeMessageMenu === msg.id || showReactionMenu === msg.id;
     const time = msg.createdAt instanceof Date ? msg.createdAt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
@@ -1116,11 +1184,12 @@ export default function ChannelView({
           {showHeader && (
             <div className="flex items-center gap-1.5 flex-wrap leading-tight">
               <UserHoverCard userId={msg.authorUid} communityId={communityId}>
-                <span className="text-[15px] font-semibold hover:underline cursor-pointer" style={nameColor ? { color: nameColor } : undefined}>{msg.authorName}</span>
+                <span className="text-[15px] font-semibold hover:underline cursor-pointer" style={nameColor ? { color: nameColor } : undefined}>{authorName}</span>
               </UserHoverCard>
               <VerifiedBadge userId={msg.authorUid} />
               {msg.isBot && <span className="px-1.5 py-0.5 rounded bg-primary/15 text-primary text-[10px] font-semibold">Bot</span>}
-              {memberRoles.slice(0, 2).map((r: any) => (
+              {staff && <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${staff.cls}`}>{staff.label}</span>}
+              {memberRoles.slice(0, staff ? 1 : 2).map((r: any) => (
                 <span key={r.id} className="px-1.5 py-0.5 rounded text-[10px] font-semibold" style={{ backgroundColor: `${r.color}1f`, color: r.color }}>{r.name}</span>
               ))}
               <span className="text-xs text-foreground/40">{msg.isOptimistic ? 'Sending…' : time}</span>
@@ -1178,7 +1247,15 @@ export default function ChannelView({
                 </div>
               )}
 
-              {msg.poll && <PollCard msg={msg} onVote={i => handleVote(msg.id, i)} />}
+              {msg.poll && (
+                <PollCard
+                  msg={msg} communityId={communityId} channelId={channel.id}
+                  canVote={isMember && !timedOut}
+                  isAuthor={isAuthor}
+                  onLegacyVote={i => handleVote(msg.id, i)}
+                  onEnd={() => handleEndPoll(msg.id)}
+                />
+              )}
 
               {url && <div className="max-w-md"><LinkPreview url={url} enabled compact /></div>}
 
@@ -1199,6 +1276,19 @@ export default function ChannelView({
                   <button onClick={() => setShowReactionMenu(msg.id)} aria-label="Add reaction" className="px-1.5 py-0.5 rounded-full border border-dashed border-foreground/20 text-foreground/45 hover:text-foreground"><Smile size={13} /></button>
                 </div>
               )}
+
+              {msg.replyCount > 0 && (
+                <button
+                  onClick={() => openThread(msg.id)}
+                  aria-label={`Open thread, ${msg.replyCount} ${msg.replyCount === 1 ? 'reply' : 'replies'}`}
+                  className={`mt-1.5 flex items-center gap-2 max-w-full pl-2 pr-3 py-1 rounded-lg border text-left transition-colors ${isThreadViewOpen && activeThreadId === msg.id ? 'border-primary/50 bg-primary/10' : 'border-foreground/10 hover:border-primary/40 hover:bg-primary/5'}`}
+                >
+                  <MessageSquare size={14} className="text-primary shrink-0" />
+                  <span className="text-sm font-medium text-primary">{msg.replyCount} {msg.replyCount === 1 ? 'reply' : 'replies'}</span>
+                  {msg.lastReplyAt && <span className="text-xs text-foreground/50 truncate">· last reply {formatDistanceToNow(ensureDate(msg.lastReplyAt), { addSuffix: true })}</span>}
+                  <ChevronRight size={14} className="text-foreground/35 shrink-0" />
+                </button>
+              )}
             </>
           )}
         </div>
@@ -1211,6 +1301,7 @@ export default function ChannelView({
             ))}
             <ActionIcon label="More reactions" onClick={() => { setActiveMessageMenu(null); setShowReactionMenu(showReactionMenu === msg.id ? null : msg.id); }}><Smile size={16} /></ActionIcon>
             <ActionIcon label="Reply" onClick={() => startReply(msg)}><Reply size={16} /></ActionIcon>
+            {(canThread || msg.replyCount > 0) && <ActionIcon label={msg.replyCount > 0 ? 'View thread' : 'Reply in thread'} onClick={() => openThread(msg.id)}><MessageSquare size={16} /></ActionIcon>}
             <ActionIcon label="More" onClick={() => { setShowReactionMenu(null); setActiveMessageMenu(activeMessageMenu === msg.id ? null : msg.id); }}><MoreHorizontal size={16} /></ActionIcon>
           </div>
         )}
@@ -1231,7 +1322,7 @@ export default function ChannelView({
             <div className="fixed inset-0 z-30" onClick={() => setActiveMessageMenu(null)} />
             <div className="absolute right-2 top-6 z-40 w-52 py-1.5 rounded-2xl bg-background border border-foreground/10 shadow-xl text-sm">
               <MenuItem icon={Reply} label="Reply" onClick={() => startReply(msg)} />
-              {canThread && <MenuItem icon={MessageSquare} label="Reply in thread" onClick={() => { setActiveThreadId(msg.id); setIsThreadViewOpen(true); setActiveMessageMenu(null); }} />}
+              {(canThread || msg.replyCount > 0) && <MenuItem icon={MessageSquare} label={msg.replyCount > 0 ? `View thread (${msg.replyCount})` : 'Reply in thread'} onClick={() => openThread(msg.id)} />}
               {msg.content && <MenuItem icon={Copy} label="Copy text" onClick={() => { navigator.clipboard.writeText(msg.content); toast.success('Copied'); setActiveMessageMenu(null); }} />}
               {isAuthor && <MenuItem icon={Edit2} label="Edit" onClick={() => startEdit(msg)} />}
               {canModerate && <MenuItem icon={Pin} label={msg.isPinned ? 'Unpin' : 'Pin to channel'} onClick={() => handlePinMessage(msg.id)} />}
@@ -1297,22 +1388,24 @@ export default function ChannelView({
               {/* @people and #channel suggestions */}
               {suggestions && (
                 <div className="absolute bottom-full left-0 mb-2 w-72 max-w-full py-1.5 rounded-2xl bg-background border border-foreground/10 shadow-xl z-40">
-                  <p className="px-3 pb-1 text-xs font-semibold text-foreground/45">{suggestions === 'people' ? 'People' : 'Channels'}</p>
+                  <p className="px-3 pb-1 text-xs font-semibold text-foreground/45">{suggestions === 'people' ? 'People and roles' : 'Channels'}</p>
                   {suggestions === 'people'
                     ? filteredMentions.map((m: any) => (
                       <button key={m.id} type="button" onClick={() => insertMention(m.user?.username || 'user')} className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-foreground/5">
-                        {m.id === 'everyone' || m.id === 'admin'
-                          ? <span className="w-7 h-7 rounded-full bg-primary/10 text-primary flex items-center justify-center"><Megaphone size={14} /></span>
-                          : <Avatar src={m.user?.profileImage} seed={m.id} size={28} />}
+                        {m.role
+                          ? <span className="w-7 h-7 rounded-full flex items-center justify-center" style={{ backgroundColor: `${m.role.color || '#7C3AED'}26`, color: m.role.color || undefined }}><span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: m.role.color || '#7C3AED' }} /></span>
+                          : m.id === 'everyone' || m.id === 'admin'
+                            ? <span className="w-7 h-7 rounded-full bg-primary/10 text-primary flex items-center justify-center"><Megaphone size={14} /></span>
+                            : <Avatar src={m.user?.profileImage} seed={m.id} size={28} />}
                         <span className="min-w-0">
                           <span className="flex items-center gap-1 text-sm font-medium truncate">{m.user?.displayName || m.user?.username}<VerifiedBadge verified={m.user?.verified} /></span>
-                          <span className="block text-xs text-foreground/50 truncate">@{m.user?.username}</span>
+                          <span className="block text-xs text-foreground/50 truncate">{m.role ? 'Role' : `@${m.user?.username}`}</span>
                         </span>
                       </button>
                     ))
                     : filteredChannels.map((c: any) => (
                       <button key={c.id} type="button" onClick={() => insertChannelMention(c.name)} className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-foreground/5">
-                        <Hash size={16} className="text-foreground/50" />
+                        {(() => { const I = (CHANNEL_TYPES.find(t => t.id === c.type) ?? CHANNEL_TYPES[0]).icon; return <I size={16} className="text-foreground/50 shrink-0" />; })()}
                         <span className="min-w-0">
                           <span className="block text-sm font-medium truncate">{c.name}</span>
                           {c.description && <span className="block text-xs text-foreground/50 truncate">{c.description}</span>}
@@ -1426,6 +1519,8 @@ export default function ChannelView({
             parentMessageId={activeThreadId}
             onClose={() => setIsThreadViewOpen(false)}
             currentUserProfile={currentUserProfile}
+            canReply={canPost && !lockedReason}
+            canModerate={canModerate}
           />
         )}
       </AnimatePresence>
@@ -1502,40 +1597,6 @@ function ChannelIntro({ channel, communityName, isAdmin, onOpenSettings, empty }
           <Settings size={14} /> Edit channel
         </button>
       )}
-    </div>
-  );
-}
-
-function PollCard({ msg, onVote }: { msg: any; onVote: (i: number) => void }) {
-  const uid = auth.currentUser?.uid;
-  const options: any[] = msg.poll.options || [];
-  const total = options.reduce((acc, o) => acc + (o.votes || 0), 0);
-  const voted = msg.poll.voters?.some((v: string) => typeof v === 'string' && (v === uid || v.startsWith(`${uid}:`)));
-  const expires = (() => {
-    const v = msg.poll.expiresAt;
-    if (!v) return '';
-    const d = v.toDate ? v.toDate() : new Date(v);
-    return isNaN(d.getTime()) ? '' : d.getTime() < Date.now() ? 'Poll closed' : `Ends ${formatDistanceToNow(d, { addSuffix: true })}`;
-  })();
-  return (
-    <div className="mt-2 max-w-sm p-4 rounded-2xl border border-foreground/10 bg-foreground/[0.02]">
-      <p className="font-semibold leading-snug">{msg.poll.question}</p>
-      <div className="mt-3 space-y-2">
-        {options.map((o, i) => {
-          const pct = total ? Math.round(((o.votes || 0) / total) * 100) : 0;
-          const mine = msg.poll.voters?.includes(`${uid}:${i}`);
-          return (
-            <button key={i} onClick={() => onVote(i)} className={`relative w-full h-11 rounded-xl overflow-hidden border text-left transition-colors ${mine ? 'border-primary' : 'border-foreground/15 hover:border-primary/50'}`}>
-              <span className={`absolute inset-y-0 left-0 transition-all duration-500 ${mine ? 'bg-primary/20' : 'bg-foreground/[0.06]'}`} style={{ width: voted ? `${pct}%` : 0 }} />
-              <span className="relative flex items-center justify-between px-3.5 text-sm">
-                <span className={`flex items-center gap-1.5 font-medium ${mine ? 'text-primary' : ''}`}>{o.text}{mine && <Check size={14} />}</span>
-                {voted && <span className="text-foreground/55 font-medium">{pct}%</span>}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-      <p className="mt-2.5 text-xs text-foreground/50">{total} {total === 1 ? 'vote' : 'votes'}{expires && ` · ${expires}`}{!voted && ' · Tap to vote'}</p>
     </div>
   );
 }

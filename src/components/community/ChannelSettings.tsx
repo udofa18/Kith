@@ -10,6 +10,7 @@ import CreateChannelModal from '../CreateChannelModal';
 import { CHANNEL_TYPES, toChannelSlug } from '../../lib/channelTypes';
 import { queueAudit, useMembership } from '../../lib/communityRoles';
 import { SaveBar, SwitchRow, inputClass } from './settingsUi';
+import { clearChannelMessages, deleteChannelWithMessages } from '../../lib/channelAdmin';
 
 const UNCATEGORIZED = 'uncategorized';
 const typeInfo = (type: string) => CHANNEL_TYPES.find(t => t.id === type) ?? CHANNEL_TYPES[0]; // older types behave like Chat
@@ -45,8 +46,11 @@ function RoleChips({ roles, value, onChange, empty }: { roles: any[]; value: str
   );
 }
 
-function ChannelEditor({ communityId, channel, categories, roles, isWelcomeChannel, canEdit, onDelete }: {
+export function ChannelEditor({ communityId, channel, categories, roles, isWelcomeChannel, canEdit, onDelete, onClear, onSaved }: {
   communityId: string; channel: any; categories: any[]; roles: any[]; isWelcomeChannel: boolean; canEdit: boolean; onDelete: () => void;
+  /** Offered next to delete when given. */
+  onClear?: () => void;
+  onSaved?: () => void;
 }) {
   const [draft, setDraft] = useState(() => pick(channel));
   const [saving, setSaving] = useState(false);
@@ -91,6 +95,7 @@ function ChannelEditor({ communityId, channel, categories, roles, isWelcomeChann
       queueAudit(batch, communityId, { action: 'channel.update', targetName: slug, details: changes });
       await batch.commit();
       toast.success('Channel saved');
+      onSaved?.();
     } catch (e) {
       console.error(e);
       toast.error("Couldn't save the channel");
@@ -151,6 +156,15 @@ function ChannelEditor({ communityId, channel, categories, roles, isWelcomeChann
 
       <SaveBar dirty={dirty} saving={saving} error={error} onSave={save} onDiscard={() => setDraft(pick(channel))} />
 
+      {onClear && (
+        <div className="pt-4 border-t border-foreground/10 flex items-center justify-between gap-4">
+          <div>
+            <p className="text-sm font-medium">Clear messages</p>
+            <p className="text-sm text-foreground/55">Deletes every message but keeps the channel.</p>
+          </div>
+          <button onClick={onClear} className="px-3 py-2 rounded-lg border border-red-500/40 text-red-500 text-sm hover:bg-red-500/10">Clear…</button>
+        </div>
+      )}
       <div className="pt-4 border-t border-foreground/10 flex items-center justify-between gap-4">
         <div>
           <p className="text-sm font-medium">Delete channel</p>
@@ -171,7 +185,7 @@ export default function ChannelSettings({ communityId, welcomeChannelId }: { com
   const [creating, setCreating] = useState<string | null>(null);
   const [newCategory, setNewCategory] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
-  const [pendingDelete, setPendingDelete] = useState<{ kind: 'channel' | 'category'; item: any } | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{ kind: 'channel' | 'category' | 'clear'; item: any } | null>(null);
   const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
@@ -252,20 +266,10 @@ export default function ChannelSettings({ communityId, welcomeChannelId }: { com
         batch.delete(doc(db, 'communities', communityId, 'categories', pendingDelete.item.id));
         queueAudit(batch, communityId, { action: 'category.delete', targetName: pendingDelete.item.name });
         await batch.commit();
+      } else if (pendingDelete.kind === 'clear') {
+        await clearChannelMessages(communityId, pendingDelete.item);
       } else {
-        const ref = doc(db, 'communities', communityId, 'channels', pendingDelete.item.id);
-        // Messages live in a subcollection that isn't removed with the channel, so clear it first.
-        for (;;) {
-          const snap = await getDocs(query(collection(ref, 'messages'), limit(400)));
-          if (snap.empty) break;
-          const batch = writeBatch(db);
-          snap.docs.forEach(d => batch.delete(d.ref));
-          await batch.commit();
-        }
-        const batch = writeBatch(db);
-        batch.delete(ref);
-        queueAudit(batch, communityId, { action: 'channel.delete', targetName: pendingDelete.item.name });
-        await batch.commit();
+        await deleteChannelWithMessages(communityId, pendingDelete.item);
         if (open === pendingDelete.item.id) setOpen(null);
       }
       toast.success('Deleted');
@@ -355,7 +359,7 @@ export default function ChannelSettings({ communityId, welcomeChannelId }: { com
                   </div>
                   {expanded && (
                     <ChannelEditor communityId={communityId} channel={c} categories={categories} roles={roles} canEdit={me.isAdmin}
-                      isWelcomeChannel={c.id === welcomeChannelId} onDelete={() => setPendingDelete({ kind: 'channel', item: c })} />
+                      isWelcomeChannel={c.id === welcomeChannelId} onDelete={() => setPendingDelete({ kind: 'channel', item: c })} onClear={() => setPendingDelete({ kind: 'clear', item: c })} />
                   )}
                 </li>
               );
@@ -369,9 +373,9 @@ export default function ChannelSettings({ communityId, welcomeChannelId }: { com
 
       <ConfirmModal
         isOpen={!!pendingDelete} onClose={() => setPendingDelete(null)} onConfirm={confirmDelete} loading={deleting}
-        title={pendingDelete?.kind === 'category' ? `Delete "${pendingDelete.item.name}"?` : `Delete #${pendingDelete?.item.name}?`}
-        message={pendingDelete?.kind === 'category' ? 'Its channels move to Uncategorized. Nothing else is deleted.' : "The channel and all of its messages are permanently deleted. This can't be undone."}
-        confirmText={pendingDelete?.kind === 'category' ? 'Delete category' : 'Delete channel'}
+        title={pendingDelete?.kind === 'category' ? `Delete "${pendingDelete.item.name}"?` : pendingDelete?.kind === 'clear' ? `Clear #${pendingDelete.item.name}?` : `Delete #${pendingDelete?.item.name}?`}
+        message={pendingDelete?.kind === 'category' ? 'Its channels move to Uncategorized. Nothing else is deleted.' : pendingDelete?.kind === 'clear' ? "Every message in this channel is permanently deleted. The channel stays. This can't be undone." : "The channel and all of its messages are permanently deleted. This can't be undone."}
+        confirmText={pendingDelete?.kind === 'category' ? 'Delete category' : pendingDelete?.kind === 'clear' ? 'Clear messages' : 'Delete channel'}
       />
     </div>
   );
