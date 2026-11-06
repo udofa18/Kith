@@ -1,27 +1,50 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { doc, getDoc, setDoc, deleteDoc, onSnapshot, collection, query, where, increment, updateDoc, limit } from 'firebase/firestore';
 import { db, auth, handleFirestoreError, OperationType } from '../firebase';
 import { motion, AnimatePresence } from 'motion/react';
-import { 
-  Calendar, Clock, MapPin, Users, Globe, ShieldCheck,
-  ArrowLeft, Rocket, Share2, AlertCircle, Check, Lock, X,
-  ExternalLink, MessageSquare, Award, DollarSign,
-  ArrowRight, Info, CalendarPlus, Map as MapIcon,
-  Trash2
+import {
+  AlertCircle,
+  ArrowLeft,
+  ArrowUpRight,
+  Calendar,
+  CalendarPlus,
+  Check,
+  ChevronDown,
+  Clock,
+  Copy,
+  ExternalLink,
+  Globe,
+  Info,
+  Lock,
+  Map as MapIcon,
+  MapPin,
+  MoreHorizontal,
+  Radio,
+  Rocket,
+  Settings2,
+  Share2,
+  ShieldCheck,
+  Sparkles,
+  Trash2,
+  Users,
+  Video,
+  X,
 } from 'lucide-react';
 import { setOptions, importLibrary } from '@googlemaps/js-api-loader';
 import { toast } from 'react-hot-toast';
 
 import { formatDate } from '../lib/utils';
+import { isEnded, isLive, isPromoted } from '../lib/eventRanking';
 import UserHoverCard from '../components/UserHoverCard';
-import Sidebar from '../components/Sidebar';
 import CreateEventModal from '../components/CreateEventModal';
 import { updateEventStatus } from '../lib/eventUtils';
 import ConfirmModal from '../components/ConfirmModal';
 import CoHostManagementModal from '../components/CoHostManagementModal';
 import BoostEventModal from '../components/events/BoostEventModal';
-import { isPromoted } from '../lib/eventRanking';
+import EventCover from '../components/events/EventCover';
+import Avatar from '../components/ui/Avatar';
+import { startCheckout, getOrderStatus, formatEventPrice } from '../lib/payments';
 
 export default function EventDetails() {
   const [isLoaded, setIsLoaded] = useState(false);
@@ -45,6 +68,13 @@ export default function EventDetails() {
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [showHostTools, setShowHostTools] = useState(false);
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, []);
 
   useEffect(() => {
     const initMaps = async () => {
@@ -52,16 +82,12 @@ export default function EventDetails() {
       if (!apiKey) return;
 
       try {
-        setOptions({
-          key: apiKey
-        });
-        
-        await importLibrary("maps");
-        await importLibrary("marker");
-        
+        setOptions({ key: apiKey });
+        await importLibrary('maps');
+        await importLibrary('marker');
         setIsLoaded(true);
       } catch (err) {
-        console.error("Maps load error in details:", err);
+        console.error('Maps load error in details:', err);
       }
     };
 
@@ -71,41 +97,35 @@ export default function EventDetails() {
   useEffect(() => {
     if (!eventId) return;
 
-    const unsubscribe = onSnapshot(doc(db, 'events', eventId), async (docSnap) => {
+    const unsubscribe = onSnapshot(doc(db, 'events', eventId), async docSnap => {
       if (docSnap.exists()) {
         const data = { id: docSnap.id, ...docSnap.data() } as any;
-        
-        // Auto-update status if needed
+
         await updateEventStatus(data);
-        
         setEvent(data);
-        
-        // Fetch host info
+
         if (data.hostId) {
           const hostDoc = await getDoc(doc(db, 'users', data.hostId));
           if (hostDoc.exists()) setHost({ id: hostDoc.id, ...hostDoc.data() });
         }
 
-        // Fetch co-hosts info
         if (data.coHostIds && data.coHostIds.length > 0) {
           const coHostProfiles = await Promise.all(
             data.coHostIds.map(async (id: string) => {
               const userDoc = await getDoc(doc(db, 'users', id));
               return userDoc.exists() ? { id: userDoc.id, ...userDoc.data() } : null;
-            })
+            }),
           );
           setCoHosts(coHostProfiles.filter(Boolean));
         } else {
           setCoHosts([]);
         }
 
-        // Fetch community info if applicable
         if (data.communityId) {
           const commDoc = await getDoc(doc(db, 'communities', data.communityId));
           if (commDoc.exists()) {
             setCommunity({ id: commDoc.id, ...commDoc.data() });
-            
-            // Check membership
+
             if (auth.currentUser) {
               const memberDoc = await getDoc(doc(db, 'communities', data.communityId, 'members', auth.currentUser.uid));
               setIsMember(memberDoc.exists());
@@ -119,22 +139,20 @@ export default function EventDetails() {
       }
     });
 
-    // Check registration
     if (auth.currentUser) {
-      const regUnsubscribe = onSnapshot(doc(db, 'events', eventId, 'registrations', auth.currentUser.uid), (snap) => {
+      const regUnsubscribe = onSnapshot(doc(db, 'events', eventId, 'registrations', auth.currentUser.uid), snap => {
         setIsRegisteredState(snap.exists());
       });
 
-      // Fetch participants
       const participantsQuery = query(collection(db, 'events', eventId, 'registrations'), limit(15));
-      const participantsUnsubscribe = onSnapshot(participantsQuery, async (snap) => {
+      const participantsUnsubscribe = onSnapshot(participantsQuery, async snap => {
         const participantData = await Promise.all(
-          snap.docs.map(async (d) => {
+          snap.docs.map(async d => {
             const userDoc = await getDoc(doc(db, 'users', d.id));
             return { id: userDoc.id, ...userDoc.data() };
-          })
+          }),
         );
-        setParticipants(participantData.filter(p => (p as any).profileImage));
+        setParticipants(participantData.filter((p: any) => p.username || p.profileImage));
       });
 
       return () => {
@@ -145,29 +163,40 @@ export default function EventDetails() {
     }
 
     return () => unsubscribe();
-  }, [eventId, auth.currentUser]);
+  }, [eventId]);
 
-  // Returning from Stripe: the server verifies the paid session and applies the boost.
-  const boostSession = searchParams.get('boost_session');
+  // Returning from checkout (tickets or boosts): the server fulfils the order, so wait for it.
+  const orderParam = searchParams.get('order');
   useEffect(() => {
-    if (!boostSession || !auth.currentUser) return;
-    (async () => {
+    if (!orderParam || !auth.currentUser) return;
+    let cancelled = false;
+    let attempts = 0;
+    const finish = () => setSearchParams({}, { replace: true });
+    const poll = async () => {
       try {
-        const res = await fetch('/api/boost-confirm', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await auth.currentUser!.getIdToken()}` },
-          body: JSON.stringify({ sessionId: boostSession }),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Could not confirm boost');
-        toast.success('Your event is boosted! 🚀');
-      } catch (e: any) {
-        toast.error(e.message);
-      } finally {
-        setSearchParams({}, { replace: true });
+        const status = await getOrderStatus(orderParam);
+        if (cancelled) return;
+        if (status.status === 'paid') {
+          toast.success(status.kind === 'event_boost' ? 'Your event is boosted! 🚀' : "You're registered! 🎟️");
+          return finish();
+        }
+        if (status.status === 'failed') {
+          toast.error("That payment didn't go through.");
+          return finish();
+        }
+      } catch {
+        // Transient error: keep polling until the limit.
       }
-    })();
-  }, [boostSession, auth.currentUser?.uid]);
+      attempts += 1;
+      if (cancelled) return;
+      if (attempts < 15) setTimeout(poll, 2000);
+      else finish();
+    };
+    poll();
+    return () => {
+      cancelled = true;
+    };
+  }, [orderParam, auth.currentUser?.uid]);
 
   const handleRegister = async () => {
     if (!auth.currentUser) {
@@ -175,10 +204,22 @@ export default function EventDetails() {
       return;
     }
     if (!eventId || !event) return;
-    
-    if (event.isPaid && !isRegisteredState) {
-      // In a real app, redirect to Stripe
-      toast.error("This is a paid event. Payment integration would go here.");
+
+    if (event.isPaid && isRegisteredState) {
+      toast.error("Paid tickets can't be cancelled here. Contact the host.");
+      return;
+    }
+
+    if (event.isPaid) {
+      setRegistering(true);
+      try {
+        const result = await startCheckout('event_ticket', eventId);
+        if (!result.authorizationUrl) throw new Error('Checkout could not start. Please try again.');
+        window.location.href = result.authorizationUrl;
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'Checkout failed');
+        setRegistering(false);
+      }
       return;
     }
 
@@ -195,8 +236,8 @@ export default function EventDetails() {
           userId: auth.currentUser.uid,
           eventId,
           registeredAt: new Date().toISOString(),
-          paid: event.isPaid ? true : false, // Mocking payment success
-          amount: event.price || 0
+          paid: false,
+          amount: 0,
         });
         await updateDoc(eventRef, { attendeeCount: increment(1) });
       }
@@ -209,21 +250,21 @@ export default function EventDetails() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="animate-pulse text-primary font-mono">LOADING_EVENT_DATA...</div>
+      <div className="flex h-full items-center justify-center bg-background">
+        <div className="h-9 w-9 animate-spin rounded-full border-2 border-primary border-t-transparent" />
       </div>
     );
   }
 
   if (!event) {
     return (
-      <div className="min-h-screen bg-background flex flex-col items-center justify-center p-6">
-        <AlertCircle size={48} className="text-red-400 mb-4" />
-        <h1 className="text-2xl font-bold mb-2 text-foreground">Event Not Found</h1>
-        <p className="text-foreground/40 mb-8 text-center max-w-md">
-          The event you're looking for doesn't exist or has been removed.
+      <div className="flex h-full flex-col items-center justify-center bg-background p-6 text-center">
+        <AlertCircle size={40} className="mb-4 text-destructive" />
+        <h1 className="font-serif text-3xl">This room has closed</h1>
+        <p className="mb-8 mt-2 max-w-md text-sm text-muted-foreground">
+          The event you’re looking for doesn’t exist or has been removed.
         </p>
-        <Link to="/events" className="bg-foreground text-background px-6 py-3 rounded-xl font-bold hover:scale-105 transition-all">
+        <Link to="/events" className="rounded-full bg-foreground px-6 py-3 text-sm font-bold text-background">
           Back to Events
         </Link>
       </div>
@@ -231,41 +272,42 @@ export default function EventDetails() {
   }
 
   const isAccessRestricted = event.visibility === 'community' && !isMember;
-  const isRegistered = isRegisteredState || (auth.currentUser?.uid === event.hostId); 
+  const isRegistered = isRegisteredState || auth.currentUser?.uid === event.hostId;
   const isHost = auth.currentUser?.uid === event.hostId;
   const isCoHost = event.coHostIds?.includes(auth.currentUser?.uid);
   const canManage = isHost || isCoHost;
   const canSeeDetails = !isAccessRestricted || isRegistered || canManage;
+  const live = isLive(event, now);
+  const ended = event.status === 'ended' || isEnded(event, now);
+  const promo = isPromoted(event, now);
 
-  const handleStartSession = async (allowEarly: boolean = true) => {
+  const startDate = new Date(event.startDate);
+  const fiveMinsBefore = new Date(startDate.getTime() - 5 * 60 * 1000);
+  const canJoinNow = live || now >= fiveMinsBefore;
+  const isInstantExpired = event.type === 'instant' && event.expiresAt && new Date(event.expiresAt).getTime() < now;
+
+  const handleStartSession = async (allowEarly = true) => {
     if (!canManage || !eventId) return;
-    
-    // Check if it's early (more than 5 mins before)
-    const now = new Date();
-    const startDate = new Date(event.startDate);
-    const fiveMinsBefore = new Date(startDate.getTime() - 5 * 60 * 1000);
-    
-    if (now < fiveMinsBefore && !showEarlyAccessConfirm && event.status !== 'live') {
+
+    if (now < fiveMinsBefore.getTime() && !showEarlyAccessConfirm && event.status !== 'live') {
       setShowEarlyAccessConfirm(true);
       return;
     }
 
     setStartingSession(true);
     try {
-      await updateDoc(doc(db, 'events', eventId), { 
+      await updateDoc(doc(db, 'events', eventId), {
         status: 'live',
         allowEarlyAccess: allowEarly,
-        lastStartedAt: new Date().toISOString()
+        lastStartedAt: new Date().toISOString(),
       });
-      
-      // Also ensure the session document is updated/created
-      const sessionRef = doc(db, 'eventSessions', eventId);
-      await setDoc(sessionRef, { 
+
+      await setDoc(doc(db, 'eventSessions', eventId), {
         status: 'live',
         restartedAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
+        updatedAt: new Date().toISOString(),
       }, { merge: true });
-      
+
       setShowEarlyAccessConfirm(false);
       navigate(`/events/${eventId}/live`);
     } catch (error) {
@@ -277,20 +319,27 @@ export default function EventDetails() {
   };
 
   const handleAddToCalendar = () => {
-    if (!event || !event.startDate) return;
-    
+    if (!event?.startDate) return;
     const title = encodeURIComponent(event.title);
     const description = encodeURIComponent(event.description || '');
-    const startDate = new Date(event.startDate).toISOString().replace(/-|:|\.\d+/g, '');
-    
-    // Use endDate if available, otherwise default to 1 hour
-    const endDateTime = event.endDate 
-      ? new Date(event.endDate).getTime() 
-      : new Date(event.startDate).getTime() + (60 * 60 * 1000);
-    const endDate = new Date(endDateTime).toISOString().replace(/-|:|\.\d+/g, '');
-    
-    const googleUrl = `https://www.google.com/calendar/render?action=TEMPLATE&text=${title}&details=${description}&dates=${startDate}/${endDate}`;
-    window.open(googleUrl, '_blank');
+    const start = new Date(event.startDate).toISOString().replace(/-|:|\.\d+/g, '');
+    const endMs = event.endDate ? new Date(event.endDate).getTime() : new Date(event.startDate).getTime() + 60 * 60 * 1000;
+    const end = new Date(endMs).toISOString().replace(/-|:|\.\d+/g, '');
+    window.open(`https://www.google.com/calendar/render?action=TEMPLATE&text=${title}&details=${description}&dates=${start}/${end}`, '_blank');
+  };
+
+  const handleShare = async () => {
+    const url = `${window.location.origin}/events/${eventId}`;
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: event.title, text: event.description || undefined, url });
+      } else {
+        await navigator.clipboard.writeText(url);
+        toast.success('Link copied');
+      }
+    } catch {
+      // Sharing was dismissed.
+    }
   };
 
   const handleDeleteEvent = async () => {
@@ -308,500 +357,526 @@ export default function EventDetails() {
     }
   };
 
+  const where = event.isOffline ? event.locationName || 'Location TBD' : event.onlineType === 'external' ? event.externalPlatform || 'Online' : 'Live on Kith';
+  const capacity = event.maxAttendees ? `${Math.max(0, event.maxAttendees - (event.attendeeCount || 0))} of ${event.maxAttendees} left` : 'Open capacity';
+
   return (
-    <div className="max-w-[1600px] mx-auto px-2 pb-4">
-      <div className="flex flex-col lg:flex-row gap-4">
-        {/* Main Content */}
-        <div className="flex-1 flex flex-col lg:flex-row gap-8">
-          {/* Left Content - Main Info */}
-          <div className="flex-1 flex flex-col">
-            <div className="max-w-4xl w-full mx-auto space-y-8">
-              <Link to="/events" className="inline-flex items-center gap-2 text-foreground/50 hover:text-foreground transition-colors group text-sm pt-4">
-                <ArrowLeft size={16} className="group-hover:-translate-x-1 transition-transform" /> Back to Events
-              </Link>
+    <div className="h-full w-full overflow-y-auto bg-background text-foreground">
+      <div className="mx-auto w-full max-w-[1180px] px-4 pb-28 pt-4 sm:px-8 sm:pt-6">
+        {/* Top chrome */}
+        <div className="mb-3 flex items-center justify-between">
+          <Link to="/events" className="group inline-flex items-center gap-2 text-[12px] font-semibold text-muted-foreground transition-colors hover:text-foreground">
+            <span className="grid h-9 w-9 place-items-center rounded-full border border-border transition-transform group-hover:-translate-x-0.5">
+              <ArrowLeft size={15} />
+            </span>
+            <span className="hidden sm:inline">All events</span>
+          </Link>
+          <button
+            onClick={handleShare}
+            aria-label="Share event"
+            className="grid h-9 w-9 place-items-center rounded-full border border-border text-muted-foreground transition-colors hover:border-foreground/20 hover:text-foreground"
+          >
+            <Share2 size={15} />
+          </button>
+        </div>
 
-              {/* Hero Section - More Compact */}
-              <div 
-                className="relative aspect-[21/7] rounded-[24px] overflow-hidden shadow-2xl border border-foreground/10 group cursor-pointer"
-                onClick={() => setPreviewImage((event.banner && event.banner.trim() !== '') ? event.banner : `https://picsum.photos/seed/${event.id}/1200/600`)}
-              >
-                <img 
-                  src={(event.banner && event.banner.trim() !== '') ? event.banner : `https://picsum.photos/seed/${event.id}/1200/600`} 
-                  alt={event.title}
-                  className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
-                  referrerPolicy="no-referrer"
-                />
-                <div className="absolute inset-0 bg-gradient-to-t from-background/90 via-background/20 to-transparent" />
-                
-                <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <div className="bg-background/40 backdrop-blur-md px-3 py-1.5 rounded-full border border-foreground/10 flex items-center gap-2 text-[10px] font-bold text-foreground">
-                    <MapIcon size={12} /> Click to Preview
-                  </div>
-                </div>
+        {/* Cinematic banner */}
+        <div className="relative overflow-hidden rounded-[26px] sm:rounded-[34px]">
+          <EventCover
+            event={event}
+            className="aspect-[4/3] w-full sm:aspect-[21/9]"
+            imgClassName="transition-transform duration-[1200ms] hover:scale-[1.03]"
+          />
+          <span className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(14,11,19,0.28)_0%,rgba(14,11,19,0.05)_35%,rgba(14,11,19,0.86)_100%)]" />
 
-                <div className="absolute bottom-4 left-6 right-6 md:bottom-6 md:left-8 md:right-8">
-                  <div className="flex flex-wrap items-center gap-2 mb-2">
-                    <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-widest ${
-                      event.eventType === 'community' ? 'bg-primary text-primary-foreground' : 'bg-blue-500 text-white'
-                    }`}>
-                      {event.eventType} Event
-                    </span>
-                    {event.isPaid && (
-                      <span className="px-2 py-0.5 bg-yellow-500 text-black text-[9px] font-bold rounded-full uppercase tracking-widest">
-                        Paid
-                      </span>
-                    )}
-                    <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-widest ${
-                      event.status === 'live' ? 'bg-red-500 text-white animate-pulse' : 
-                      event.status === 'ended' ? 'bg-zinc-500 text-white' : 'bg-foreground/10 text-foreground/80 backdrop-blur-md'
-                    }`}>
-                      {event.status === 'ended' ? 'Event Ended' : event.status}
-                    </span>
-                  </div>
-                  <h1 className="text-2xl md:text-3xl lg:text-4xl font-bold text-foreground tracking-tight leading-tight">
-                    {event.title}
-                  </h1>
-                </div>
-              </div>
-
-              {/* Content Grid - Compact & No Borders */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <section className="p-2 space-y-4">
-                  <h2 className="text-sm font-bold uppercase tracking-widest text-foreground/40 flex items-center gap-2">
-                    <Info size={14} className="text-primary" /> About Event
-                  </h2>
-                  <p className="text-foreground/70 leading-relaxed whitespace-pre-wrap text-sm">
-                    {event.description || "No description provided."}
-                  </p>
-                </section>
-
-                <div className="space-y-4">
-                  <section className="p-2">
-                    <h3 className="text-sm font-bold uppercase tracking-widest text-foreground/40 mb-4 flex items-center gap-2">
-                      <Calendar size={14} className="text-primary" /> Schedule
-                    </h3>
-                    <div className="grid grid-cols-1 gap-3">
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-lg bg-foreground/5 flex items-center justify-center text-primary shrink-0">
-                          <Calendar size={16} />
-                        </div>
-                        <div>
-                          <p className="text-[10px] font-bold text-foreground/20 uppercase tracking-widest">Date</p>
-                          <p className="text-xs font-bold text-foreground">
-                            {formatDate(event.startDate, 'MMM do, yyyy')}
-                            {event.endDate && formatDate(event.startDate, 'yyyyMMdd') !== formatDate(event.endDate, 'yyyyMMdd') && (
-                              <span className="text-foreground/40 ml-1"> - {formatDate(event.endDate, 'MMM do')}</span>
-                            )}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-lg bg-foreground/5 flex items-center justify-center text-primary shrink-0">
-                          <Clock size={16} />
-                        </div>
-                        <div>
-                          <p className="text-[10px] font-bold text-foreground/20 uppercase tracking-widest">Time ({event.timezone || 'UTC'})</p>
-                          <p className="text-xs font-bold text-foreground">
-                            {formatDate(event.startDate, 'h:mm a')}
-                            {event.endDate && (
-                              <span className="text-foreground/40 ml-1"> - {formatDate(event.endDate, 'h:mm a')}</span>
-                            )}
-                          </p>
-                        </div>
-                      </div>
-                      {event.isOffline && (
-                        <div className="space-y-4">
-                          <div className="flex items-center gap-3">
-                            <div className="w-8 h-8 rounded-lg bg-foreground/5 flex items-center justify-center text-primary shrink-0">
-                              <MapPin size={16} />
-                            </div>
-                            <div>
-                              <p className="text-[10px] font-bold text-foreground/20 uppercase tracking-widest">Location</p>
-                              <p className="text-xs font-bold text-foreground">{event.locationName || 'TBD'}</p>
-                              {event.locationAddress && <p className="text-[10px] text-foreground/40 line-clamp-1">{event.locationAddress}</p>}
-                            </div>
-                          </div>
-
-                          {isLoaded && event.locationCoords && (
-                            <div className="w-full h-48 rounded-2xl overflow-hidden border border-foreground/10 relative group shadow-2xl">
-                              <div 
-                                className="w-full h-full"
-                                ref={(el) => {
-                                  if (el && isLoaded && event.locationCoords) {
-                                    const map = new google.maps.Map(el, {
-                                      center: event.locationCoords,
-                                      zoom: 15,
-                                      disableDefaultUI: true,
-                                      styles: [
-                                        { elementType: 'geometry', stylers: [{ color: '#242f3e' }] },
-                                        { elementType: 'labels.text.stroke', stylers: [{ color: '#242f3e' }] },
-                                        { elementType: 'labels.text.fill', stylers: [{ color: '#746855' }] },
-                                        { featureType: 'administrative.locality', elementType: 'labels.text.fill', stylers: [{ color: '#d59563' }] },
-                                        { featureType: 'poi', elementType: 'labels.text.fill', stylers: [{ color: '#d59563' }] },
-                                        { featureType: 'poi.park', elementType: 'geometry', stylers: [{ color: '#263c3f' }] },
-                                        { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#38414e' }] },
-                                        { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#17263c' }] },
-                                      ]
-                                    });
-                                    new google.maps.Marker({
-                                      position: event.locationCoords,
-                                      map
-                                    });
-                                  }
-                                }}
-                              />
-                              <div className="absolute top-4 right-4">
-                                <a 
-                                  href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(event.locationAddress || event.locationName)}`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="flex items-center gap-2 px-3 py-2 bg-background/60 backdrop-blur-md rounded-lg border border-foreground/10 text-[10px] font-bold text-foreground hover:bg-background/80 transition-all"
-                                >
-                                  <ExternalLink size={12} /> Open in Maps
-                                </a>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  </section>
-                </div>
-              </div>
-            </div>
+          <div className="absolute left-4 top-4 flex flex-wrap items-center gap-2 sm:left-6 sm:top-6">
+            {live && (
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-red-500 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.16em] text-white shadow-lg">
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white" /> Live now
+              </span>
+            )}
+            {!live && ended && (
+              <span className="rounded-full bg-white/15 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.16em] text-white backdrop-blur-md">Ended</span>
+            )}
+            <span className="rounded-full bg-white/15 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.16em] text-white backdrop-blur-md">
+              {event.eventType === 'community' ? 'Community event' : 'Event'}
+            </span>
+            {event.isPaid && (
+              <span className="rounded-full bg-amber-300 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.16em] text-[#1a1210]">Paid</span>
+            )}
+            {promo && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-white/15 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.16em] text-white backdrop-blur-md">
+                <Sparkles size={10} /> Promoted
+              </span>
+            )}
           </div>
 
-          {/* Right Sidebar - Sticky on Desktop */}
-            <div className="w-full lg:w-[340px] lg:sticky lg:top-4 lg:h-fit pt-4">
-            <div className="bg-background rounded-[32px] border border-foreground/10 shadow-2xl overflow-hidden">
-              {/* Action Section */}
-              <div className="p-6 space-y-6 relative">
-                <div className="absolute inset-0 bg-gradient-to-br from-primary/5 via-transparent to-transparent opacity-50" />
-                
-                {isRegistered && !event.isOffline && (
-                  <div className="relative space-y-3">
-                    <p className="text-[10px] font-bold text-foreground/30 uppercase tracking-widest px-1">Access Link</p>
-                    {event.onlineType === 'external' ? (
-                      <a 
-                        href={event.externalUrl} 
-                        target="_blank" 
-                        rel="noopener noreferrer"
-                        className="flex items-center justify-between p-4 bg-primary/10 rounded-2xl border border-primary/20 hover:bg-primary/20 transition-all group/link"
-                      >
-                        <div className="flex flex-col">
-                          <span className="text-[11px] font-bold text-primary uppercase tracking-widest">{event.externalPlatform || 'External'}</span>
-                          <span className="text-[10px] text-foreground/50 truncate max-w-[180px]">{event.externalUrl}</span>
-                        </div>
-                        <ExternalLink size={16} className="text-primary group-hover/link:scale-110 transition-transform" />
-                      </a>
-                    ) : (
-                      <div className="p-4 bg-foreground/5 rounded-2xl border border-foreground/10">
-                        <p className="text-[11px] font-bold text-primary">Internal Session</p>
-                        <p className="text-[10px] text-foreground/40 leading-relaxed">This session will be hosted directly on our platform.</p>
-                      </div>
-                    )}
-                  </div>
-                )}
+          <button
+            onClick={() => setPreviewImage(event.banner || null)}
+            className="absolute bottom-4 right-4 hidden items-center gap-1.5 rounded-full bg-white/15 px-3 py-1.5 text-[10px] font-semibold text-white backdrop-blur-md transition-colors hover:bg-white/25 sm:inline-flex"
+          >
+            <MapIcon size={12} /> View cover
+          </button>
 
-                <div className="relative flex items-center justify-between px-1">
-                  <div className="space-y-1">
-                    <p className="text-[10px] font-bold text-foreground/30 uppercase tracking-widest">Registration</p>
-                    <p className="text-2xl font-bold text-foreground">
-                      {event.isPaid ? `$${event.price}` : 'Free'}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="relative space-y-3">
-                  {/* Host Start/Manage Session Button */}
-                  {canManage && !event.isOffline && (() => {
-                    const isExpired = event.type === 'instant' && event.expiresAt && new Date() > new Date(event.expiresAt);
-                    
-                    if (isExpired && event.status !== 'live') {
-                      return (
-                        <div className="w-full py-4 rounded-2xl font-bold bg-neutral-800 text-neutral-500 border border-neutral-700 flex items-center justify-center gap-2 text-sm cursor-not-allowed">
-                          <X size={18} /> Session Expired
-                        </div>
-                      );
-                    }
-
-                    return (
-                      <button 
-                        onClick={() => handleStartSession(true)}
-                        className="w-full py-4 rounded-2xl font-bold bg-primary text-primary-foreground shadow-[0_0_20px_rgba(0,242,255,0.2)] hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2 text-sm"
-                      >
-                        <Globe size={18} /> {event.status === 'live' ? 'Enter Session' : event.status === 'ended' ? 'Restart Session' : 'Start Session'}
-                      </button>
-                    );
-                  })()}
-
-                  {/* Participant Join Session Button */}
-                  {!canManage && isRegistered && event.status !== 'ended' && !event.isOffline && (() => {
-                    const now = new Date();
-                    const startDate = new Date(event.startDate);
-                    const fiveMinsBefore = new Date(startDate.getTime() - 5 * 60 * 1000);
-                    const isTimeAccessible = now >= fiveMinsBefore;
-                    const canJoinEarly = event.status === 'live' && event.allowEarlyAccess;
-                    return isTimeAccessible || canJoinEarly;
-                  })() && (
-                    <button 
-                      onClick={() => navigate(`/events/${eventId}/live`)}
-                      className="w-full py-4 rounded-2xl font-bold bg-primary text-primary-foreground shadow-[0_0_20px_rgba(0,242,255,0.2)] hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2 text-sm"
-                    >
-                      <Globe size={18} /> Join Session
-                    </button>
-                  )}
-
-                  {isHost && (
-                    <div className="grid grid-cols-1 gap-2">
-                      <button 
-                        onClick={() => setIsEditModalOpen(true)}
-                        className="w-full py-4 rounded-2xl font-bold bg-foreground/5 border border-foreground/10 text-foreground hover:bg-foreground/10 active:scale-[0.98] transition-all flex items-center justify-center gap-2 text-sm"
-                      >
-                        <Info size={18} /> Edit Event
-                      </button>
-                      {event.visibility === 'public' && event.status !== 'ended' && (
-                        <button
-                          onClick={() => setIsBoostOpen(true)}
-                          className="w-full py-4 rounded-2xl font-bold bg-amber-400 text-black hover:bg-amber-300 active:scale-[0.98] transition-all flex items-center justify-center gap-2 text-sm"
-                        >
-                          <Rocket size={18} /> {isPromoted(event) ? 'Extend boost' : 'Boost Event'}
-                        </button>
-                      )}
-                      <button 
-                        onClick={() => setIsCoHostModalOpen(true)}
-                        className="w-full py-4 rounded-2xl font-bold bg-foreground/5 border border-foreground/10 text-foreground hover:bg-foreground/10 active:scale-[0.98] transition-all flex items-center justify-center gap-2 text-sm"
-                      >
-                        <ShieldCheck size={18} /> Manage Co-hosts
-                      </button>
-                      <button 
-                        onClick={() => setShowDeleteConfirm(true)}
-                        className="w-full py-4 rounded-2xl font-bold bg-red-500/5 border border-red-500/10 text-red-500 hover:bg-red-500/10 active:scale-[0.98] transition-all flex items-center justify-center gap-2 text-sm"
-                      >
-                        <Trash2 size={18} /> Delete Event
-                      </button>
-                    </div>
-                  )}
-
-                  {!canManage && (
-                    <button 
-                      onClick={handleRegister}
-                      disabled={registering || event.status === 'ended'}
-                      className={`w-full py-4 rounded-2xl font-bold transition-all flex items-center justify-center gap-2 text-sm active:scale-[0.98] ${
-                        isRegistered 
-                          ? 'bg-foreground/5 text-foreground/50 hover:bg-foreground/10' 
-                          : event.status === 'ended'
-                          ? 'bg-foreground/5 text-foreground/20 cursor-not-allowed'
-                          : 'bg-foreground text-background hover:scale-[1.02] shadow-lg shadow-foreground/5'
-                      }`}
-                    >
-                      {registering ? (
-                        <div className="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin" />
-                      ) : isRegistered ? (
-                        <><Check size={18} /> Registered</>
-                      ) : event.status === 'ended' ? (
-                        'Registration Closed'
-                      ) : (
-                        <>{event.isPaid ? 'Pay & Register' : 'Register for Free'}</>
-                      )}
-                    </button>
-                  )}
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <button 
-                      onClick={handleAddToCalendar}
-                      className="py-3 rounded-xl font-bold bg-foreground/5 text-foreground/60 hover:bg-foreground/10 transition-all flex items-center justify-center gap-2 text-xs border border-foreground/5"
-                    >
-                      <CalendarPlus size={16} /> Calendar
-                    </button>
-                    <button className="py-3 rounded-xl font-bold bg-foreground/5 text-foreground/60 hover:bg-foreground/10 transition-all flex items-center justify-center gap-2 text-xs border border-foreground/5">
-                      <Share2 size={16} /> Share
-                    </button>
-                  </div>
-                </div>
-
-                <div className="relative pt-4 border-t border-foreground/5 flex items-center justify-between text-[11px]">
-                  <span className="text-foreground/30 font-medium">Capacity</span>
-                  <span className="font-bold text-foreground/70 bg-foreground/5 px-2 py-0.5 rounded-md">
-                    {event.maxAttendees ? `${event.maxAttendees} max` : 'Unlimited'}
-                  </span>
-                </div>
-              </div>
-
-              {/* Divider */}
-              <div className="h-px bg-foreground/5 w-full" />
-
-              {/* Host Section */}
-              <div className="p-6 space-y-4">
-                <h3 className="text-[10px] font-bold text-foreground/30 uppercase tracking-widest">Event Host</h3>
-                {event.eventType === 'community' && community ? (
-                  <Link to={`/feed?community=${community.id}`} className="flex items-center gap-3 p-2 rounded-2xl bg-foreground/5 border border-foreground/5 hover:bg-foreground/10 transition-all group">
-                    {(community.image && community.image.trim() !== '') ? (
-                      <img src={community.image} className="w-10 h-10 rounded-xl object-cover border border-foreground/10" referrerPolicy="no-referrer" />
-                    ) : (
-                      <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center text-primary border border-foreground/10">
-                        <Users size={20} />
-                      </div>
-                    )}
-                    <div>
-                      <p className="text-sm font-bold group-hover:text-primary transition-colors text-foreground">{community.name}</p>
-                      <p className="text-[10px] text-foreground/40">Community Host</p>
-                    </div>
-                  </Link>
-                ) : host ? (
-                  <div className="flex items-center gap-3 p-2 rounded-2xl bg-foreground/5 border border-foreground/5">
-                    <UserHoverCard userId={host.id}>
-                      {(host.profileImage && host.profileImage.trim() !== '') ? (
-                        <img src={host.profileImage} className="w-10 h-10 rounded-xl object-cover border border-foreground/10" referrerPolicy="no-referrer" />
-                      ) : (
-                        <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center text-primary border border-foreground/10">
-                          <Users size={20} />
-                        </div>
-                      )}
-                    </UserHoverCard>
-                    <div>
-                      <p className="text-sm font-bold text-foreground">{host.username}</p>
-                      <p className="text-[10px] text-foreground/40">Creator Host</p>
-                    </div>
-                  </div>
-                ) : null}
-
-                {/* Co-hosts Section */}
-                {coHosts.length > 0 && (
-                  <div className="space-y-3 pt-2">
-                    <h4 className="text-[9px] font-bold text-foreground/20 uppercase tracking-[0.2em] px-1">Co-hosts</h4>
-                    <div className="space-y-2">
-                      {coHosts.map(ch => (
-                        <div key={ch.id} className="flex items-center gap-3 p-2 rounded-2xl bg-foreground/5 border border-foreground/5">
-                          <UserHoverCard userId={ch.id}>
-                            {(ch.profileImage && ch.profileImage.trim() !== '') ? (
-                              <img src={ch.profileImage} className="w-8 h-8 rounded-lg object-cover border border-foreground/10" referrerPolicy="no-referrer" />
-                            ) : (
-                              <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center text-primary border border-foreground/10">
-                                <Users size={14} />
-                              </div>
-                            )}
-                          </UserHoverCard>
-                          <div>
-                            <p className="text-xs font-bold text-foreground">{ch.username}</p>
-                            <p className="text-[9px] text-foreground/40">Co-host</p>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Divider */}
-              {participants.length > 0 && <div className="h-px bg-foreground/5 w-full" />}
-
-              {/* Participants Section */}
-              {participants.length > 0 && (
-                <div className="p-6 space-y-4">
-                  <h3 className="text-[10px] font-bold text-foreground/30 uppercase tracking-widest flex items-center justify-between">
-                    Participants
-                    <span className="text-primary font-mono">{event.attendeeCount || 0}</span>
-                  </h3>
-                  <div className="flex flex-wrap items-center -space-x-3">
-                    {participants.map((p, i) => (
-                      <UserHoverCard key={p.id} userId={p.id}>
-                        {(p.profileImage && p.profileImage.trim() !== '') ? (
-                        <img 
-                          src={p.profileImage} 
-                          className="w-10 h-10 rounded-full border-2 border-background object-cover hover:translate-y-[-4px] transition-all cursor-pointer shadow-xl" 
-                          title={p.username}
-                          referrerPolicy="no-referrer"
-                        />
-                      ) : (
-                        <div className="w-10 h-10 rounded-full border-2 border-background bg-primary/10 flex items-center justify-center text-primary hover:translate-y-[-4px] transition-all cursor-pointer shadow-xl font-bold text-xs">
-                          {p.username?.charAt(0).toUpperCase()}
-                        </div>
-                      )}
-                      </UserHoverCard>
-                    ))}
-                    {event.attendeeCount > participants.length && (
-                      <div className="w-10 h-10 rounded-full border-2 border-background bg-foreground/5 flex items-center justify-center text-[11px] font-bold text-foreground/40 backdrop-blur-md">
-                        +{event.attendeeCount - participants.length}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
+          <div className="absolute inset-x-0 bottom-0 p-5 sm:p-8">
+            <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-white/60">
+              {event.category || 'Gathering'}
+            </p>
+            <h1 className="mt-2 max-w-3xl font-serif text-[34px] leading-[0.98] tracking-[-0.02em] text-white sm:text-[58px]">
+              {event.title}
+            </h1>
+            <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-[11px] font-medium text-white/75 sm:text-[12px]">
+              <span className="inline-flex items-center gap-1.5">
+                <Calendar size={13} /> {formatDate(event.startDate, 'EEE, MMM d')}
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <Clock size={13} /> {formatDate(event.startDate, 'h:mm a')}
+                {event.endDate ? ` – ${formatDate(event.endDate, 'h:mm a')}` : ''}
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                {event.isOffline ? <MapPin size={13} /> : <Video size={13} />} {where}
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <Users size={13} /> {event.attendeeCount || 0} going
+              </span>
             </div>
           </div>
         </div>
-        <BoostEventModal event={{ ...event, id: eventId }} isOpen={isBoostOpen} onClose={() => setIsBoostOpen(false)} />
-        <CreateEventModal 
-          isOpen={isEditModalOpen}
-          onClose={() => setIsEditModalOpen(false)}
-          eventId={eventId}
-        />
-        
-        <ConfirmModal 
-          isOpen={showEarlyAccessConfirm}
-          onClose={() => setShowEarlyAccessConfirm(false)}
-          onConfirm={() => handleStartSession(true)}
-          onCancel={() => handleStartSession(false)}
-          title="Early Session Access"
-          message="You are starting the session more than 5 minutes before the scheduled time. Should registered participants be allowed to join immediately?"
-          confirmText="Yes, Allow All"
-          cancelText="No, Host Only"
-          loading={startingSession}
-        />
-        <CoHostManagementModal 
-          isOpen={isCoHostModalOpen}
-          onClose={() => setIsCoHostModalOpen(false)}
-          eventId={eventId!}
-          hostId={event.hostId}
-        />
 
-        <ConfirmModal 
-          isOpen={showDeleteConfirm}
-          onClose={() => setShowDeleteConfirm(false)}
-          onConfirm={handleDeleteEvent}
-          title="Delete Event"
-          message="Are you sure you want to delete this event? This action cannot be undone and all registrations will be lost."
-          confirmText="Delete Event"
-          cancelText="Cancel"
-          loading={deleting}
-          variant="danger"
-        />
-
-        {/* Image Preview Modal */}
-        <AnimatePresence>
-          {previewImage && (
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 z-[200] flex items-center justify-center bg-black/95 p-4 md:p-8"
-              onClick={() => setPreviewImage(null)}
-            >
-              <motion.div 
-                initial={{ scale: 0.9, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                exit={{ scale: 0.9, opacity: 0 }}
-                className="relative max-w-7xl max-h-full w-full h-full flex items-center justify-center px-4"
-                onClick={e => e.stopPropagation()}
-              >
-                <img 
-                  src={(previewImage && previewImage.trim() !== '') ? previewImage : `https://picsum.photos/seed/fallback/1200/800`} 
-                  className="w-full h-full object-contain rounded-2xl shadow-2xl" 
-                  alt="Preview"
-                  referrerPolicy="no-referrer"
-                />
-                <button 
-                  onClick={() => setPreviewImage(null)}
-                  className="absolute top-4 right-4 md:top-8 md:right-8 w-12 h-12 rounded-full bg-white/10 hover:bg-white/20 backdrop-blur-md flex items-center justify-center text-white transition-all border border-white/10"
-                >
-                  <X size={24} />
-                </button>
-              </motion.div>
-            </motion.div>
+        {/* Host line */}
+        <div className="mt-5 flex flex-wrap items-center justify-between gap-4 border-b border-border pb-5">
+          <div className="flex items-center gap-3">
+            {community ? (
+              <Link to={`/feed?community=${community.id}`} className="group flex items-center gap-3">
+                <Avatar src={community.image} seed={community.id} size={40} square />
+                <span>
+                  <span className="block text-[13px] font-semibold transition-colors group-hover:text-primary">{community.name}</span>
+                  <span className="block text-[11px] text-faint">Community host</span>
+                </span>
+              </Link>
+            ) : host ? (
+              <UserHoverCard userId={host.id}>
+                <span className="flex items-center gap-3">
+                  <Avatar src={host.profileImage} seed={host.id} size={40} />
+                  <span>
+                    <span className="block text-[13px] font-semibold">{host.displayName || host.username || 'Host'}</span>
+                    <span className="block text-[11px] text-faint">Hosted by {host.username ? `@${host.username}` : 'the creator'}</span>
+                  </span>
+                </span>
+              </UserHoverCard>
+            ) : (
+              <span className="flex items-center gap-3">
+                <Avatar seed={event.hostId || event.id} size={40} />
+                <span>
+                  <span className="block text-[13px] font-semibold">{event.hostName || 'Your host'}</span>
+                  <span className="block text-[11px] text-faint">Host</span>
+                </span>
+              </span>
+            )}
+            {canManage && (
+              <span className="ml-1 inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-1 text-[9px] font-bold uppercase tracking-[0.12em] text-primary">
+                <ShieldCheck size={10} /> {isHost ? 'Host' : 'Co-host'}
+              </span>
+            )}
+          </div>
+          {coHosts.length > 0 && (
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-faint">With</span>
+              <div className="flex -space-x-2">
+                {coHosts.slice(0, 5).map(ch => (
+                  <UserHoverCard key={ch.id} userId={ch.id}>
+                    <Avatar src={ch.profileImage} seed={ch.id} size={28} className="ring-2 ring-background" />
+                  </UserHoverCard>
+                ))}
+              </div>
+            </div>
           )}
-        </AnimatePresence>
+        </div>
+
+        <div className="mt-8 grid gap-10 lg:grid-cols-[minmax(0,1fr)_336px]">
+          {/* Main editorial column */}
+          <main className="min-w-0 space-y-10">
+            <section>
+              <h2 className="font-serif text-[26px] leading-none tracking-[-0.01em] sm:text-[30px]">The idea</h2>
+              <p className="mt-4 max-w-[68ch] whitespace-pre-wrap text-[15px] leading-7 text-muted-foreground">
+                {event.description || 'The host hasn’t written the details yet — but the door is open.'}
+              </p>
+              {isAccessRestricted && !canSeeDetails && (
+                <p className="mt-5 inline-flex items-center gap-2 rounded-full bg-warning/10 px-3 py-1.5 text-[11px] font-medium text-warning">
+                  <Lock size={12} /> Community members only — join the community to unlock the room.
+                </p>
+              )}
+            </section>
+
+            {/* Schedule / place / capacity */}
+            <section className="grid gap-6 border-t border-border pt-7 sm:grid-cols-3">
+              <Detail icon={<Calendar size={15} />} label="When">
+                <span className="block text-[14px] font-semibold">{formatDate(event.startDate, 'EEEE, MMMM d')}</span>
+                <span className="mt-0.5 block text-[12px] text-muted-foreground">
+                  {formatDate(event.startDate, 'h:mm a')}
+                  {event.endDate && ` – ${formatDate(event.endDate, 'h:mm a')}`}
+                  {event.timezone ? ` · ${event.timezone}` : ''}
+                </span>
+              </Detail>
+              <Detail icon={event.isOffline ? <MapPin size={15} /> : <Globe size={15} />} label="Where">
+                <span className="block text-[14px] font-semibold">{where}</span>
+                {event.isOffline && event.locationAddress && event.locationAddress !== event.locationName && (
+                  <span className="mt-0.5 block text-[12px] text-muted-foreground">{event.locationAddress}</span>
+                )}
+                {!event.isOffline && (
+                  <span className="mt-0.5 block text-[12px] text-muted-foreground">
+                    {event.onlineType === 'external' ? 'Hosted on an external platform' : 'Hosted inside a Kith live room'}
+                  </span>
+                )}
+              </Detail>
+              <Detail icon={<Users size={15} />} label="Room">
+                <span className="block text-[14px] font-semibold">{capacity}</span>
+                <span className="mt-0.5 block text-[12px] text-muted-foreground">{event.attendeeCount || 0} people going</span>
+              </Detail>
+            </section>
+
+            {/* Map */}
+            {event.isOffline && isLoaded && event.locationCoords && (
+              <section className="overflow-hidden rounded-[26px] border border-border">
+                <div className="relative h-64">
+                  <div
+                    className="h-full w-full"
+                    ref={el => {
+                      if (el && isLoaded && event.locationCoords) {
+                        const map = new google.maps.Map(el, {
+                          center: event.locationCoords,
+                          zoom: 15,
+                          disableDefaultUI: true,
+                          styles: [
+                            { elementType: 'geometry', stylers: [{ color: '#242f3e' }] },
+                            { elementType: 'labels.text.stroke', stylers: [{ color: '#242f3e' }] },
+                            { elementType: 'labels.text.fill', stylers: [{ color: '#746855' }] },
+                            { featureType: 'administrative.locality', elementType: 'labels.text.fill', stylers: [{ color: '#d59563' }] },
+                            { featureType: 'poi', elementType: 'labels.text.fill', stylers: [{ color: '#d59563' }] },
+                            { featureType: 'poi.park', elementType: 'geometry', stylers: [{ color: '#263c3f' }] },
+                            { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#38414e' }] },
+                            { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#17263c' }] },
+                          ],
+                        });
+                        new google.maps.Marker({ position: event.locationCoords, map });
+                      }
+                    }}
+                  />
+                  <a
+                    href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(event.locationAddress || event.locationName || '')}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="absolute right-4 top-4 inline-flex items-center gap-1.5 rounded-full bg-background/70 px-3 py-1.5 text-[10px] font-bold text-foreground backdrop-blur-md transition-colors hover:bg-background/90"
+                  >
+                    <ExternalLink size={12} /> Open in Maps
+                  </a>
+                </div>
+              </section>
+            )}
+
+            {/* Co-hosts */}
+            {coHosts.length > 0 && (
+              <section className="border-t border-border pt-7">
+                <h2 className="text-[10px] font-bold uppercase tracking-[0.2em] text-faint">Co-hosting</h2>
+                <div className="mt-4 flex flex-wrap gap-x-6 gap-y-4">
+                  {coHosts.map(ch => (
+                    <UserHoverCard key={ch.id} userId={ch.id}>
+                      <span className="flex items-center gap-2.5">
+                        <Avatar src={ch.profileImage} seed={ch.id} size={34} />
+                        <span>
+                          <span className="block text-[12px] font-semibold">{ch.displayName || ch.username}</span>
+                          <span className="block text-[10px] text-faint">@{ch.username}</span>
+                        </span>
+                      </span>
+                    </UserHoverCard>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {/* Participants */}
+            {participants.length > 0 && (
+              <section className="border-t border-border pt-7">
+                <div className="flex items-end justify-between">
+                  <h2 className="text-[10px] font-bold uppercase tracking-[0.2em] text-faint">In the room</h2>
+                  <span className="text-[11px] font-medium text-muted-foreground">{event.attendeeCount || participants.length} going</span>
+                </div>
+                <div className="mt-4 flex flex-wrap items-center gap-x-1 gap-y-3">
+                  {participants.map(p => (
+                    <UserHoverCard key={p.id} userId={p.id}>
+                      <span title={p.username || p.displayName}>
+                        <Avatar src={p.profileImage} seed={p.id} size={36} className="ring-2 ring-background transition-transform hover:-translate-y-0.5" />
+                      </span>
+                    </UserHoverCard>
+                  ))}
+                  {(event.attendeeCount || 0) > participants.length && (
+                    <span className="ml-2 grid h-9 w-9 place-items-center rounded-full border border-border text-[10px] font-bold text-muted-foreground">
+                      +{(event.attendeeCount || 0) - participants.length}
+                    </span>
+                  )}
+                </div>
+              </section>
+            )}
+          </main>
+
+          {/* Sticky action rail */}
+          <aside className="self-start lg:sticky lg:top-6">
+            <div className="rounded-[28px] border border-border bg-surface/60 p-5 sm:p-6">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-faint">
+                    {canManage ? 'You’re hosting' : isRegistered ? 'You’re in' : 'Reserve a seat'}
+                  </p>
+                  <p className="mt-1 font-serif text-[38px] leading-none tracking-[-0.02em]">{formatEventPrice(event)}</p>
+                </div>
+                {live && (
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-red-500/10 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.14em] text-red-500">
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-500" /> Live
+                  </span>
+                )}
+              </div>
+              <p className="mt-1.5 text-[11px] text-muted-foreground">
+                {event.isPaid ? 'Secure checkout · instant confirmation' : 'Free registration · cancel anytime'}
+              </p>
+
+              {/* Primary action */}
+              <div className="mt-5 space-y-2.5">
+                {canManage && !event.isOffline && (
+                  isInstantExpired && !live ? (
+                    <div className="flex w-full items-center justify-center gap-2 rounded-full border border-border py-3.5 text-[13px] font-bold text-faint">
+                      <X size={16} /> Session expired
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => handleStartSession(true)}
+                      className="group flex w-full items-center justify-center gap-2 rounded-full bg-primary py-3.5 text-[13px] font-bold text-primary-foreground shadow-glow-primary transition-all hover:brightness-105 active:scale-[0.99]"
+                    >
+                      <Radio size={16} />
+                      {live ? 'Enter your live room' : ended ? 'Restart the room' : 'Start the room'}
+                      <ArrowUpRight size={14} className="transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
+                    </button>
+                  )
+                )}
+
+                {!canManage && isRegistered && !event.isOffline && canJoinNow && !ended && (
+                  <button
+                    onClick={() => navigate(`/events/${eventId}/live`)}
+                    className="group flex w-full items-center justify-center gap-2 rounded-full bg-primary py-3.5 text-[13px] font-bold text-primary-foreground shadow-glow-primary transition-all hover:brightness-105 active:scale-[0.99]"
+                  >
+                    <Radio size={16} /> Join the live room
+                    <ArrowUpRight size={14} className="transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
+                  </button>
+                )}
+
+                {!canManage && (
+                  <button
+                    onClick={handleRegister}
+                    disabled={registering || ended}
+                    className={`flex w-full items-center justify-center gap-2 rounded-full py-3.5 text-[13px] font-bold transition-all active:scale-[0.99] ${
+                      isRegistered
+                        ? 'border border-border bg-transparent text-muted-foreground hover:bg-foreground/5'
+                        : ended
+                          ? 'cursor-not-allowed bg-foreground/5 text-faint'
+                          : 'bg-foreground text-background hover:opacity-90'
+                    }`}
+                  >
+                    {registering ? (
+                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                    ) : isRegistered ? (
+                      <><Check size={16} /> Registered</>
+                    ) : ended ? (
+                      'Registration closed'
+                    ) : event.isPaid ? (
+                      <>Pay & register <ArrowUpRight size={14} /></>
+                    ) : (
+                      <>Register free <ArrowUpRight size={14} /></>
+                    )}
+                  </button>
+                )}
+
+                {isRegistered && !event.isOffline && !canJoinNow && !ended && (
+                  <p className="rounded-2xl bg-foreground/[0.03] px-4 py-3 text-center text-[11px] leading-relaxed text-muted-foreground">
+                    The room opens 5 minutes before start. We’ll keep your spot.
+                  </p>
+                )}
+              </div>
+
+              {/* Access link / online details */}
+              {isRegistered && !event.isOffline && (
+                <div className="mt-4 border-t border-border pt-4">
+                  {event.onlineType === 'external' ? (
+                    <a
+                      href={event.externalUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center justify-between gap-3 rounded-2xl bg-foreground/[0.035] px-4 py-3 transition-colors hover:bg-foreground/[0.06]"
+                    >
+                      <span className="min-w-0">
+                        <span className="block text-[10px] font-bold uppercase tracking-[0.14em] text-primary">{event.externalPlatform || 'External link'}</span>
+                        <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">{event.externalUrl}</span>
+                      </span>
+                      <ExternalLink size={15} className="shrink-0 text-primary" />
+                    </a>
+                  ) : (
+                    <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                      <Video size={13} className="text-primary" /> This room is hosted on Kith.
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Secondary actions */}
+              <div className="mt-5 flex items-center gap-2 border-t border-border pt-4">
+                <button
+                  onClick={handleAddToCalendar}
+                  className="flex flex-1 items-center justify-center gap-1.5 rounded-full border border-border py-2.5 text-[11px] font-semibold text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
+                >
+                  <CalendarPlus size={14} /> Calendar
+                </button>
+                <button
+                  onClick={handleShare}
+                  className="flex flex-1 items-center justify-center gap-1.5 rounded-full border border-border py-2.5 text-[11px] font-semibold text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
+                >
+                  <Copy size={14} /> Share
+                </button>
+              </div>
+            </div>
+
+            {/* Host tools */}
+            {isHost && (
+              <div className="mt-3 rounded-[24px] border border-border bg-surface/40 p-2">
+                <button
+                  onClick={() => setShowHostTools(v => !v)}
+                  aria-expanded={showHostTools}
+                  className="flex w-full items-center justify-between gap-2 rounded-[18px] px-3 py-2.5 text-[12px] font-semibold transition-colors hover:bg-foreground/5"
+                >
+                  <span className="flex items-center gap-2"><Settings2 size={14} className="text-muted-foreground" /> Host tools</span>
+                  <ChevronDown size={14} className={`text-faint transition-transform ${showHostTools ? 'rotate-180' : ''}`} />
+                </button>
+                <AnimatePresence initial={false}>
+                  {showHostTools && (
+                    <motion.div
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: 'auto', opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      className="overflow-hidden"
+                    >
+                      <div className="space-y-0.5 px-1 pb-1 pt-1">
+                        <HostAction icon={<Info size={14} />} onClick={() => { setShowHostTools(false); setIsEditModalOpen(true); }}>
+                          Edit event details
+                        </HostAction>
+                        {event.visibility === 'public' && event.status !== 'ended' && (
+                          <HostAction icon={<Rocket size={14} className="text-amber-500" />} onClick={() => { setShowHostTools(false); setIsBoostOpen(true); }}>
+                            {promo ? 'Extend the boost' : 'Boost this event'}
+                          </HostAction>
+                        )}
+                        <HostAction icon={<ShieldCheck size={14} />} onClick={() => { setShowHostTools(false); setIsCoHostModalOpen(true); }}>
+                          Manage co-hosts
+                        </HostAction>
+                        <HostAction icon={<Trash2 size={14} />} onClick={() => { setShowHostTools(false); setShowDeleteConfirm(true); }} danger>
+                          Delete event
+                        </HostAction>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            )}
+
+            <p className="mt-4 flex items-center justify-center gap-1.5 px-2 text-center text-[10px] leading-relaxed text-faint">
+              <ShieldCheck size={11} /> Your spot is saved to your account.
+            </p>
+          </aside>
+        </div>
       </div>
+
+      <BoostEventModal event={{ ...event, id: eventId }} isOpen={isBoostOpen} onClose={() => setIsBoostOpen(false)} />
+      <CreateEventModal isOpen={isEditModalOpen} onClose={() => setIsEditModalOpen(false)} eventId={eventId} />
+
+      <ConfirmModal
+        isOpen={showEarlyAccessConfirm}
+        onClose={() => setShowEarlyAccessConfirm(false)}
+        onConfirm={() => handleStartSession(true)}
+        onCancel={() => handleStartSession(false)}
+        title="Early session access"
+        message="You’re starting the room more than 5 minutes before the scheduled time. Should registered participants be allowed to join immediately?"
+        confirmText="Yes, allow all"
+        cancelText="No, host only"
+        loading={startingSession}
+      />
+      <CoHostManagementModal
+        isOpen={isCoHostModalOpen}
+        onClose={() => setIsCoHostModalOpen(false)}
+        eventId={eventId!}
+        hostId={event.hostId}
+      />
+
+      <ConfirmModal
+        isOpen={showDeleteConfirm}
+        onClose={() => setShowDeleteConfirm(false)}
+        onConfirm={handleDeleteEvent}
+        title="Delete event"
+        message="Are you sure you want to delete this event? This action cannot be undone and all registrations will be lost."
+        confirmText="Delete event"
+        cancelText="Cancel"
+        loading={deleting}
+        variant="danger"
+      />
+
+      <AnimatePresence>
+        {previewImage && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[200] flex items-center justify-center bg-black/95 p-4 md:p-8"
+            onClick={() => setPreviewImage(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.92, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.92, opacity: 0 }}
+              className="relative flex h-full w-full max-w-7xl items-center justify-center px-4"
+              onClick={e => e.stopPropagation()}
+            >
+              <img src={previewImage} className="h-full w-full rounded-2xl object-contain shadow-2xl" alt="Event cover" referrerPolicy="no-referrer" />
+              <button
+                onClick={() => setPreviewImage(null)}
+                aria-label="Close preview"
+                className="absolute right-4 top-4 grid h-12 w-12 place-items-center rounded-full border border-white/10 bg-white/10 text-white backdrop-blur-md transition-colors hover:bg-white/20 md:right-8 md:top-8"
+              >
+                <X size={22} />
+              </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
+  );
+}
+
+/* ---------------------------------------------------------------- */
+
+function Detail({ icon, label, children }: { icon: ReactNode; label: string; children: ReactNode }) {
+  return (
+    <div>
+      <p className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.16em] text-faint">
+        <span className="text-primary">{icon}</span> {label}
+      </p>
+      <div className="mt-2.5">{children}</div>
+    </div>
+  );
+}
+
+function HostAction({ icon, onClick, danger = false, children }: { icon: ReactNode; onClick: () => void; danger?: boolean; children: ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-[12px] font-medium transition-colors ${
+        danger ? 'text-destructive hover:bg-destructive/10' : 'text-muted-foreground hover:bg-foreground/5 hover:text-foreground'
+      }`}
+    >
+      {icon} {children}
+    </button>
   );
 }

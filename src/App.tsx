@@ -12,16 +12,18 @@ import CallInterface from './components/call/CallInterface';
 import { LiveKitRoom } from '@livekit/components-react';
 import { unlockAudio } from './lib/sounds';
 import { prefetchFeedExperienceData } from './lib/queryClient';
+import { applyAppearance, normalizeSettings } from './features/settings/preferences';
 
 // Pages
 import LandingPage from './pages/LandingPage';
 import MarketplacePage from './pages/MarketplacePage';
-import ComponentDetails from './pages/ComponentDetails';
+import ProductPage from './pages/ProductPage';
 import CreatorProfile from './pages/CreatorProfile';
-import UploadComponent from './pages/UploadComponent';
+import ProductEditor from './pages/ProductEditor';
 import Onboarding from './pages/Onboarding';
 import Dashboard from './pages/Dashboard';
-import SuccessPage from './pages/SuccessPage';
+import LibraryPage from './pages/LibraryPage';
+import PayoutSettingsPage from './pages/PayoutSettingsPage';
 import SocialFeed from './pages/SocialFeed';
 import PostDetails from './pages/PostDetails';
 import Challenges from './pages/Challenges';
@@ -46,6 +48,7 @@ import ComposeFab from './components/ComposeDialog';
 
 import { LiveSessionProvider } from './contexts/LiveSessionContext';
 import { CurrentUserProvider } from './contexts/CurrentUserContext';
+import { LiveStatusProvider } from './contexts/LiveStatusContext';
 import FloatingLiveSession from './components/live/FloatingLiveSession';
 
 import LiveSessionWrapper from './LiveSessionWrapper';
@@ -116,10 +119,10 @@ function AppRoutes({ user, onboardingRequired }: { user: any, onboardingRequired
       <Route path="/design-system" element={<DesignSystemPage />} />
       <Route path="/marketplace" element={<MarketplacePage />} />
       <Route path="/explore" element={<Navigate to="/marketplace" replace />} />
-      <Route path="/products/:id" element={<ComponentDetails />} />
+      <Route path="/products/:id" element={<ProductPage />} />
       <Route path="/components/:id" element={<ProductRedirect />} />
       <Route path="/creators/:id" element={<CreatorProfile />} />
-      <Route path="/success" element={<SuccessPage />} />
+      <Route path="/success" element={<Navigate to="/library" replace />} />
       <Route path="/feed" element={<SocialFeed />} />
       <Route path="/post/:id" element={<PostDetails />} />
       <Route path="/challenges" element={<Challenges />} />
@@ -141,9 +144,11 @@ function AppRoutes({ user, onboardingRequired }: { user: any, onboardingRequired
       <Route path="/events/:eventId/live" element={priv(<LiveSession />)} />
       <Route path="/write" element={priv(<ArticleWrite />)} />
       <Route path="/write/:articleId" element={priv(<ArticleWrite />)} />
-      <Route path="/upload" element={priv(<UploadComponent />)} />
-      <Route path="/edit/:id" element={priv(<UploadComponent />)} />
+      <Route path="/upload" element={priv(<ProductEditor />)} />
+      <Route path="/edit/:id" element={priv(<ProductEditor />)} />
       <Route path="/dashboard" element={priv(<Dashboard />)} />
+      <Route path="/library" element={priv(<LibraryPage />)} />
+      <Route path="/payouts" element={priv(<PayoutSettingsPage />)} />
       <Route path="/settings" element={priv(<SettingsPage />)} />
       <Route path="/admin" element={priv(isAdmin ? <AdminPage user={user} /> : <Navigate to="/feed" replace />)} />
 
@@ -220,7 +225,12 @@ export default function App() {
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [onboardingRequired, setOnboardingRequired] = useState(false);
-  usePresence(user?.uid);
+  const presence = user?.settings?.activity?.presence;
+  const lastActive = user?.settings?.activity?.lastActive;
+  usePresence(
+    user?.uid,
+    presence !== 'nobody' && presence !== 'me' && lastActive !== 'me' && lastActive !== 'nobody',
+  );
 
   useEffect(() => {
     // Add audio unlock listeners
@@ -246,16 +256,7 @@ export default function App() {
           // Merge auth user with firestore data for universal XP
           setUser(userData ? { ...user, ...userData } : user);
           
-          const targetTheme = userData?.theme || localStorage.getItem('theme') || 'dark';
-          if (targetTheme === 'light') {
-            document.documentElement.classList.add('light');
-            document.documentElement.classList.remove('dark');
-            document.documentElement.style.colorScheme = 'light';
-          } else {
-            document.documentElement.classList.add('dark');
-            document.documentElement.classList.remove('light');
-            document.documentElement.style.colorScheme = 'dark';
-          }
+          applyAppearance(normalizeSettings(userData).appearance);
           
           setLoading(false);
         }, (error) => {
@@ -306,8 +307,10 @@ export default function App() {
         <VoiceProvider>
           <CallProvider>
             <CurrentUserProvider user={user}>
-              <AppContent user={user} onboardingRequired={onboardingRequired} />
-              <CallInterface />
+              <LiveStatusProvider>
+                <AppContent user={user} onboardingRequired={onboardingRequired} />
+                <CallInterface />
+              </LiveStatusProvider>
             </CurrentUserProvider>
           </CallProvider>
           <Toaster 

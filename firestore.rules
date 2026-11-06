@@ -100,7 +100,7 @@ service cloud.firestore {
              (!('type' in data) || data.type in ['post', 'article', 'challenge', 'event', 'product', 'job', 'liveStream', 'poll', 'repost', 'quote']) &&
              (!('createdAt' in data) || (data.createdAt is string || data.createdAt is timestamp)) &&
              (!('updatedAt' in data) || data.updatedAt is timestamp || data.updatedAt is string) &&
-             (!('visibility' in data) || data.visibility in ['public', 'community']) &&
+             (!('visibility' in data) || data.visibility in ['public', 'community', 'followers']) &&
              (!('kind' in data) || data.kind in ['shiplog', 'feedback']) &&
              (!('shipDay' in data) || data.shipDay is int) &&
              (!('project' in data) || (data.project is string && data.project.size() <= 80)) &&
@@ -161,7 +161,8 @@ service cloud.firestore {
         'language', 'timezone', 'packageManager', 'cliFramework', 'providers',
         'onboardingStep', 'theme', 'notif_emailPerformance', 'notif_emailSecurity',
         'notif_pushDMs', 'notif_pushSales', 'notif_pushTrends', 'badges', 'layout', 'focusMode', 'updatedAt',
-        'status', 'verified', 'referredBy', 'accountType', 'streak', 'statusUntil', 'bannerImage', 'lastActiveAt'
+        'status', 'verified', 'referredBy', 'accountType', 'streak', 'statusUntil', 'bannerImage', 'lastActiveAt',
+        'settings', 'privacyPublicProfile', 'privacySearchable', 'shareAnonymousUsage'
       ];
       let allFields = requiredFields.concat(optionalFields);
 
@@ -179,7 +180,9 @@ service cloud.firestore {
              (!('createdAt' in data) || (data.createdAt is string || data.createdAt is timestamp)) &&
              (!('updatedAt' in data) || data.updatedAt is string || data.updatedAt is timestamp) &&
              (!('status' in data) || data.status is string) &&
-             (!('verified' in data) || data.verified is bool);
+             (!('verified' in data) || data.verified is bool) &&
+             // Nested settings are validated by shape, not by enumerating every UI preference.
+             (!('settings' in data) || data.settings is map);
     }
 
     function isValidProduct(data) {
@@ -288,6 +291,20 @@ service cloud.firestore {
       return exists(/databases/$(database)/documents/users/$(owner)/blockedUsers/$(uid));
     }
 
+    // Mirrors messaging.whoCanDM in the user settings. Unknown/older profiles behave
+    // as "anyone" so existing accounts keep receiving messages.
+    function canMessageTarget(targetUid) {
+      let target = get(/databases/$(database)/documents/users/$(targetUid)).data;
+      let settingsMap = target.get('settings', null);
+      let messagingMap = settingsMap == null ? null : settingsMap.get('messaging', null);
+      let policy = messagingMap == null ? 'anyone' : messagingMap.get('whoCanDM', 'anyone');
+      return policy != 'nobody' && (
+        policy == 'anyone' ||
+        (policy == 'followers' && exists(/databases/$(database)/documents/users/$(request.auth.uid)/following/$(targetUid))) ||
+        (policy == 'mutuals' && followsEachOther(targetUid, request.auth.uid))
+      );
+    }
+
     // New chats start as a request, unless both people follow each other.
     function isValidConversation(conversationId, data) {
       return data.participants is list &&
@@ -297,6 +314,7 @@ service cloud.firestore {
              conversationId in [data.participants[0] + '_' + data.participants[1], data.participants[1] + '_' + data.participants[0]] &&
              data.lastMessageAt is timestamp &&
              !hasBlocked(otherParticipant(data.participants), request.auth.uid) &&
+             canMessageTarget(otherParticipant(data.participants)) &&
              ((data.get('status', '') == 'pending' && data.get('requestedBy', '') == request.auth.uid) ||
               (data.get('status', '') == 'accepted' && followsEachOther(data.participants[0], data.participants[1])));
     }
@@ -326,6 +344,7 @@ service cloud.firestore {
       let conv = getAfter(/databases/$(database)/documents/conversations/$(conversationId)).data;
       return request.auth.uid in conv.participants &&
              !hasBlocked(otherParticipant(conv.participants), request.auth.uid) &&
+             canMessageTarget(otherParticipant(conv.participants)) &&
              (
                conv.get('status', 'accepted') == 'accepted' ||
                (conv.status == 'pending' && conv.requestedBy == request.auth.uid)
@@ -472,7 +491,7 @@ service cloud.firestore {
              data.title is string && data.title.size() > 0 && data.title.size() < 200 &&
              data.hostId == request.auth.uid &&
              data.eventType in ['user', 'community'] &&
-             data.visibility in ['public', 'community', 'unlisted'] &&
+             data.visibility in ['public', 'community', 'unlisted', 'followers'] &&
              data.status in ['upcoming', 'live', 'ended'] &&
              data.startDate is string &&
              data.endDate is string &&
@@ -905,6 +924,10 @@ service cloud.firestore {
                         isRegisteredForEvent(eventId)
                       )) || 
                       (resource.data.visibility == 'community' && 'communityId' in resource.data && isCommunityMember(resource.data.communityId)) ||
+                      (resource.data.visibility == 'followers' && isAuthenticated() && (
+                        resource.data.hostId == request.auth.uid ||
+                        exists(/databases/$(database)/documents/users/$(request.auth.uid)/following/$(resource.data.hostId))
+                      )) ||
                       resource.data.hostId == request.auth.uid ||
                       resource.data.get('coHostIds', []).hasAny([request.auth.uid]) ||
                       isRegisteredForEvent(eventId)
@@ -948,8 +971,13 @@ service cloud.firestore {
 
       match /registrations/{userId} {
         allow read: if isAuthenticated(); // Relaxed to allow participants to see others if needed, but primarily for host/members
-        allow create: if isAuthenticated() && isOwner(userId);
-        allow delete: if isAuthenticated() && isOwner(userId);
+        // Free events only. Paid registrations are created by the server after payment is verified.
+        allow create: if isAuthenticated() && isOwner(userId)
+          && get(/databases/$(database)/documents/events/$(eventId)).data.get('isPaid', false) != true
+          && request.resource.data.paid == false;
+        // Paid registrations can't be cancelled by the client (no refund flow yet).
+        allow delete: if isAuthenticated() && isOwner(userId)
+          && get(/databases/$(database)/documents/events/$(eventId)).data.get('isPaid', false) != true;
       }
     }
 
@@ -1340,15 +1368,17 @@ service cloud.firestore {
     match /statuses/{statusId} {
       function canSeeStatus(data) {
         return isAuthenticated() && (data.authorUid == request.auth.uid ||
-          exists(/databases/$(database)/documents/users/$(data.authorUid)/followers/$(request.auth.uid)));
+          (data.get('audience', 'followers') != 'only-me' &&
+            exists(/databases/$(database)/documents/users/$(data.authorUid)/followers/$(request.auth.uid))));
       }
 
       allow read: if canSeeStatus(resource.data);
       allow create: if isAuthenticated() &&
                     request.resource.data.authorUid == request.auth.uid &&
                     request.resource.data.keys().hasAll(['authorUid', 'authorName', 'type', 'createdAt', 'expiresAt']) &&
-                    request.resource.data.keys().hasOnly(['authorUid', 'authorName', 'authorUsername', 'authorPhoto', 'type', 'mediaUrl', 'text', 'background', 'createdAt', 'expiresAt']) &&
+                    request.resource.data.keys().hasOnly(['authorUid', 'authorName', 'authorUsername', 'authorPhoto', 'type', 'mediaUrl', 'text', 'background', 'audience', 'createdAt', 'expiresAt']) &&
                     request.resource.data.type in ['image', 'video', 'text'] &&
+                    request.resource.data.get('audience', 'followers') in ['followers', 'only-me'] &&
                     request.resource.data.expiresAt is timestamp &&
                     request.resource.data.expiresAt > request.time &&
                     request.resource.data.expiresAt <= request.time + duration.value(25, 'h') &&
@@ -1448,7 +1478,8 @@ service cloud.firestore {
 
     match /purchases/{purchaseId} {
       allow read: if isAuthenticated() && (resource.data.buyerUid == request.auth.uid || resource.data.sellerUid == request.auth.uid);
-      allow create: if isAuthenticated() && request.resource.data.buyerUid == request.auth.uid;
+      // Purchases are created by the server after payment is verified. Clients may not create them.
+      allow create: if isAdmin();
     }
 
     match /articles/{articleId} {

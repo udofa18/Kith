@@ -12,7 +12,7 @@ import {
   ExternalLink, Link as LinkIcon, Flag, X, Smile, Layout,
   ChevronUp, ChevronDown, ScrollText, Gavel
 } from 'lucide-react';
-import { auth, db, storage, handleFirestoreError, OperationType } from '../firebase';
+import { auth, db, handleFirestoreError, OperationType } from '../firebase';
 import ReportModal from './ReportModal';
 import ConfirmModal from './ConfirmModal';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
@@ -21,7 +21,7 @@ import {
   orderBy, getDocs, where, increment, serverTimestamp,
   addDoc, deleteDoc, writeBatch, limit, getDoc
 } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { ref, uploadBytes, getDownloadURL } from '../lib/storage';
 import { toast } from 'react-hot-toast';
 import { formatDate } from '../lib/utils';
 import { addFeePayment, canAfford, feeFields, feeOf, formatFee, validateFee, type CommunityFee } from '../lib/communityPricing';
@@ -281,7 +281,7 @@ export default function CommunitySettingsCenter({ communityId, onClose, initialS
     if (!file || !auth.currentUser) return;
     setIsUploading(true);
     try {
-      const storageRef = ref(storage, `communities/${auth.currentUser.uid}/${communityId}_${type}_${Date.now()}`);
+      const storageRef = ref(null, `communities/${auth.currentUser.uid}/${communityId}_${type}_${Date.now()}`);
       const snapshot = await uploadBytes(storageRef, file);
       const url = await getDownloadURL(snapshot.ref);
       await handleSave({ [type]: url });

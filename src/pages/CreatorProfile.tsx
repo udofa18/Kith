@@ -17,7 +17,7 @@ import CommunityCard from '../components/CommunityCard';
 import ProfileHeader from '../features/profile/ProfileHeader';
 import {
   displayName, fetchBookmarks, fetchPostCount, fetchProfileMedia, fetchProfilePosts, fetchProfileReplies,
-  fetchRelationship, fetchSection, fetchSectionCounts, resolveProfile, type SectionKey,
+  fetchRelationship, fetchSection, fetchSectionCounts, photoOf, resolveProfile, type SectionKey,
 } from '../features/profile/api';
 
 type Tab = 'posts' | 'replies' | 'media' | SectionKey | 'saved';
@@ -60,7 +60,7 @@ export default function CreatorProfile() {
   });
   const myFollowing = viewer?.followingIds ?? new Set<string>();
 
-  const { data: relationship } = useQuery({
+  const { data: relationship, isLoading: relationshipLoading } = useQuery({
     queryKey: ['relationship', id, me],
     queryFn: () => fetchRelationship(id!, me, [...myFollowing]),
     enabled: !!id && (!me || !viewerLoading),
@@ -79,10 +79,14 @@ export default function CreatorProfile() {
     staleTime: 60_000,
   });
 
-  // Content tabs appear only when there's something in them (always on your own profile).
+  // Content tabs appear only when there's something in them (always on your own profile),
+  // and only when the owner has left that section in their showcase.
+  const showcase = profile?.data?.settings?.profile?.showShowcase;
   const tabs: Tab[] = [
     'posts', 'replies', 'media',
-    ...(['articles', 'products', 'events', 'communities'] as SectionKey[]).filter(k => isMe || (sectionCounts?.[k] ?? 0) > 0),
+    ...(['articles', 'products', 'events', 'communities'] as SectionKey[]).filter(
+      (k) => showcase?.[k] !== false && (isMe || (sectionCounts?.[k] ?? 0) > 0),
+    ),
     ...(isMe ? (['saved'] as Tab[]) : []),
   ];
   const requested = searchParams.get('tab') as Tab | null;
@@ -107,6 +111,43 @@ export default function CreatorProfile() {
   }
 
   const name = displayName(profile.data);
+  const visibility = profile.data.settings?.profile?.visibility
+    ?? (profile.data.privacyPublicProfile === false ? 'followers' : 'public');
+  const canViewProfile =
+    isMe ||
+    visibility === 'public' ||
+    (visibility === 'followers' && !!relationship?.youFollow);
+  const includeFollowers = isMe || !!relationship?.youFollow;
+
+  if (!canViewProfile) {
+    if (relationshipLoading && visibility !== 'hidden') return <ProfileSkeleton />;
+
+    return (
+      <div className="max-w-[640px] mx-auto min-h-screen text-black dark:text-white border-x border-black/10 dark:border-white/10">
+        <PageHeader title={name} />
+        <div className="flex flex-col items-center px-6 py-16 text-center">
+          <div className="h-20 w-20 overflow-hidden rounded-full border border-black/10 bg-black/5 dark:border-white/10 dark:bg-white/5">
+            <img src={photoOf(profile.data)} alt="" className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+          </div>
+          <h2 className="mt-4 text-xl font-bold leading-tight">{name}</h2>
+          {profile.data.username && (
+            <p className="text-sm text-black/50 dark:text-white/50">@{profile.data.username}</p>
+          )}
+          <p className="mt-4 max-w-sm text-sm leading-relaxed text-black/60 dark:text-white/60">
+            {visibility === 'followers'
+              ? `Follow ${name} to see their profile, posts and communities.`
+              : `${name} keeps their profile private. You can still see their work where it appears in communities and events.`}
+          </p>
+          <Link
+            to="/feed"
+            className="mt-6 rounded-full bg-primary px-5 py-2 text-sm font-semibold text-white transition-colors hover:bg-primary/90"
+          >
+            Back to feed
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-[640px] mx-auto min-h-screen text-black dark:text-white pb-24 border-x border-black/10 dark:border-white/10">
@@ -134,9 +175,9 @@ export default function CreatorProfile() {
         </div>
       </nav>
 
-      {tab === 'posts' && <PostsTab userId={id} isMe={isMe} name={name} />}
+      {tab === 'posts' && <PostsTab userId={id} isMe={isMe} name={name} includeFollowers={includeFollowers} />}
       {tab === 'replies' && <RepliesTab userId={id} name={name} />}
-      {tab === 'media' && <MediaTab userId={id} name={name} />}
+      {tab === 'media' && <MediaTab userId={id} name={name} includeFollowers={includeFollowers} />}
       {(tab === 'articles' || tab === 'products' || tab === 'events' || tab === 'communities') && (
         <SectionTab section={tab} userId={id} isMe={isMe} />
       )}
@@ -147,10 +188,10 @@ export default function CreatorProfile() {
 
 // ---------------------------------------------------------------- Tabs
 
-function PostsTab({ userId, isMe, name }: { userId: string; isMe: boolean; name: string }) {
+function PostsTab({ userId, isMe, name, includeFollowers }: { userId: string; isMe: boolean; name: string; includeFollowers: boolean }) {
   const query = useInfiniteQuery({
-    queryKey: ['profile-posts', userId],
-    queryFn: ({ pageParam }) => fetchProfilePosts(userId, pageParam),
+    queryKey: ['profile-posts', userId, includeFollowers],
+    queryFn: ({ pageParam }) => fetchProfilePosts(userId, pageParam, includeFollowers),
     initialPageParam: undefined as Awaited<ReturnType<typeof fetchProfilePosts>>['cursor'],
     getNextPageParam: last => last.cursor,
     staleTime: 30_000,
@@ -217,10 +258,10 @@ function RepliesTab({ userId, name }: { userId: string; name: string }) {
   );
 }
 
-function MediaTab({ userId, name }: { userId: string; name: string }) {
+function MediaTab({ userId, name, includeFollowers }: { userId: string; name: string; includeFollowers: boolean }) {
   const { data: tiles, isLoading } = useQuery({
-    queryKey: ['profile-media', userId],
-    queryFn: () => fetchProfileMedia(userId),
+    queryKey: ['profile-media', userId, includeFollowers],
+    queryFn: () => fetchProfileMedia(userId, includeFollowers),
     staleTime: 60_000,
   });
   if (isLoading) {

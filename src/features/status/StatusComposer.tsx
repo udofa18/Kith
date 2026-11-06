@@ -62,6 +62,7 @@ export default function StatusComposer({ open, onClose }: { open: boolean; onClo
   const post = async () => {
     if (!canPost || posting) return;
     setPosting(true);
+    const audience = user.settings?.activity?.statusAudience === 'only-me' ? 'only-me' : 'followers';
     try {
       await createStatus(
         {
@@ -70,9 +71,9 @@ export default function StatusComposer({ open, onClose }: { open: boolean; onClo
           username: user.username || '',
           photo: user.profileImage || user.photoURL || '',
         },
-        mode === 'text' ? { text, background } : { file: file!, text },
+        mode === 'text' ? { text, background, audience } : { file: file!, text, audience },
       );
-      toast.success('Status shared with your followers');
+      toast.success(audience === 'only-me' ? 'Saved to your private statuses' : 'Status shared with your followers');
       queryClient.invalidateQueries({ queryKey: ['status-tray'] });
       close();
     } catch (err) {

@@ -97,7 +97,7 @@ function Row({ conv, me, selected, onSelect }: { conv: ConversationData; me: str
   const otherId = conv.participants.find(p => p !== me) ?? me;
   const unread = unreadFor(conv, me);
   const typing = isTyping(conv, otherId);
-  const active = presenceLabel(other?.lastActiveAt) === 'Active now';
+  const active = presenceLabel(other?.lastActiveAt, Date.now(), other) === 'Active now';
   const fromMe = conv.lastSenderId === me;
   const pinned = isFavourited(conv, me);
   const muted = isMuted(conv, me);

@@ -1,219 +1,338 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Clock, MessageSquare, Bookmark, ThumbsUp, Eye, MoreHorizontal, Globe, Lock, Trash2, PenTool } from 'lucide-react';
+import { doc, getDoc, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
 import { formatDistanceToNow } from 'date-fns';
-import { ARTICLE_CATEGORIES } from '../types/articles';
-import { auth, db } from '../firebase';
-import { doc, updateDoc, deleteDoc, setDoc } from 'firebase/firestore';
+import {
+  ArrowUpRight,
+  Bookmark,
+  Clock,
+  Eye,
+  Globe,
+  Heart,
+  Lock,
+  MessageSquare,
+  PenLine,
+  Sparkles,
+} from 'lucide-react';
 import { toast } from 'react-hot-toast';
-import { useState, useEffect } from 'react';
+import { auth, db } from '../firebase';
+import { cn } from '../lib/cn';
+import Avatar from './ui/Avatar';
+import ArticleCover from './articles/ArticleCover';
+import {
+  articleDateValue,
+  authorName,
+  authorSeed,
+  categoryIconFor,
+  categoryMeta,
+  readMinutes,
+} from './articles/articleVisuals';
+
+export type ArticleCardVariant = 'default' | 'grid' | 'featured' | 'compact' | 'flat';
 
 interface ArticleCardProps {
   article: any;
   isOwner?: boolean;
+  variant?: ArticleCardVariant;
+  className?: string;
 }
 
-export default function ArticleCard({ article, isOwner }: ArticleCardProps) {
-  const [isBookmarked, setIsBookmarked] = useState(false);
-  const [loading, setLoading] = useState(false);
+export default function ArticleCard({
+  article,
+  isOwner = false,
+  variant = 'default',
+  className,
+}: ArticleCardProps) {
+  const [bookmarked, setBookmarked] = useState(false);
+  const [bookmarking, setBookmarking] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+  const [status, setStatus] = useState<'published' | 'draft'>(article.status === 'draft' ? 'draft' : 'published');
 
-  useEffect(() => {
-    if (auth.currentUser) {
-      // Check if bookmarked (this would ideally come from the parent or a global state, 
-      // but for simplicity we'll check it here or assume the parent handles it)
-    }
-  }, [article.id]);
+  const category = categoryMeta(article.primaryCategoryId);
+  const Icon = categoryIconFor(article.primaryCategoryId);
+  const date = articleDateValue(article);
+  const dateLabel = date ? formatDistanceToNow(date, { addSuffix: true }) : 'Recently';
+  const minutes = readMinutes(article);
+  const title = article.title || 'Untitled story';
+  const excerpt = article.subtitle || article.excerpt || '';
+  const href = `/article/${article.id}`;
+  const isFeatured = Boolean(article.isFeatured);
+  const isGrid = variant === 'grid';
+  const isCompact = variant === 'compact';
+  const isBig = variant === 'featured';
+  const isFlat = variant === 'flat';
 
-  const togglePublish = async (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (!isOwner) return;
-
-    try {
-      setLoading(true);
-      const newStatus = article.status === 'published' ? 'draft' : 'published';
-      await updateDoc(doc(db, 'articles', article.id), {
-        status: newStatus,
-        updatedAt: new Date().toISOString()
-      });
-      toast.success(newStatus === 'published' ? 'Article published!' : 'Article moved to drafts');
-    } catch (error) {
-      console.error(error);
-      toast.error('Failed to update status');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleBookmark = async (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
+  const toggleBookmark = async (event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
     if (!auth.currentUser) {
-      toast.error('Please login to bookmark');
+      toast.error('Sign in to save stories');
       return;
     }
+    if (bookmarking) return;
 
+    setBookmarking(true);
     try {
       const bookmarkRef = doc(db, 'users', auth.currentUser.uid, 'bookmarkedArticles', article.id);
-      if (isBookmarked) {
+      const existing = bookmarked ? true : (await getDoc(bookmarkRef)).exists();
+      if (existing) {
         await deleteDoc(bookmarkRef);
-        setIsBookmarked(false);
-        toast.success('Removed from bookmarks');
+        setBookmarked(false);
+        toast.success('Removed from your reading list');
       } else {
         await setDoc(bookmarkRef, {
           articleId: article.id,
           bookmarkedAt: new Date().toISOString(),
-          title: article.title,
-          coverImage: article.coverImage || ''
+          title,
+          subtitle: excerpt,
+          coverImage: article.coverImage || '',
+          authorName: authorName(article),
+          readingTime: minutes,
+          primaryCategoryId: article.primaryCategoryId || '',
         });
-        setIsBookmarked(true);
-        toast.success('Saved to bookmarks');
+        setBookmarked(true);
+        toast.success('Saved to your reading list');
       }
     } catch (error) {
       console.error(error);
-      toast.error('Bookmark failed');
+      toast.error('Could not update your reading list');
+    } finally {
+      setBookmarking(false);
     }
   };
 
-  const dateStr = (() => {
-    if (!article.createdAt) return 'Recently';
+  const togglePublish = async (event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!isOwner || publishing) return;
+
+    setPublishing(true);
     try {
-      const d = article.createdAt.toDate ? article.createdAt.toDate() : new Date(article.createdAt);
-      if (!(d instanceof Date) || isNaN(d.getTime())) return 'Recently';
-      return formatDistanceToNow(d, { addSuffix: true });
-    } catch (e) {
-      return 'Recently';
+      const next = status === 'published' ? 'draft' : 'published';
+      await updateDoc(doc(db, 'articles', article.id), {
+        status: next,
+        updatedAt: new Date().toISOString(),
+        ...(next === 'published' ? { publishedAt: new Date().toISOString() } : {}),
+      });
+      setStatus(next);
+      toast.success(next === 'published' ? 'Story published' : 'Moved back to drafts');
+    } catch (error) {
+      console.error(error);
+      toast.error('Could not update the story');
+    } finally {
+      setPublishing(false);
     }
-  })();
+  };
 
   return (
-    <Link 
-      to={`/article/${article.id}`}
-      className={`block group bg-black/[0.03] dark:bg-[#121212] rounded-[32px] border border-black/5 dark:border-white/5 p-2 sm:p-4 hover:bg-black/[0.05] dark:hover:bg-white/[0.03] hover:border-black/10 dark:hover:border-white/10 transition-all duration-300 relative overflow-hidden ${article.status === 'draft' ? 'opacity-75' : ''}`}
+    <article
+      className={cn(
+        'group relative flex text-foreground transition-[transform,border-color,box-shadow] duration-300 ease-out',
+        isFlat
+          ? 'border-b border-border bg-transparent pb-6 sm:flex-row'
+          : 'overflow-hidden rounded-card border border-border bg-surface shadow-soft hover:-translate-y-0.5 hover:border-border-strong hover:shadow-lift',
+        isGrid || isCompact ? 'flex-col' : isBig ? 'flex-col lg:flex-row' : 'flex-col sm:flex-row',
+        isCompact && 'gap-3 p-2.5',
+        status === 'draft' && 'opacity-90',
+        className,
+      )}
     >
-      {article.isFeatured && (
-        <div className="absolute top-6 -right-12 bg-primary text-black font-black py-1 px-12 rotate-45 text-[8px] uppercase tracking-widest z-10 shadow-lg">
-          Featured
-        </div>
-      )}
+      {/* Cover */}
+      <div
+        className={cn(
+          'relative shrink-0 overflow-hidden',
+          isCompact
+            ? 'h-16 w-16 rounded-xl'
+            : isGrid
+              ? 'aspect-[16/10] w-full'
+              : isBig
+                ? 'aspect-[16/10] w-full lg:aspect-auto lg:w-[54%] lg:min-h-[380px]'
+                : isFlat
+                  ? 'aspect-[16/10] w-full rounded-[1.1rem] sm:aspect-auto sm:w-[250px] sm:min-h-[176px]'
+                  : 'aspect-[16/10] w-full sm:aspect-auto sm:w-[270px] sm:min-h-[196px]',
+        )}
+      >
+        <ArticleCover
+          src={article.coverImage}
+          title={title}
+          categoryId={article.primaryCategoryId}
+          seed={article.id}
+          priority={isBig}
+          showStamp={isBig}
+          hideWordmark
+          className="h-full w-full"
+        />
 
-      {article.status === 'draft' && (
-        <div className="absolute top-3 right-3 bg-yellow-500/10 text-yellow-500 border border-yellow-500/20 px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest z-20 backdrop-blur-md">
-          Draft
-        </div>
-      )}
-      
-      <div className="flex flex-col sm:flex-row gap-4 sm:gap-6">
-        
-        {/* Cover Image */}
-        <div className="w-full sm:w-[280px] h-[180px] sm:h-[190px] rounded-[24px] overflow-hidden shrink-0 relative bg-black/10">
-          {article.coverImage ? (
-            <img 
-              src={article.coverImage} 
-              alt={article.title} 
-              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" 
-              referrerPolicy="no-referrer"
-              loading="lazy"
-            />
-          ) : (
-            <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-white/5 to-white/[0.02]">
-              <PenTool className="text-white/20" size={32} />
-            </div>
+        <Link
+          to={href}
+          aria-label={`Read ${title}`}
+          className="absolute inset-0 z-[1] rounded-[inherit] focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+        />
+
+        <div className="pointer-events-none absolute left-3 top-3 z-10 flex flex-wrap gap-1.5">
+          {article.primaryCategoryId && (
+            <span className="inline-flex items-center gap-1 rounded-full border border-[#ffffff]/15 bg-black/55 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.14em] text-[#ffffff] backdrop-blur-md">
+              <Icon size={11} className="text-[#ffffff]/80" />
+              {category?.name || article.primaryCategoryId}
+            </span>
           )}
-          
-          <div className="absolute top-3 left-3 flex flex-col gap-2">
-            {article.primaryCategoryId && (
-              <div className="bg-black/60 backdrop-blur-md px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest text-primary border border-primary/20">
-                {ARTICLE_CATEGORIES.find(c => c.id === article.primaryCategoryId)?.name || article.primaryCategoryId}
-              </div>
-            )}
-            {article.difficulty && (
-              <div className={`px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest border backdrop-blur-md bg-black/60 ${
-                article.difficulty === 'Beginner' ? 'text-green-400 border-green-400/20' :
-                article.difficulty === 'Intermediate' ? 'text-yellow-400 border-yellow-400/20' :
-                article.difficulty === 'Advanced' ? 'text-orange-400 border-orange-400/20' :
-                'text-red-400 border-red-400/20'
-              }`}>
-                {article.difficulty}
-              </div>
-            )}
-          </div>
-
-          {article.readingTime && (
-            <div className="absolute bottom-3 right-3 bg-white/80 dark:bg-black/60 backdrop-blur-md px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5 border border-black/10 dark:border-white/10 text-black dark:text-white">
-              <Clock size={12} />
-              <span>{article.readingTime} min</span>
-            </div>
+          {isFeatured && !isCompact && !isFlat && (
+            <span className="inline-flex items-center gap-1 rounded-full border border-[#ffffff]/15 bg-black/55 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.14em] text-[#ffffff] backdrop-blur-md">
+              <Sparkles size={11} className="text-amber-300" />
+              Featured
+            </span>
+          )}
+          {status === 'draft' && (
+            <span className="inline-flex items-center gap-1 rounded-full border border-[#ffffff]/15 bg-black/55 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.14em] text-[#ffffff] backdrop-blur-md">
+              <Lock size={11} className="text-amber-300" />
+              Draft
+            </span>
           )}
         </div>
 
-        {/* Content */}
-        <div className="flex-1 flex flex-col justify-center py-2 pr-2">
-          <div className="flex items-center gap-2 mb-3">
-            <div className="w-6 h-6 rounded-full bg-gradient-to-tr from-primary to-purple-500 overflow-hidden flex items-center justify-center text-[10px] font-black text-black border border-black/10 dark:border-white/10">
-              {article.authorPhoto ? (
-                <img src={article.authorPhoto} className="w-full h-full object-cover" />
-              ) : (
-                article.authorName?.substring(0, 1).toUpperCase() || 'A'
-              )}
-            </div>
-            <span className="text-xs font-black uppercase tracking-tight text-black/80 dark:text-white/80">{article.authorName || 'Anonymous'}</span>
-            <span className="text-black/20 dark:text-white/20 text-xs">•</span>
-            <span className="text-[10px] font-bold text-black/40 dark:text-white/40 uppercase tracking-widest">{dateStr}</span>
+        {!isCompact && (
+          <div className="absolute bottom-3 right-3 z-10 inline-flex items-center gap-1.5 rounded-full bg-background/75 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.12em] text-foreground backdrop-blur-md">
+            <Clock size={11} />
+            {minutes} min
           </div>
-          
-          <h2 className="text-xl font-black mb-2 group-hover:text-primary transition-colors tracking-tight line-clamp-2 leading-tight text-black dark:text-white uppercase transition-colors">
-            {article.title}
-          </h2>
-          
-          <p className="text-black/50 dark:text-white/50 text-xs font-bold tracking-widest line-clamp-2 mb-4 leading-relaxed max-w-2xl">
-            {article.subtitle || String(article.content || '').replace(/<[^>]*>?/gm, '').substring(0, 150) + '...'}
-          </p>
-
-          <div className="flex items-center justify-between mt-auto">
-            <div className="flex items-center gap-2 overflow-hidden mr-4">
-              {article.subcategory && (
-                <span className="px-3 py-1 rounded-full bg-primary/10 border border-primary/20 text-[9px] font-black text-primary whitespace-nowrap uppercase tracking-widest">
-                   {article.subcategory}
-                </span>
-              )}
-              {article.tags?.slice(0, 2).map((tag: string) => (
-                <span key={tag} className="px-3 py-1 rounded-full bg-black/5 dark:bg-white/5 border border-black/5 dark:border-white/5 text-[9px] font-black text-black/60 dark:text-white/60 whitespace-nowrap uppercase tracking-widest">
-                  #{tag}
-                </span>
-              ))}
-            </div>
-
-            <div className="flex items-center gap-4 text-black/40 dark:text-white/40">
-              <div className="flex items-center gap-1.5">
-                <ThumbsUp size={14} />
-                <span className="text-xs font-bold">{article.likesCount || 0}</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <MessageSquare size={14} />
-                <span className="text-xs font-bold">{article.commentsCount || 0}</span>
-              </div>
-              
-              {isOwner ? (
-                <button 
-                  onClick={togglePublish}
-                  disabled={loading}
-                  className={`p-2 rounded-xl transition-all ${article.status === 'published' ? 'hover:bg-red-500/10 hover:text-red-500' : 'hover:bg-green-500/10 hover:text-green-500'}`}
-                  title={article.status === 'published' ? 'Unpublish' : 'Publish'}
-                >
-                  {article.status === 'published' ? <Lock size={16} /> : <Globe size={16} />}
-                </button>
-              ) : (
-                <button 
-                  onClick={handleBookmark}
-                  className={`p-2 rounded-xl transition-all hover:bg-primary/10 hover:text-primary ${isBookmarked ? 'text-primary' : ''}`}
-                >
-                  <Bookmark size={16} fill={isBookmarked ? 'currentColor' : 'none'} />
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
+        )}
       </div>
-    </Link>
+
+      {/* Content */}
+      <div
+        className={cn(
+          'relative flex min-w-0 flex-1 flex-col',
+          isCompact
+            ? 'justify-center py-0.5'
+            : isBig
+              ? 'p-6 sm:p-8 lg:justify-center'
+              : isFlat
+                ? 'p-0 pt-4 sm:pl-5 sm:pt-0'
+                : 'p-4 sm:p-5',
+        )}
+      >
+        {!isCompact && (
+          <div className="mb-3 flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
+            <span className="flex items-center gap-2">
+              <Avatar src={article.authorPhoto} seed={authorSeed(article)} size={24} alt="" />
+              <span className="text-xs font-semibold text-foreground/85">{authorName(article)}</span>
+            </span>
+            <span className="h-1 w-1 rounded-full bg-faint" />
+            <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-faint">{dateLabel}</span>
+            {article.subcategory && (
+              <>
+                <span className="h-1 w-1 rounded-full bg-faint" />
+                <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-faint">
+                  {article.subcategory}
+                </span>
+              </>
+            )}
+          </div>
+        )}
+
+        <h3
+          className={cn(
+            'font-display font-semibold leading-[1.12] tracking-[-0.045em] text-foreground',
+            isCompact ? 'text-sm' : isBig ? 'text-2xl sm:text-3xl lg:text-[2.1rem]' : 'text-lg sm:text-xl',
+          )}
+        >
+          <Link
+            to={href}
+            className="line-clamp-2 outline-none transition-colors hover:text-primary focus-visible:text-primary"
+          >
+            {title}
+          </Link>
+        </h3>
+
+        {!isCompact && excerpt && (
+          <p
+            className={cn(
+              'mt-2 leading-relaxed text-muted-foreground',
+              isBig ? 'line-clamp-3 max-w-[54ch] text-sm sm:text-base' : 'line-clamp-2 text-xs sm:text-[13px]',
+            )}
+          >
+            {excerpt}
+          </p>
+        )}
+
+        {isCompact ? (
+          <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-faint">
+            {minutes} min · {dateLabel}
+          </p>
+        ) : (
+          <div className="mt-auto flex items-end justify-between gap-3 pt-4">
+            <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
+              {!isBig &&
+                article.tags?.slice(0, isGrid ? 1 : 2).map((tag: string) => (
+                  <span
+                    key={tag}
+                    className="max-w-[120px] truncate text-[9px] font-bold uppercase tracking-[0.1em] text-faint"
+                  >
+                    #{tag}
+                  </span>
+                ))}
+            </div>
+
+            <div className="flex shrink-0 items-center gap-1 text-muted-foreground">
+              <span className="inline-flex items-center gap-1 px-1.5 text-[11px] font-semibold" title="Likes">
+                <Heart size={13} />
+                {article.likesCount || 0}
+              </span>
+              <span className="inline-flex items-center gap-1 px-1.5 text-[11px] font-semibold" title="Comments">
+                <MessageSquare size={13} />
+                {article.commentsCount || 0}
+              </span>
+              {!isGrid && (
+                <span className="inline-flex items-center gap-1 px-1.5 text-[11px] font-semibold" title="Views">
+                  <Eye size={13} />
+                  {article.viewsCount || 0}
+                </span>
+              )}
+
+              {isOwner ? (
+                <span className="relative z-20 ml-1 flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={togglePublish}
+                    disabled={publishing}
+                    title={status === 'published' ? 'Move to drafts' : 'Publish story'}
+                    className="grid h-8 w-8 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+                  >
+                    {status === 'published' ? <Lock size={15} /> : <Globe size={15} />}
+                  </button>
+                  <Link
+                    to={`/write/${article.id}`}
+                    title="Edit story"
+                    className="grid h-8 w-8 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  >
+                    <PenLine size={15} />
+                  </Link>
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={toggleBookmark}
+                  disabled={bookmarking}
+                  aria-pressed={bookmarked}
+                  aria-label={bookmarked ? 'Remove from reading list' : 'Save to reading list'}
+                  className={cn(
+                    'relative z-20 ml-1 grid h-8 w-8 place-items-center rounded-full transition-colors hover:bg-primary/10 hover:text-primary disabled:opacity-50',
+                    bookmarked ? 'text-primary' : 'text-muted-foreground',
+                  )}
+                >
+                  <Bookmark size={15} fill={bookmarked ? 'currentColor' : 'none'} />
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {isBig && (
+        <span className="pointer-events-none absolute bottom-5 right-5 z-10 hidden h-10 w-10 place-items-center rounded-full border border-border bg-background/70 text-foreground backdrop-blur-md lg:grid">
+          <ArrowUpRight size={18} />
+        </span>
+      )}
+    </article>
   );
 }

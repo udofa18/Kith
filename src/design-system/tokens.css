@@ -40,8 +40,8 @@
   --ds-info-foreground: #10222a;
   --ds-warning: var(--ds-brand-amber);
   --ds-warning-foreground: #1a1210;
-  --ds-destructive: #b23a24;
-  --ds-destructive-foreground: #fff8f0;
+  --ds-destructive: #ff8f8f;
+  --ds-destructive-foreground: #1a1210;
 
   --ds-ring: var(--ds-brand-coral);
 
@@ -93,6 +93,7 @@ html.light {
   --ds-info-foreground: #f6fbff;
   --ds-warning: #9a5c12;
   --ds-warning-foreground: #fff7ed;
+  --ds-destructive: #b23a24;
   --ds-destructive-foreground: #fff8f0;
 
   --ds-ring: #c9452a;

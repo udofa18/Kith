@@ -3,8 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { auth, db, handleFirestoreError, OperationType } from '../firebase';
 import { collection, query, orderBy, onSnapshot, addDoc, serverTimestamp, doc, updateDoc, increment, getDocs, writeBatch, setDoc, where, deleteDoc, limit, startAfter, endBefore, limitToLast, getDoc, Timestamp, arrayUnion } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { storage } from '../firebase';
+import { ref, uploadBytes, getDownloadURL } from '../lib/storage';
 import CreatePollModal from './CreatePollModal';
 import { ArrowDown, MoreHorizontal, Send, Image as ImageIcon, Code as CodeIcon, Paperclip, Smile, MessageSquare, Settings, Snowflake, Megaphone, Hash, MoreVertical, Edit2, Trash2, X, Check, Reply, ExternalLink, Plus, ChevronUp, Zap, Heart, ThumbsUp, PartyPopper, FileText, Video, Music, Download, Play, Film, Sparkles, Lock, Flag, Cpu, Pin, BarChart2, Copy, Globe, Twitter, Github, Linkedin, Info, Gift, ChevronRight } from 'lucide-react';
 import PostCard from './PostCard';
@@ -133,7 +132,7 @@ export default function ChannelView({
     setUploading(true);
     try {
       const uploaded = await Promise.all(files.map(async file => {
-        const storageRef = ref(storage, `channels/${communityId}/${channel.id}/${auth.currentUser!.uid}/${Date.now()}-${file.name.replace(/[^\w.-]/g, '_')}`);
+        const storageRef = ref(null, `channels/${communityId}/${channel.id}/${auth.currentUser!.uid}/${Date.now()}-${file.name.replace(/[^\w.-]/g, '_')}`);
         const snapshot = await uploadBytes(storageRef, file, { contentType: file.type });
         return { name: file.name, url: await getDownloadURL(snapshot.ref), type: file.type, size: file.size };
       }));

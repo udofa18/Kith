@@ -41,7 +41,7 @@ export default function CommunityMembers({ communityId, members, roles, now }: P
     return () => document.removeEventListener('mousedown', close);
   }, [menu]);
 
-  const isOnline = (m: any) => presenceLabel(m.user?.lastActiveAt, now) === 'Active now';
+  const isOnline = (m: any) => presenceLabel(m.user?.lastActiveAt, now, m.user) === 'Active now';
 
   const list = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -102,7 +102,7 @@ export default function CommunityMembers({ communityId, members, roles, now }: P
           const canModerate = outranked && (me.can('moderate_chat') || me.can('manage_members'));
           const canChangeRank = me.isOwner && m.role !== 'owner' && m.id !== auth.currentUser?.uid;
           const timedOut = (m.timeoutUntil?.toMillis?.() ?? 0) > now;
-          const presence = presenceLabel(m.user?.lastActiveAt, now);
+          const presence = presenceLabel(m.user?.lastActiveAt, now, m.user);
           return (
             <li key={m.id} className="flex items-center gap-3 px-4 py-3">
               <UserHoverCard userId={m.id}>

@@ -140,6 +140,10 @@ export default function DesignSystemPage() {
     document.documentElement.style.colorScheme = next ? 'light' : 'dark';
   };
 
+  const jump = (id: string) => {
+    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
   return (
     <div className="min-h-full bg-background pb-16 text-foreground">
       <div className="mx-auto max-w-5xl px-4 pt-6 sm:px-6 lg:px-8">
@@ -148,10 +152,10 @@ export default function DesignSystemPage() {
           <div className="pointer-events-none absolute -right-14 -top-16 h-52 w-52 rounded-full bg-[radial-gradient(circle,rgba(255,107,74,0.28),transparent_68%)] blur-2xl" />
           <div className="pointer-events-none absolute -bottom-20 -left-14 h-52 w-52 rounded-full bg-[radial-gradient(circle,rgba(182,156,255,0.2),transparent_70%)] blur-2xl" />
 
-          <div className="relative flex flex-wrap items-start justify-between gap-6">
+          <div className="relative flex flex-col-reverse gap-6 sm:flex-row sm:items-start sm:justify-between">
             <div className="max-w-[54ch]">
-              <div className="flex items-center gap-2">
-                <Badge variant="primary" dot>
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant="primary" dot className="whitespace-nowrap">
                   Living system
                 </Badge>
                 <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-faint">
@@ -169,17 +173,21 @@ export default function DesignSystemPage() {
                 studio.
               </p>
               <div className="mt-5 flex flex-wrap gap-2">
-                <Button leftIcon={<Palette size={16} />} onClick={() => {}}>
+                <Button leftIcon={<Palette size={16} />} onClick={() => jump('color')}>
                   Start with tokens
                 </Button>
-                <Button variant="outline" leftIcon={<Compass size={16} />} onClick={() => {}}>
+                <Button
+                  variant="outline"
+                  leftIcon={<Compass size={16} />}
+                  onClick={() => jump('components')}
+                >
                   Explore components
                 </Button>
               </div>
             </div>
 
-            <div className="flex items-center gap-4">
-              <KithStamp className="h-20 w-20 sm:h-24 sm:w-24" />
+            <div className="flex items-center justify-between gap-4 sm:justify-end">
+              <KithStamp className="h-16 w-16 sm:h-24 sm:w-24" />
               <Button
                 variant="outline"
                 size="icon"

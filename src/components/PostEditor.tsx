@@ -1,10 +1,10 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import axios from 'axios';
-import { auth, db, storage, handleFirestoreError, OperationType } from '../firebase';
+import { auth, db, handleFirestoreError, OperationType } from '../firebase';
 import { collection, addDoc, serverTimestamp, doc, updateDoc, increment, getDoc, getDocs, writeBatch, setDoc, onSnapshot, query, orderBy } from 'firebase/firestore';
-import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
+import { ref, uploadBytesResumable, getDownloadURL } from '../lib/storage';
 import { motion, AnimatePresence } from 'motion/react';
-import { Code, Image as ImageIcon, Link as LinkIcon, Send, Sparkles, X, BarChart2, Film, Plus, Smile, Hash, Repeat, TrendingUp, MessageCircleQuestion, PenLine } from 'lucide-react';
+import { Code, Globe, Image as ImageIcon, Link as LinkIcon, Lock, Send, Sparkles, X, BarChart2, Film, Plus, Smile, Hash, Repeat, TrendingUp, MessageCircleQuestion, PenLine } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { atomDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -42,6 +42,11 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
   const currentUserProfile = useCurrentUser();
   // Progress updates and feedback requests are feed features; community channels only post plain messages.
   const canChooseKind = !communityId && !quotedPostId;
+  const preferredVisibility = currentUserProfile?.settings?.audience?.posts === 'followers' ? 'followers' : 'public';
+  const [visibility, setVisibility] = useState<'public' | 'followers'>(preferredVisibility);
+  useEffect(() => {
+    if (!communityId) setVisibility(preferredVisibility);
+  }, [preferredVisibility, communityId]);
   const [kind, setKind] = useState<PostKind>(initialKind ?? 'post');
   const [project, setProject] = useState('');
   useEffect(() => { if (initialKind) setKind(initialKind); }, [initialKind]);
@@ -158,7 +163,7 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
       // Upload media
       const uploadedMedia = [];
       for (const media of mediaFiles) {
-        const storageRef = ref(storage, `posts/${auth.currentUser.uid}/${Date.now()}_${media.file.name}`);
+        const storageRef = ref(null, `posts/${auth.currentUser.uid}/${Date.now()}_${media.file.name}`);
         const uploadTask = await uploadBytesResumable(storageRef, media.file);
         const url = await getDownloadURL(uploadTask.ref);
         uploadedMedia.push({ type: media.type, url });
@@ -184,7 +189,7 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
         xpValue: 10,
         communityId: communityId || null,
         channelId: channelId || null,
-        visibility: communityId ? 'community' : 'public',
+        visibility: communityId ? 'community' : visibility,
         createdAt: serverTimestamp(),
         type: quotedPostId ? 'quote' : (showPoll ? 'poll' : 'post'),
         originalPostId: quotedPostId || null
@@ -446,6 +451,30 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
                   }`}
                 >
                   <k.icon size={13} /> {k.label}
+                </button>
+              ))}
+            </div>
+          )}
+          {!communityId && (
+            <div className="flex items-center gap-1.5" role="radiogroup" aria-label="Post audience">
+              {[
+                { value: 'public' as const, label: 'Public', hint: 'Anyone can see this post', icon: Globe },
+                { value: 'followers' as const, label: 'Followers', hint: 'Only people who follow you', icon: Lock },
+              ].map(({ value, label, hint, icon: Icon }) => (
+                <button
+                  key={value}
+                  type="button"
+                  role="radio"
+                  aria-checked={visibility === value}
+                  title={hint}
+                  onClick={() => setVisibility(value)}
+                  className={`flex items-center gap-1.5 rounded-pill border px-2.5 py-1 text-[11px] font-semibold transition-colors ${
+                    visibility === value
+                      ? 'border-primary/35 bg-primary/10 text-primary'
+                      : 'border-black/10 text-black/50 hover:text-black dark:border-white/10 dark:text-white/50 dark:hover:text-white'
+                  }`}
+                >
+                  <Icon size={11} /> {label}
                 </button>
               ))}
             </div>

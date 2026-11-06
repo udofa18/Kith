@@ -3,10 +3,13 @@ import { heartbeat } from './api';
 
 const INTERVAL_MS = 2 * 60_000;
 
-/** Keeps `users/{uid}.lastActiveAt` fresh while the app is open and visible ("Active now"). */
-export function usePresence(uid: string | null | undefined) {
+/**
+ * Keeps `users/{uid}.lastActiveAt` fresh while the app is open and visible
+ * ("Active now"). Pass `enabled = false` when the member has turned presence off.
+ */
+export function usePresence(uid: string | null | undefined, enabled = true) {
   useEffect(() => {
-    if (!uid) return;
+    if (!uid || !enabled) return;
     let last = 0;
     const beat = () => {
       if (document.visibilityState !== 'visible' || Date.now() - last < INTERVAL_MS / 2) return;
@@ -20,5 +23,5 @@ export function usePresence(uid: string | null | undefined) {
       clearInterval(timer);
       document.removeEventListener('visibilitychange', beat);
     };
-  }, [uid]);
+  }, [uid, enabled]);
 }

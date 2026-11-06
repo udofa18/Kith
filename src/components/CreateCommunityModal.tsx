@@ -3,10 +3,10 @@ import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { collection, doc, serverTimestamp, setDoc, addDoc } from 'firebase/firestore';
-import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
+import { getDownloadURL, ref, uploadBytes } from '../lib/storage';
 import { ArrowLeft, Camera, Globe, ImagePlus, Lock, ShieldCheck, X } from 'lucide-react';
 import { toast } from 'react-hot-toast';
-import { auth, db, storage, handleFirestoreError, OperationType } from '../firebase';
+import { auth, db, handleFirestoreError, OperationType } from '../firebase';
 import { queryKeys } from '../lib/queryClient';
 import { COMMUNITY_CATEGORIES } from '../lib/communityCategories';
 import { feeFields, validateFee, type CommunityFee } from '../lib/communityPricing';
@@ -44,7 +44,7 @@ function useObjectUrl(file: File | null) {
 }
 
 async function upload(uid: string, file: File, kind: 'icon' | 'cover') {
-  const r = ref(storage, `communities/${uid}/${Date.now()}_${kind}_${file.name.replace(/[^\w.-]/g, '_')}`);
+  const r = ref(null, `communities/${uid}/${Date.now()}_${kind}_${file.name.replace(/[^\w.-]/g, '_')}`);
   await uploadBytes(r, file, { contentType: file.type });
   return getDownloadURL(r);
 }

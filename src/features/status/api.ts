@@ -9,8 +9,8 @@ import {
   addDoc, collection, deleteDoc, doc, getDoc, getDocs, limit, orderBy, query, serverTimestamp,
   setDoc, Timestamp, updateDoc, where,
 } from 'firebase/firestore';
-import { getDownloadURL, ref, uploadBytesResumable } from 'firebase/storage';
-import { db, storage } from '../../firebase';
+import { getDownloadURL, ref, uploadBytesResumable } from '../../lib/storage';
+import { db } from '../../firebase';
 
 export const STATUS_TTL_MS = 24 * 60 * 60 * 1000;
 export const STATUS_TEXT_MAX = 700;
@@ -98,20 +98,24 @@ export async function fetchStatusTray(uid: string, followingIds: Set<string>): P
 
 const latest = (g: StatusGroup) => Math.max(...g.items.map(s => s.createdAt.getTime()));
 
-export async function createStatus(author: Author, input: { file?: File; text?: string; background?: string }) {
+export async function createStatus(
+  author: Author,
+  input: { file?: File; text?: string; background?: string; audience?: 'followers' | 'only-me' },
+) {
   const expiresAt = Timestamp.fromMillis(Date.now() + STATUS_TTL_MS);
   const data: Record<string, unknown> = {
     authorUid: author.uid,
     authorName: author.name,
     authorUsername: author.username,
     authorPhoto: author.photo,
+    audience: input.audience === 'only-me' ? 'only-me' : 'followers',
     createdAt: serverTimestamp(),
     expiresAt,
   };
 
   if (input.file) {
     const path = `statuses/${author.uid}/${Date.now()}_${input.file.name.replace(/[^\w.-]/g, '_')}`;
-    const task = await uploadBytesResumable(ref(storage, path), input.file);
+    const task = await uploadBytesResumable(ref(null, path), input.file);
     data.type = input.file.type.startsWith('video/') ? 'video' : 'image';
     data.mediaUrl = await getDownloadURL(task.ref);
     if (input.text?.trim()) data.text = input.text.trim().slice(0, STATUS_TEXT_MAX);

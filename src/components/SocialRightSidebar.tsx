@@ -14,7 +14,7 @@ import { RailSkeleton } from './SocialLeftSidebar';
 export default function SocialRightSidebar() {
   const user = useCurrentUser();
   return (
-    <aside className="hidden xl:flex flex-col gap-4 w-80 shrink-0 order-3 sticky top-0 self-start max-h-screen overflow-y-auto no-scrollbar py-4">
+    <aside className="app-secondary-rail hidden xl:flex flex-col gap-4 w-80 shrink-0 order-3 sticky top-0 self-start max-h-screen overflow-y-auto no-scrollbar py-4">
       {user && <StreakCard streak={user.streak} />}
       <UpcomingEvents />
       <Challenges />

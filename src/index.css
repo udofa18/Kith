@@ -86,7 +86,7 @@
 }
 
 .tiptap p.is-editor-empty:first-child::before {
-  color: rgba(255, 255, 255, 0.4);
+  color: var(--ds-faint);
   content: attr(data-placeholder);
   float: left;
   height: 0;
@@ -168,6 +168,15 @@
   scrollbar-width: none;
 }
 
+/* A dialog freezes both the body and the app's inner scroll region. */
+body.ds-dialog-open {
+  overflow: hidden;
+}
+
+body.ds-dialog-open .custom-scrollbar {
+  overflow: hidden !important;
+}
+
 .custom-scrollbar {
   scrollbar-width: thin;
   scrollbar-color: rgba(120, 120, 120, 0.2) transparent;
@@ -235,6 +244,10 @@ html.light .bg-gradient-to-r .text-white\/60 { color: rgba(255, 255, 255, 0.6) !
 html.light .text-white { color: #211a28 !important; }
 html.light .hover\:text-white:hover { color: #211a28 !important; }
 /* Primary is a warm coral: its label is ink in dark mode and cream in light mode. */
+.bg-primary {
+  color: var(--ds-primary-foreground);
+}
+
 html.light .bg-primary .text-white,
 html.light .bg-primary.hover\:text-white:hover,
 html.light .text-white.bg-primary,
@@ -663,4 +676,140 @@ html.light .auth-page .hover\:text-white:hover {
   .landing-pulse-dot {
     animation: none !important;
   }
+}
+
+/* --------------------------------------------------------------------------
+   Journal reader
+   Long-form typography gets a little more air and one editorial flourish
+   (the drop cap) without changing the design-system prose defaults.
+   -------------------------------------------------------------------------- */
+
+.article-body :where(h2, h3) {
+  scroll-margin-top: 84px;
+}
+
+.article-body h2 {
+  margin-top: 2.1em;
+}
+
+.article-body h3 {
+  margin-top: 1.7em;
+}
+
+.article-body p {
+  text-wrap: pretty;
+}
+
+.article-body :where(blockquote) {
+  border-radius: 0 var(--ds-radius-md) var(--ds-radius-md) 0;
+}
+
+.article-body :where(code) {
+  font-family: var(--font-mono);
+}
+
+.article-body :where(pre code) {
+  background: transparent;
+  padding: 0;
+}
+
+.article-body :where(figure) {
+  margin: 2rem 0;
+}
+
+.article-body :where(figcaption) {
+  margin-top: 0.5rem;
+  text-align: center;
+  font-size: 0.75rem;
+  color: var(--ds-faint);
+}
+
+.article-body :where(hr) {
+  border-color: var(--ds-border);
+}
+
+.article-body :where(table) {
+  font-size: 0.9em;
+}
+
+.article-body :where(iframe) {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 1px solid var(--ds-border);
+  border-radius: var(--ds-radius-lg);
+}
+
+@media (min-width: 768px) {
+  .article-body > p:first-child::first-letter {
+    float: left;
+    padding-top: 0.08em;
+    padding-right: 0.12em;
+    font-family: var(--font-serif);
+    font-size: 4.35em;
+    line-height: 0.78;
+    color: var(--ds-primary);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Member appearance preferences
+   `applyAppearance()` writes these data attributes on <html>. The defaults are
+   intentionally quiet: nothing changes until someone opts in.
+   -------------------------------------------------------------------------- */
+
+html[data-contrast='high'] {
+  --ds-muted-foreground: color-mix(in oklab, var(--ds-foreground) 82%, transparent);
+  --ds-faint: color-mix(in oklab, var(--ds-foreground) 64%, transparent);
+  --ds-border: color-mix(in oklab, var(--ds-foreground) 22%, transparent);
+  --ds-border-strong: color-mix(in oklab, var(--ds-foreground) 34%, transparent);
+}
+
+html[data-density='compact'] {
+  --spacing: 0.21875rem;
+}
+
+html[data-readable-font='true'] body {
+  font-family: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: 0.012em;
+  word-spacing: 0.04em;
+}
+
+html[data-readable-font='true'] :where(p, li, blockquote) {
+  line-height: 1.75;
+}
+
+html[data-color-blind-safe='true'] {
+  --ds-success: var(--ds-brand-sky);
+  --ds-success-foreground: #10222a;
+  --ds-destructive: #d97706;
+  --ds-destructive-foreground: #fff8f0;
+}
+
+html[data-color-blind-safe='true'] .text-success::before,
+html[data-color-blind-safe='true'] .text-destructive::before {
+  content: '●';
+  margin-right: 0.3em;
+  font-size: 0.7em;
+}
+
+html[data-reduce-motion='true'] *,
+html[data-reduce-motion='true'] *::before,
+html[data-reduce-motion='true'] *::after {
+  scroll-behavior: auto !important;
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+}
+
+/* Focus mode quiets the activity rail without removing it. The main sidebar,
+   mobile nav and feed rails stay available; the rail returns to full strength
+   on hover. */
+html[data-focus-mode='true'] .app-secondary-rail {
+  opacity: 0.55;
+  transition: opacity 0.2s ease;
+}
+
+html[data-focus-mode='true'] .app-secondary-rail:hover,
+html[data-focus-mode='true'] .app-secondary-rail:focus-within {
+  opacity: 1;
 }

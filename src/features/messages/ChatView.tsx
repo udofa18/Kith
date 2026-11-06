@@ -6,6 +6,7 @@ import { ArrowDown, ArrowLeft, Ban, Info, MoreHorizontal, Phone, Pin, PinOff, Us
 import { toast } from 'react-hot-toast';
 import { db } from '../../firebase';
 import { useCall } from '../../contexts/CallContext';
+import { useCurrentUser } from '../../contexts/CurrentUserContext';
 import { playNotificationSound } from '../../lib/sounds';
 import {
   getConversationStatus, isConversationAccepted, isFavourited, isIncomingRequest, isOutgoingRequest, unreadFor,
@@ -38,6 +39,9 @@ export default function ChatView({ me, conv, exists, onBack, onClosed, showDetai
   onMessagesChange?: (messages: Message[]) => void;
 }) {
   const { initiateCall } = useCall();
+  const viewer = useCurrentUser();
+  const readReceipts = viewer?.settings?.messaging?.readReceipts !== false;
+  const typingIndicators = viewer?.settings?.messaging?.typingIndicators !== false;
   const otherId = conv.participants.find(p => p !== me.uid) ?? me.uid;
   const [other, setOther] = useState<any>(conv.otherUser);
   const [latest, setLatest] = useState<Message[]>([]);
@@ -101,14 +105,14 @@ export default function ChatView({ me, conv, exists, onBack, onClosed, showDetai
     if (!exists || incoming || !loaded) return;
     const lastFromOther = [...messages].reverse().find(m => m.senderId !== me.uid);
     if (!lastFromOther && !unreadFor(conv, me.uid)) return;
-    if (document.visibilityState === 'visible') markRead(conv.id, me.uid);
-  }, [messages.length, exists, incoming, loaded, conv.id]);
+    if (document.visibilityState === 'visible') markRead(conv.id, me.uid, readReceipts);
+  }, [messages.length, exists, incoming, loaded, conv.id, readReceipts]);
 
   useEffect(() => {
-    const onVisible = () => { if (document.visibilityState === 'visible' && exists && !incoming) markRead(conv.id, me.uid); };
+    const onVisible = () => { if (document.visibilityState === 'visible' && exists && !incoming) markRead(conv.id, me.uid, readReceipts); };
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
-  }, [conv.id, exists, incoming]);
+  }, [conv.id, exists, incoming, readReceipts]);
 
   // Stop the typing signal when leaving the chat.
   useEffect(() => () => stopTyping(conv.id, me.uid), [conv.id]);
@@ -183,7 +187,7 @@ export default function ChatView({ me, conv, exists, onBack, onClosed, showDetai
   const name = nameOf(other);
   const first = name.split(' ')[0];
   const typing = isTyping(conv, otherId, now);
-  const presence = presenceLabel(other?.lastActiveAt, now);
+  const presence = presenceLabel(other?.lastActiveAt, now, other);
   const pinned = isFavourited(conv, me.uid);
 
   const mutedByOther = !!conv.mutedBy?.includes(otherId);
@@ -347,7 +351,7 @@ export default function ChatView({ me, conv, exists, onBack, onClosed, showDetai
           <div className="mt-3 grid grid-cols-3 gap-2 max-w-sm mx-auto">
             <button onClick={() => setConfirmBlock(true)} className="py-2 rounded-full border border-black/15 dark:border-white/20 text-sm font-semibold text-red-500 hover:bg-red-500/5">Block</button>
             <button onClick={() => respondToRequest(conv.id, false).then(onClosed).catch(() => toast.error('Something went wrong'))} className="py-2 rounded-full border border-black/15 dark:border-white/20 text-sm font-semibold hover:bg-black/5 dark:hover:bg-white/10">Delete</button>
-            <button onClick={() => respondToRequest(conv.id, true).then(() => markRead(conv.id, me.uid)).catch(() => toast.error('Something went wrong'))} className="py-2 rounded-full bg-primary text-white text-sm font-semibold hover:bg-primary/90">Accept</button>
+            <button onClick={() => respondToRequest(conv.id, true).then(() => markRead(conv.id, me.uid, readReceipts)).catch(() => toast.error('Something went wrong'))} className="py-2 rounded-full bg-primary text-white text-sm font-semibold hover:bg-primary/90">Accept</button>
           </div>
         </div>
       ) : waiting ? (
@@ -374,7 +378,7 @@ export default function ChatView({ me, conv, exists, onBack, onClosed, showDetai
             onSendFile={sendFile}
             onSaveEdit={text => editMessage(conv.id, editing!.id, text).then(() => setEditing(null)).catch(() => toast.error("Couldn't edit"))}
             onGift={amount => sendGift(conv.id, me, otherId, amount)}
-            onTyping={() => exists && signalTyping(conv.id, me.uid)}
+            onTyping={() => exists && typingIndicators && signalTyping(conv.id, me.uid)}
           />
         </>
       ) : null}

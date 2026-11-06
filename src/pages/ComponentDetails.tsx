@@ -42,6 +42,9 @@ import {
 import ReactMarkdown from 'react-markdown';
 import { formatDistanceToNow } from 'date-fns';
 import VerifiedBadge from '../components/VerifiedBadge';
+import BuyButton from '../components/marketplace/BuyButton';
+import { downloadProduct, formatPrice } from '../lib/payments';
+import { supabase } from '../supabase';
 
 export default function ComponentDetails() {
   const { id } = useParams();
@@ -54,7 +57,6 @@ export default function ComponentDetails() {
   const [submittingComment, setSubmittingComment] = useState(false);
   const [relatedProducts, setRelatedProducts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [buying, setBuying] = useState(false);
   const [hasPurchased, setHasPurchased] = useState(false);
   const [openFaq, setOpenFaq] = useState<number | null>(null);
 
@@ -101,15 +103,16 @@ export default function ComponentDetails() {
     };
 
     const checkPurchase = async () => {
-      if (!auth.currentUser || !id) return;
+      if (!auth.currentUser || !id || !supabase) return;
       try {
-        const q = query(
-          collection(db, 'purchases'),
-          where('buyerUid', '==', auth.currentUser.uid),
-          where('productId', '==', id)
-        );
-        const snap = await getDocs(q);
-        setHasPurchased(!snap.empty);
+        const { data, error } = await supabase
+          .from('purchases')
+          .select('id')
+          .eq('product_id', id)
+          .eq('status', 'completed')
+          .maybeSingle();
+        if (error) throw error;
+        setHasPurchased(!!data);
       } catch (e) {
         console.error("Error checking purchase", e);
       }
@@ -138,22 +141,6 @@ export default function ComponentDetails() {
       unsubscribeComments();
     };
   }, [id]);
-
-  const handleBuy = async () => {
-    if (!auth.currentUser) {
-      toast.error('Please login to purchase');
-      return;
-    }
-    setBuying(true);
-    try {
-      const simulatedSessionId = `cs_test_${Math.random().toString(36).substring(2, 15)}`;
-      window.location.href = `/success?session_id=${simulatedSessionId}&productId=${id}`;
-    } catch (error) {
-      console.error('Purchase error:', error);
-    } finally {
-      setBuying(false);
-    }
-  };
 
   const handlePostComment = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -450,26 +437,20 @@ export default function ComponentDetails() {
                       <span className="text-xs font-bold text-black/40 dark:text-white/40 uppercase tracking-widest">{product.productType}</span>
                    </div>
                    <div className="text-3xl font-bold text-teal-500">
-                     ${product.price}
+                     {Number(product.price) > 0 ? formatPrice(Math.round(Number(product.price) * 100), product.currency || 'USD') : 'Free'}
                    </div>
                 </div>
 
                 <div className="space-y-4">
                    {canDownload ? (
                       <button 
-                        onClick={() => window.open(product.fileUrl, '_blank')}
+                        onClick={() => downloadProduct(id!).catch(e => toast.error(e instanceof Error ? e.message : 'Download failed'))}
                         className="w-full py-4 bg-teal-500 hover:bg-teal-600 text-white rounded-2xl font-bold text-sm flex items-center justify-center gap-3 hover:scale-[1.02] transition-all shadow-lg"
                       >
                         <Download size={18} /> Download Asset
                       </button>
                    ) : (
-                      <button 
-                        onClick={handleBuy}
-                        disabled={buying}
-                        className="w-full py-4 bg-black dark:bg-white text-white dark:text-black rounded-2xl font-bold text-sm flex items-center justify-center gap-3 hover:scale-[1.02] transition-all shadow-lg disabled:opacity-50"
-                      >
-                        {buying ? 'Processing...' : 'Buy Now'}
-                      </button>
+                      <BuyButton kind="product" targetId={id!} label={Number(product.price) > 0 ? 'Buy Now' : 'Get for free'} />
                    )}
                    
                    <div className="grid grid-cols-2 gap-3">
@@ -485,7 +466,7 @@ export default function ComponentDetails() {
                 <ul className="space-y-3 pt-6 border-t border-black/5 dark:border-white/5">
                    <li className="flex items-center gap-3 text-xs opacity-60 font-medium">
                       <CheckCircle2 size={14} className="text-teal-500" />
-                      Secure payment via Stripe
+                      Secure payment via Paystack
                    </li>
                    <li className="flex items-center gap-3 text-xs opacity-60 font-medium">
                       <CheckCircle2 size={14} className="text-teal-500" />

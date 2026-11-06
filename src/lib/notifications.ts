@@ -1,5 +1,5 @@
 import { db } from '../firebase';
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, doc, getDoc, serverTimestamp } from 'firebase/firestore';
 
 export type NotificationType = 
   | 'like' | 'comment' | 'mention' | 'message' | 'message_request' | 'xp_gift' | 'challenge' | 'channel_mention' 
@@ -47,6 +47,32 @@ export async function createNotification({
     else if (['purchase'].includes(type)) finalCategory = 'marketplace';
     else if (['payout', 'xp_gift', 'wallet'].includes(type)) finalCategory = 'earnings';
     else if (['event_invite', 'event_reminder'].includes(type)) finalCategory = 'events';
+  }
+
+  // Respect the recipient's notification matrix before writing anything. This is
+  // best-effort in the client; the rules remain the security boundary.
+  try {
+    const settingsCategory =
+      type === 'message' || type === 'message_request'
+        ? 'messages'
+        : type === 'challenge'
+          ? 'challenges'
+          : type === 'xp_gift'
+            ? 'rewards'
+            : type === 'channel_mention'
+              ? 'communities'
+              : ['event_invite', 'event_reminder'].includes(type)
+                ? 'events'
+                : ['purchase', 'payout', 'wallet'].includes(type)
+                  ? 'marketplace'
+                  : ['like', 'comment', 'mention', 'repost', 'quote', 'new_post'].includes(type)
+                    ? 'social'
+                    : 'platform';
+    const recipient = await getDoc(doc(db, 'users', recipientId)).catch(() => null);
+    const matrix = recipient?.data()?.settings?.notifications?.matrix;
+    if (matrix?.[settingsCategory]?.inApp === false) return;
+  } catch {
+    /* never block the action that produced the notification */
   }
 
     try {

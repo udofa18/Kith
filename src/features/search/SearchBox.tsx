@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Clock, Hash, Search } from 'lucide-react';
 import Avatar from '../../components/ui/Avatar';
 import VerifiedBadge from '../../components/VerifiedBadge';
+import { useCurrentUser } from '../../contexts/CurrentUserContext';
 import { addRecentSearch, clearRecentSearches, getRecentSearches, searchPeople, searchTopics } from './api';
 
 type Option =
@@ -25,6 +26,8 @@ function useDebounced<T>(value: T, ms: number) {
 export default function SearchBox({ autoFocus = false }: { autoFocus?: boolean }) {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
+  const user = useCurrentUser();
+  const historyEnabled = user?.settings?.data?.searchHistory !== false;
   const listId = useId();
   const rootRef = useRef<HTMLFormElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -75,7 +78,7 @@ export default function SearchBox({ autoFocus = false }: { autoFocus?: boolean }
     switch (option.kind) {
       case 'query':
       case 'recent':
-        addRecentSearch(option.label);
+        if (historyEnabled) addRecentSearch(option.label);
         setValue(option.label);
         navigate(`/feed?search=${encodeURIComponent(option.label)}`);
         break;
@@ -116,7 +119,7 @@ export default function SearchBox({ autoFocus = false }: { autoFocus?: boolean }
         value={value}
         autoFocus={autoFocus}
         onChange={e => { setValue(e.target.value); setOpen(true); }}
-        onFocus={() => { setRecent(getRecentSearches()); setOpen(true); }}
+        onFocus={() => { setRecent(historyEnabled ? getRecentSearches() : []); setOpen(true); }}
         onKeyDown={onKeyDown}
         placeholder="Search posts, people, topics"
         aria-label="Search"

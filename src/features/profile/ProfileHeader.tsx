@@ -8,10 +8,12 @@ import {
 import { toast } from 'react-hot-toast';
 import { db } from '../../firebase';
 import Avatar from '../../components/ui/Avatar';
+import { useLiveStatus } from '../../contexts/LiveStatusContext';
 import VerifiedBadge from '../../components/VerifiedBadge';
 import { activeStreak } from '../shiplog/streak';
 import { fetchUserStatuses, isSeen, type StatusGroup } from '../status/api';
 import StatusViewer from '../status/StatusViewer';
+import { canMessageTarget } from '../settings/preferences';
 import { displayName, photoOf, toDate, uploadBanner, type Profile, type Relationship } from './api';
 import FollowButton from './FollowButton';
 import FollowListDialog, { type FollowListKind } from './FollowListDialog';
@@ -41,6 +43,22 @@ export default function ProfileHeader({ profile, relationship, me, myFollowing }
   const { id, data: u } = profile;
   const isMe = me === id;
   const name = displayName(u);
+  const liveEvent = useLiveStatus().liveFor(id);
+  const viewerFollows = Boolean(relationship?.youFollow);
+  const followsViewer = Boolean(relationship?.followsYou);
+  const audienceAllowed = (audience: string | undefined) =>
+    isMe ||
+    !audience ||
+    audience === 'everyone' ||
+    (audience === 'followers' && viewerFollows) ||
+    (audience === 'mutuals' && viewerFollows && followsViewer);
+  const canSeeFollowers = audienceAllowed(u.settings?.profile?.showFollowers);
+  const canSeeFollowing = audienceAllowed(u.settings?.profile?.showFollowing);
+  const canMessage = canMessageTarget(u, { viewerFollows, viewerIsFollowed: followsViewer });
+  const showcase = u.settings?.profile?.showShowcase;
+  const showXp = showcase?.xp !== false;
+  const showStreak = showcase?.streak !== false;
+  const availableForWork = Boolean(u.settings?.profile?.availableForWork ?? u.availableForWork);
   const [list, setList] = useState<FollowListKind | null>(null);
   const [followDelta, setFollowDelta] = useState(0);
   const [banner, setBanner] = useState<string | null>(null);
@@ -169,7 +187,9 @@ export default function ProfileHeader({ profile, relationship, me, myFollowing }
               <>
                 {me && (
                   <>
-                    <button onClick={() => navigate(`/feed?view=messages&userId=${id}`)} aria-label="Message" title="Message" className={iconBtn}><MessageCircle size={17} /></button>
+                    {canMessage && (
+                      <button onClick={() => navigate(`/feed?view=messages&userId=${id}`)} aria-label="Message" title="Message" className={iconBtn}><MessageCircle size={17} /></button>
+                    )}
                     <button
                       onClick={toggleNotifications}
                       aria-label={notificationsOn ? 'Turn off post notifications' : 'Get notified when they post'}
@@ -203,8 +223,18 @@ export default function ProfileHeader({ profile, relationship, me, myFollowing }
             {relationship?.followsYou && (
               <span className="px-1.5 py-0.5 rounded bg-black/5 dark:bg-white/10 text-xs font-medium text-black/60 dark:text-white/60">Follows you</span>
             )}
+            {liveEvent && (
+              <Link
+                to={`/live/${liveEvent.id}`}
+                className="inline-flex items-center gap-1.5 rounded-full bg-red-500 px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-[0.12em] text-white shadow-sm"
+              >
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white" />
+                Live now
+              </Link>
+            )}
             {u.accountType === 'brand' && <span className="px-2 py-0.5 rounded-full bg-primary/10 text-primary text-xs font-medium">Brand</span>}
             {u.userType === 'creator' && <span className="px-2 py-0.5 rounded-full bg-primary/10 text-primary text-xs font-medium">Creator</span>}
+            {availableForWork && <span className="px-2 py-0.5 rounded-full bg-success/12 text-xs font-medium text-success">Available for work</span>}
           </div>
         </div>
 
@@ -232,20 +262,26 @@ export default function ProfileHeader({ profile, relationship, me, myFollowing }
 
         {/* Counts */}
         <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
-          <button onClick={() => setList('following')} className="hover:underline">
-            <span className="font-semibold">{compact(relationship?.following ?? 0)}</span> <span className="text-black/55 dark:text-white/55">Following</span>
-          </button>
-          <button onClick={() => setList('followers')} className="hover:underline">
-            <span className="font-semibold">{compact(followers)}</span> <span className="text-black/55 dark:text-white/55">{followers === 1 ? 'Follower' : 'Followers'}</span>
-          </button>
-          {streak > 0 && (
+          {canSeeFollowing && (
+            <button onClick={() => setList('following')} className="hover:underline">
+              <span className="font-semibold">{compact(relationship?.following ?? 0)}</span> <span className="text-black/55 dark:text-white/55">Following</span>
+            </button>
+          )}
+          {canSeeFollowers && (
+            <button onClick={() => setList('followers')} className="hover:underline">
+              <span className="font-semibold">{compact(followers)}</span> <span className="text-black/55 dark:text-white/55">{followers === 1 ? 'Follower' : 'Followers'}</span>
+            </button>
+          )}
+          {showStreak && streak > 0 && (
             <span className="flex items-center gap-1 text-orange-500" title="Days in a row with a progress update">
               <Flame size={15} /><span className="font-semibold">{streak}</span><span className="text-black/55 dark:text-white/55">day streak</span>
             </span>
           )}
-          <span className="flex items-center gap-1" title="Earned by posting and helping others">
-            <Zap size={15} className="text-amber-500" /><span className="font-semibold">{compact(u.xp || 0)}</span><span className="text-black/55 dark:text-white/55">XP</span>
-          </span>
+          {showXp && (
+            <span className="flex items-center gap-1" title="Earned by posting and helping others">
+              <Zap size={15} className="text-amber-500" /><span className="font-semibold">{compact(u.xp || 0)}</span><span className="text-black/55 dark:text-white/55">XP</span>
+            </span>
+          )}
         </div>
 
         {relationship && relationship.mutualCount > 0 && (

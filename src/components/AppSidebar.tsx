@@ -41,6 +41,7 @@ import VerifiedBadge from './VerifiedBadge';
 import { avatarFor, levelFor } from '../lib/profile';
 import { useKithNavData } from '../hooks/useKithNavData';
 import { useKithTheme, type Theme } from '../hooks/useKithTheme';
+import { useLiveStatus } from '../contexts/LiveStatusContext';
 
 const TONES = {
   feed: '#ff6b4a',
@@ -140,6 +141,7 @@ function ProfilePopup({
   const level = levelFor(xp);
   const xpPercent = xp % 100;
   const xpToNext = 100 - xpPercent;
+  const myLiveEvent = useLiveStatus().myLiveEvent;
 
   useEffect(() => {
     const onResize = () => setIsNarrow(window.innerWidth < 640);
@@ -271,9 +273,14 @@ function ProfilePopup({
                     src={avatarFor(user)}
                     alt=""
                     referrerPolicy="no-referrer"
-                    className="h-[46px] w-[46px] rounded-full bg-[#2a2234] object-cover ring-2 ring-[#211a28]"
+                    className={`h-[46px] w-[46px] rounded-full bg-[#2a2234] object-cover ring-2 ${myLiveEvent ? 'ring-red-500' : 'ring-[#211a28]'}`}
                   />
-                  <span className="absolute bottom-0.5 right-0.5 h-3 w-3 rounded-full border-2 border-[#211a28] bg-[#82e6c8]" />
+                  <span className={`absolute bottom-0.5 right-0.5 h-3 w-3 rounded-full border-2 border-[#211a28] ${myLiveEvent ? 'animate-pulse bg-red-500' : 'bg-[#82e6c8]'}`} />
+                  {myLiveEvent && (
+                    <span className="absolute -bottom-2 left-1/2 -translate-x-1/2 rounded-full bg-red-500 px-1.5 py-[1px] text-[7px] font-black uppercase tracking-[0.12em] text-white">
+                      Live
+                    </span>
+                  )}
                 </XpRing>
 
                 <div className="min-w-0 flex-1 pr-5 pt-0.5">
@@ -350,6 +357,22 @@ function ProfilePopup({
                   <ArrowUpRight size={14} />
                 </span>
               </Link>
+
+              {myLiveEvent && (
+                <Link
+                  to={`/live/${myLiveEvent.id}`}
+                  onClick={onClose}
+                  className="group mt-2 flex items-center justify-between rounded-2xl bg-[#ff6b4a] px-4 py-2.5 text-[#1a1210] transition-all hover:bg-[#ff7d61]"
+                >
+                  <span className="flex min-w-0 items-center gap-2 text-[12.5px] font-bold">
+                    <span className="h-2 w-2 animate-pulse rounded-full bg-[#1a1210]" />
+                    <span className="truncate">You're live now</span>
+                  </span>
+                  <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-[#1a1210]/10">
+                    <ArrowUpRight size={13} />
+                  </span>
+                </Link>
+              )}
 
               <div className="mt-2 space-y-0.5">
                 {menuItems.map((item) => (

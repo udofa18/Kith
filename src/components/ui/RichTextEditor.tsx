@@ -8,8 +8,8 @@ import Link from '@tiptap/extension-link';
 import Placeholder from '@tiptap/extension-placeholder';
 import CharacterCount from '@tiptap/extension-character-count';
 import { common, createLowlight } from 'lowlight';
-import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
-import { storage, auth } from '../../firebase';
+import { ref, uploadBytesResumable, getDownloadURL } from '../../lib/storage';
+import { auth } from '../../firebase';
 import { toast } from 'react-hot-toast';
 import { 
   Bold, Italic, List, ListOrdered, Quote, Heading1, 
@@ -23,6 +23,8 @@ const MenuBar = ({ editor }: { editor: any }) => {
   const [showImageInput, setShowImageInput] = useState(false);
   const [showLinkInput, setShowLinkInput] = useState(false);
   const [urlInput, setUrlInput] = useState('');
+  const [imageAlt, setImageAlt] = useState('');
+  const [imageCaption, setImageCaption] = useState('');
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -30,12 +32,20 @@ const MenuBar = ({ editor }: { editor: any }) => {
     return null;
   }
 
-  const handleAddImage = () => {
-    if (urlInput.trim()) {
-      editor.chain().focus().setImage({ src: urlInput }).run();
-    }
+  const insertImage = (src: string) => {
+    editor
+      .chain()
+      .focus()
+      .setImage({ src, alt: imageAlt.trim(), title: imageCaption.trim() })
+      .run();
     setShowImageInput(false);
     setUrlInput('');
+    setImageAlt('');
+    setImageCaption('');
+  };
+
+  const handleAddImage = () => {
+    if (urlInput.trim()) insertImage(urlInput.trim());
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -49,7 +59,7 @@ const MenuBar = ({ editor }: { editor: any }) => {
 
     setUploading(true);
     try {
-      const storageRef = ref(storage, `editor/${auth.currentUser.uid}/${Date.now()}_${file.name}`);
+      const storageRef = ref(null, `editor/${auth.currentUser.uid}/${Date.now()}_${file.name}`);
       const uploadTask = uploadBytesResumable(storageRef, file);
 
       uploadTask.on('state_changed', 
@@ -61,8 +71,7 @@ const MenuBar = ({ editor }: { editor: any }) => {
         },
         async () => {
           const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-          editor.chain().focus().setImage({ src: downloadURL }).run();
-          setShowImageInput(false);
+          insertImage(downloadURL);
           setUploading(false);
         }
       );
@@ -86,13 +95,13 @@ const MenuBar = ({ editor }: { editor: any }) => {
   };
 
   return (
-    <div className="flex flex-col border-b border-white/10 rounded-t-xl sticky top-0 z-10 backdrop-blur-md bg-white/5">
+    <div className="flex flex-col border-b border-border rounded-t-control sticky top-0 z-10 backdrop-blur-md bg-surface/90">
       <div className="flex flex-wrap gap-2 p-2">
         <button
           type="button"
           onClick={() => editor.chain().focus().toggleBold().run()}
           disabled={!editor.can().chain().focus().toggleBold().run()}
-          className={`p-2 rounded-lg transition-colors ${editor.isActive('bold') ? 'bg-primary text-black' : 'hover:bg-white/10'}`}
+          className={`p-2 rounded-lg transition-colors ${editor.isActive('bold') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}
           title="Bold"
         >
           <Bold size={18} />
@@ -101,18 +110,18 @@ const MenuBar = ({ editor }: { editor: any }) => {
           type="button"
           onClick={() => editor.chain().focus().toggleItalic().run()}
           disabled={!editor.can().chain().focus().toggleItalic().run()}
-          className={`p-2 rounded-lg transition-colors ${editor.isActive('italic') ? 'bg-primary text-black' : 'hover:bg-white/10'}`}
+          className={`p-2 rounded-lg transition-colors ${editor.isActive('italic') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}
           title="Italic"
         >
           <Italic size={18} />
         </button>
         
-        <div className="w-px h-6 bg-white/10 mx-1 self-center" />
+        <div className="w-px h-6 bg-border mx-1 self-center" />
 
         <button
           type="button"
           onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
-          className={`p-2 rounded-lg transition-colors ${editor.isActive('heading', { level: 1 }) ? 'bg-primary text-black' : 'hover:bg-white/10'}`}
+          className={`p-2 rounded-lg transition-colors ${editor.isActive('heading', { level: 1 }) ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}
           title="Heading 1"
         >
           <Heading1 size={18} />
@@ -120,7 +129,7 @@ const MenuBar = ({ editor }: { editor: any }) => {
         <button
           type="button"
           onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
-          className={`p-2 rounded-lg transition-colors ${editor.isActive('heading', { level: 2 }) ? 'bg-primary text-black' : 'hover:bg-white/10'}`}
+          className={`p-2 rounded-lg transition-colors ${editor.isActive('heading', { level: 2 }) ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}
           title="Heading 2"
         >
           <Heading2 size={18} />
@@ -128,18 +137,18 @@ const MenuBar = ({ editor }: { editor: any }) => {
         <button
           type="button"
           onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
-          className={`p-2 rounded-lg transition-colors ${editor.isActive('heading', { level: 3 }) ? 'bg-primary text-black' : 'hover:bg-white/10'}`}
+          className={`p-2 rounded-lg transition-colors ${editor.isActive('heading', { level: 3 }) ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}
           title="Heading 3"
         >
           <Heading3 size={18} />
         </button>
 
-        <div className="w-px h-6 bg-white/10 mx-1 self-center" />
+        <div className="w-px h-6 bg-border mx-1 self-center" />
 
         <button
           type="button"
           onClick={() => editor.chain().focus().toggleBulletList().run()}
-          className={`p-2 rounded-lg transition-colors ${editor.isActive('bulletList') ? 'bg-primary text-black' : 'hover:bg-white/10'}`}
+          className={`p-2 rounded-lg transition-colors ${editor.isActive('bulletList') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}
           title="Bullet List"
         >
           <List size={18} />
@@ -147,7 +156,7 @@ const MenuBar = ({ editor }: { editor: any }) => {
         <button
           type="button"
           onClick={() => editor.chain().focus().toggleOrderedList().run()}
-          className={`p-2 rounded-lg transition-colors ${editor.isActive('orderedList') ? 'bg-primary text-black' : 'hover:bg-white/10'}`}
+          className={`p-2 rounded-lg transition-colors ${editor.isActive('orderedList') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}
           title="Numbered List"
         >
           <ListOrdered size={18} />
@@ -155,18 +164,18 @@ const MenuBar = ({ editor }: { editor: any }) => {
         <button
           type="button"
           onClick={() => editor.chain().focus().toggleBlockquote().run()}
-          className={`p-2 rounded-lg transition-colors ${editor.isActive('blockquote') ? 'bg-primary text-black' : 'hover:bg-white/10'}`}
+          className={`p-2 rounded-lg transition-colors ${editor.isActive('blockquote') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}
           title="Quote"
         >
           <Quote size={18} />
         </button>
 
-        <div className="w-px h-6 bg-white/10 mx-1 self-center" />
+        <div className="w-px h-6 bg-border mx-1 self-center" />
 
         <button
           type="button"
           onClick={() => editor.chain().focus().toggleCodeBlock().run()}
-          className={`p-2 rounded-lg transition-colors ${editor.isActive('codeBlock') ? 'bg-primary text-black' : 'hover:bg-white/10'}`}
+          className={`p-2 rounded-lg transition-colors ${editor.isActive('codeBlock') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}
           title="Code Block"
         >
           <Code size={18} />
@@ -178,8 +187,10 @@ const MenuBar = ({ editor }: { editor: any }) => {
             setShowLinkInput(false);
             setShowImageInput(!showImageInput);
             setUrlInput('');
+            setImageAlt('');
+            setImageCaption('');
           }}
-          className={`p-2 rounded-lg transition-colors ${showImageInput ? 'bg-white/20' : 'hover:bg-white/10'}`}
+          className={`p-2 rounded-lg transition-colors ${showImageInput ? 'bg-muted' : 'hover:bg-muted'}`}
           title="Add Image URL"
         >
           <ImageIcon size={18} />
@@ -192,7 +203,7 @@ const MenuBar = ({ editor }: { editor: any }) => {
             setShowLinkInput(!showLinkInput);
             setUrlInput(editor.isActive('link') ? editor.getAttributes('link').href : '');
           }}
-          className={`p-2 rounded-lg transition-colors ${editor.isActive('link') || showLinkInput ? 'bg-primary text-black' : 'hover:bg-white/10'}`}
+          className={`p-2 rounded-lg transition-colors ${editor.isActive('link') || showLinkInput ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}
           title="Add Link URL"
         >
           <LinkIcon size={18} />
@@ -200,13 +211,14 @@ const MenuBar = ({ editor }: { editor: any }) => {
       </div>
 
       {(showImageInput || showLinkInput) && (
-        <div className="px-3 pb-3 pt-1 flex items-center gap-2 animate-in fade-in slide-in-from-top-2 flex-wrap">
+        <div className="animate-in fade-in slide-in-from-top-2 flex flex-col gap-2 px-3 pb-3 pt-1">
           <input
             type="url"
             value={urlInput}
             onChange={(e) => setUrlInput(e.target.value)}
-            placeholder={showImageInput ? "Paste image URL..." : "Paste link URL..."}
-            className="flex-1 bg-black/40 border border-white/10 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-primary transition-colors min-w-[200px]"
+            placeholder={showImageInput ? 'Paste image URL…' : 'Paste link URL…'}
+            aria-label={showImageInput ? 'Image URL' : 'Link URL'}
+            className="w-full bg-background border border-border rounded-lg px-3 py-1.5 text-sm outline-none focus:border-primary transition-colors"
             autoFocus={!uploading}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
@@ -218,43 +230,69 @@ const MenuBar = ({ editor }: { editor: any }) => {
               }
             }}
           />
-          <button
-            onClick={showImageInput ? handleAddImage : handleAddLink}
-            className="p-1.5 bg-primary text-black rounded-md hover:brightness-110 transition-all"
-          >
-            <Check size={16} />
-          </button>
-          
+
           {showImageInput && (
-            <>
-              <div className="w-px h-6 bg-white/10 mx-1" />
-              <input 
-                type="file" 
-                ref={fileInputRef} 
-                onChange={handleFileUpload} 
-                accept="image/*" 
-                className="hidden" 
+            <div className="grid gap-2 sm:grid-cols-2">
+              <input
+                value={imageAlt}
+                onChange={(e) => setImageAlt(e.target.value)}
+                placeholder="Alt text: describe the image"
+                aria-label="Image alt text"
+                className="w-full bg-background border border-border rounded-lg px-3 py-1.5 text-sm outline-none focus:border-primary transition-colors"
               />
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                disabled={uploading}
-                className="flex items-center gap-2 px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-md transition-all text-sm font-medium disabled:opacity-50"
-              >
-                {uploading ? <Loader2 size={16} className="animate-spin" /> : <UploadCloud size={16} />}
-                <span className="hidden sm:inline">{uploading ? 'Uploading...' : 'Upload File'}</span>
-              </button>
-            </>
+              <input
+                value={imageCaption}
+                onChange={(e) => setImageCaption(e.target.value)}
+                placeholder="Caption (optional)"
+                aria-label="Image caption"
+                className="w-full bg-background border border-border rounded-lg px-3 py-1.5 text-sm outline-none focus:border-primary transition-colors"
+              />
+            </div>
           )}
 
-          <button
-            onClick={() => {
-              setShowImageInput(false);
-              setShowLinkInput(false);
-            }}
-            className="p-1.5 bg-white/10 text-white rounded-md hover:bg-white/20 transition-all ml-1"
-          >
-            <X size={16} />
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={showImageInput ? handleAddImage : handleAddLink}
+              className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground transition-all hover:brightness-110"
+            >
+              <Check size={14} />
+              {showImageInput ? 'Insert image' : 'Apply link'}
+            </button>
+
+            {showImageInput && (
+              <>
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  onChange={handleFileUpload}
+                  accept="image/*"
+                  className="hidden"
+                />
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploading}
+                  className="inline-flex items-center gap-1.5 rounded-md bg-muted px-3 py-1.5 text-xs font-semibold transition-all hover:bg-muted/80 disabled:opacity-50"
+                >
+                  {uploading ? <Loader2 size={14} className="animate-spin" /> : <UploadCloud size={14} />}
+                  {uploading ? 'Uploading…' : 'Upload file'}
+                </button>
+                <span className="text-[10px] leading-relaxed text-faint">
+                  Alt text is read aloud; captions appear under the image.
+                </span>
+              </>
+            )}
+
+            <button
+              onClick={() => {
+                setShowImageInput(false);
+                setShowLinkInput(false);
+              }}
+              className="ml-auto p-1.5 rounded-md bg-muted text-foreground transition-all hover:bg-muted/80"
+              aria-label="Close image or link input"
+            >
+              <X size={16} />
+            </button>
+          </div>
         </div>
       )}
     </div>
@@ -293,17 +331,17 @@ export function RichTextEditor({
     },
     editorProps: {
       attributes: {
-        class: 'prose prose-invert prose-p:leading-relaxed prose-pre:bg-[#0d1117] prose-pre:p-4 prose-pre:rounded-lg max-w-none focus:outline-none min-h-[400px] p-4',
+        class: 'prose dark:prose-invert prose-p:leading-relaxed prose-pre:bg-[#0d1117] prose-pre:p-4 prose-pre:rounded-lg max-w-none text-foreground focus:outline-none min-h-[400px] p-4',
       },
     },
   });
 
   return (
-    <div className="border border-white/10 rounded-xl overflow-hidden bg-white/5 relative">
+    <div className="border border-border rounded-control overflow-hidden bg-surface relative">
       <MenuBar editor={editor} />
       <EditorContent editor={editor} />
       {editor && (
-        <div className="absolute bottom-2 right-4 text-xs text-white/40">
+        <div className="absolute bottom-2 right-4 text-xs text-faint">
           {editor.storage.characterCount.words()} words
         </div>
       )}

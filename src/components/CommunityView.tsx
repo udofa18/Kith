@@ -1,9 +1,9 @@
 import { Link, useSearchParams } from 'react-router-dom';
 import { useState, useEffect, useMemo, useRef } from 'react';
 import axios from 'axios';
-import { auth, db, storage, handleFirestoreError, OperationType } from '../firebase';
+import { auth, db, handleFirestoreError, OperationType } from '../firebase';
 import { collection, query, orderBy, onSnapshot, doc, getDoc, setDoc, deleteDoc, increment, updateDoc, where, getDocs, writeBatch, serverTimestamp } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { ref, uploadBytes, getDownloadURL } from '../lib/storage';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'react-hot-toast';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -44,6 +44,7 @@ import { feeOf, formatFee } from '../lib/communityPricing';
 import { joinCommunity, leaveCommunity } from '../services/socialService';
 import { presenceLabel } from '../features/messages/api';
 import { channelTypeInfo } from '../lib/channelTypes';
+import { formatEventPrice } from '../lib/payments';
 
 export default function CommunityView({ communityId }: { communityId: string }) {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -487,7 +488,7 @@ export default function CommunityView({ communityId }: { communityId: string }) 
     if (!file || !communityId) return;
     setIsUploading(true);
     try {
-      const storageRef = ref(storage, `communities/${communityId}/${auth.currentUser.uid}/${type}_${Date.now()}_${file.name}`);
+      const storageRef = ref(null, `communities/${communityId}/${auth.currentUser.uid}/${type}_${Date.now()}_${file.name}`);
       const snapshot = await uploadBytes(storageRef, file);
       const url = await getDownloadURL(snapshot.ref);
       setSettingsForm(prev => ({ ...prev, [type]: url }));
@@ -693,7 +694,7 @@ export default function CommunityView({ communityId }: { communityId: string }) 
 
   const needsApproval = !!(community?.isPrivate || community?.membershipControl?.approvalRequired ||
     (community?.membershipControl?.accessType && community.membershipControl.accessType !== 'public'));
-  const isOnline = (m: any) => presenceLabel(m.user?.lastActiveAt, now) === 'Active now';
+  const isOnline = (m: any) => presenceLabel(m.user?.lastActiveAt, now, m.user) === 'Active now';
   const onlineCount = members.filter(isOnline).length;
   // The stored count can drift; trust the loaded list once we have it.
   const memberTotal = members.length || community?.memberCount || 0;
@@ -939,7 +940,7 @@ export default function CommunityView({ communityId }: { communityId: string }) 
                             </div>
                           </div>
                           <span className={`text-xs font-medium ${event.isPaid ? 'text-amber-600 dark:text-amber-400' : 'text-green-600 dark:text-green-400'}`}>
-                            {event.isPaid ? `$${event.price}` : 'Free'}
+                            {formatEventPrice(event)}
                           </span>
                         </div>
                       </div>
@@ -1393,7 +1394,7 @@ function MemberRow({ member, roles, online, now }: { member: any; roles: any[]; 
   const u = member.user;
   const name = u?.displayName || u?.username || 'Member';
   const customRoles = (member.customRoles || []).map((rid: string) => roles.find(r => r.id === rid)).filter(Boolean);
-  const presence = presenceLabel(u?.lastActiveAt, now);
+  const presence = presenceLabel(u?.lastActiveAt, now, u);
   return (
     <UserHoverCard userId={member.id}>
       <div className={`mx-2 flex items-center gap-2.5 px-2 py-1.5 rounded-xl hover:bg-foreground/5 transition-colors cursor-pointer ${online ? '' : 'opacity-70'}`}>

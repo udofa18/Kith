@@ -5,8 +5,9 @@
  * one-time fees are enabled: the member's XP moves to the community owner when they join (or when
  * their request is approved). Real money is modelled already (`currency: 'usd'`, monthly
  * intervals) so turning it on means: add 'usd' / 'month' to the AVAILABLE_* lists, widen the
- * `fee` check in firestore.rules, and implement the card branch of `addFeePayment` with a
- * server-side checkout (see api/create-checkout-session.ts) that grants membership on success.
+ * `fee` check in firestore.rules, and add a `community_membership` kind to api/_lib/payments.ts
+ * (price from the community's fee, grant membership in `grantOrder`). The card branch of
+ * `addFeePayment` then calls startCheckout('community_membership', communityId).
  *
  * Legacy communities only have `isPaid` + `price`; those prices were always charged in XP.
  */

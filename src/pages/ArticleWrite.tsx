@@ -1,474 +1,918 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import axios from 'axios';
-import { doc, getDoc, setDoc, serverTimestamp, collection } from 'firebase/firestore';
-import { db, auth, storage } from '../firebase';
-import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
-import { RichTextEditor } from '../components/ui/RichTextEditor';
-import { Save, Image as ImageIcon, Send, X, ArrowLeft, Loader2, Check, UploadCloud, ChevronDown, ListFilter, Sliders } from 'lucide-react';
+import { collection, doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
+import { getDownloadURL, ref, uploadBytesResumable } from '../lib/storage';
+import { Helmet } from 'react-helmet-async';
 import { toast } from 'react-hot-toast';
-import { ARTICLE_CATEGORIES, ArticleDifficulty } from '../types/articles';
+import {
+  ArrowLeft,
+  Check,
+  CheckCircle2,
+  ChevronDown,
+  Cloud,
+  Eye,
+  Globe,
+  Image as ImageIcon,
+  Link2,
+  Loader2,
+  Save,
+  Send,
+  Sparkles,
+  UploadCloud,
+  X,
+} from 'lucide-react';
+import { auth, db } from '../firebase';
+import { cn } from '../lib/cn';
+import {
+  Dialog,
+  Badge,
+  Button,
+  Field,
+  Input,
+  Select,
+  Textarea,
+} from '../components/ui';
+import { RichTextEditor } from '../components/ui/RichTextEditor';
+import ArticleCover from '../components/articles/ArticleCover';
+import { ARTICLE_CATEGORIES, type ArticleDifficulty } from '../types/articles';
+import { plainText, wordCount } from '../components/articles/articleVisuals';
+
+const DIFFICULTIES: ArticleDifficulty[] = ['Beginner', 'Intermediate', 'Advanced', 'Expert'];
+
+const COVER_PRESETS = [
+  { label: 'Writing desk', url: 'https://images.unsplash.com/photo-1499750310107-5fef28a66643?auto=format&fit=crop&w=1400&q=80' },
+  { label: 'Team table', url: 'https://images.unsplash.com/photo-1519389950473-47ba0277781c?auto=format&fit=crop&w=1400&q=80' },
+  { label: 'People talking', url: 'https://images.unsplash.com/photo-1522202176988-66273c2fd55f?auto=format&fit=crop&w=1400&q=80' },
+  { label: 'Studio desk', url: 'https://images.unsplash.com/photo-1523726491678-bf852e717f6a?auto=format&fit=crop&w=1400&q=80' },
+  { label: 'Code window', url: 'https://images.unsplash.com/photo-1484417894907-623942c8ee29?auto=format&fit=crop&w=1400&q=80' },
+  { label: 'Quiet room', url: 'https://images.unsplash.com/photo-1517245386807-bb43f82c33c4?auto=format&fit=crop&w=1400&q=80' },
+];
 
 export default function ArticleWrite() {
   const { articleId } = useParams();
   const navigate = useNavigate();
-  
-  const [id, setId] = useState<string>(articleId || doc(collection(db, 'articles')).id);
+
+  const [id] = useState<string>(articleId || doc(collection(db, 'articles')).id);
   const [title, setTitle] = useState('');
   const [subtitle, setSubtitle] = useState('');
-  const [coverImage, setCoverImage] = useState<string | null>(null);
+  const [coverImage, setCoverImage] = useState('');
   const [content, setContent] = useState('');
   const [tags, setTags] = useState<string[]>([]);
   const [tagInput, setTagInput] = useState('');
-  
-  // New Article Taxonomy
-  const [primaryCategory, setPrimaryCategory] = useState<string>('');
-  const [subcategory, setSubcategory] = useState<string>('');
+
+  const [primaryCategory, setPrimaryCategory] = useState('');
+  const [subcategory, setSubcategory] = useState('');
   const [difficulty, setDifficulty] = useState<ArticleDifficulty>('Intermediate');
   const [isFeatured, setIsFeatured] = useState(false);
-  
+
+  const [metaTitle, setMetaTitle] = useState('');
+  const [metaDescription, setMetaDescription] = useState('');
+  const [seoSlug, setSeoSlug] = useState('');
+
   const [status, setStatus] = useState<'draft' | 'published'>('draft');
   const [saving, setSaving] = useState(false);
-  const [loading, setLoading] = useState(articleId ? true : false);
+  const [loading, setLoading] = useState(Boolean(articleId));
+  const [hydrated, setHydrated] = useState(!articleId);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
-
-  const generateSlug = (text: string) => {
-    return text
-      .toLowerCase()
-      .replace(/[^\w\s-]/g, '') // Remove non-word chars
-      .replace(/\s+/g, '-') // Replace spaces with -
-      .replace(/--+/g, '-') // Replace multiple - with single -
-      .trim();
-  };
 
   const [showCoverModal, setShowCoverModal] = useState(false);
   const [coverUrlInput, setCoverUrlInput] = useState('');
   const [uploadingCover, setUploadingCover] = useState(false);
   const coverFileInputRef = useRef<HTMLInputElement>(null);
+  const skipAutoSave = useRef(Boolean(articleId));
+
+  const words = wordCount(content);
+  const readingTime = Math.max(1, Math.ceil(words / 220));
+  const category = ARTICLE_CATEGORIES.find((item) => item.id === primaryCategory);
+  const slugValue = seoSlug.trim() || generateSlug(title);
+  const origin = typeof window !== 'undefined' ? window.location.origin : 'https://kith.app';
+  const canonical = `${origin}/article/${id}`;
+  const seoTitle = metaTitle.trim() || title.trim() || 'Your story title';
+  const seoDescription =
+    metaDescription.trim() || subtitle.trim() || plainText(content).slice(0, 158).trim() || 'A story from the Kith Journal.';
+
+  const readiness = useMemo(
+    () => [
+      { label: 'A headline people can feel', done: title.trim().length > 6 },
+      { label: 'A category and level', done: Boolean(primaryCategory) },
+      { label: 'A cover image or generated art', done: Boolean(coverImage) },
+      { label: 'At least three tags', done: tags.length >= 3 },
+      { label: '300+ words of substance', done: words >= 300 },
+      {
+        label: 'Search description (70+ chars)',
+        done: seoDescription.length >= 70,
+      },
+    ],
+    [title, primaryCategory, coverImage, tags.length, words, seoDescription],
+  );
+  const readyCount = readiness.filter((item) => item.done).length;
 
   useEffect(() => {
-    if (articleId) {
-      loadArticle(articleId);
-    }
+    if (articleId) void loadArticle(articleId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [articleId]);
 
-  const handleCoverUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+  const loadArticle = async (docId: string) => {
+    try {
+      const docRef = doc(db, 'articles', docId);
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        const data = snap.data();
+        if (data.authorUid !== auth.currentUser?.uid) {
+          toast.error('You can only edit your own stories');
+          navigate('/articles', { replace: true });
+          return;
+        }
+        setTitle(data.title || '');
+        setSubtitle(data.subtitle || '');
+        setCoverImage(data.coverImage || '');
+        setContent(data.content || '');
+        setTags(Array.isArray(data.tags) ? data.tags : []);
+        setStatus(data.status === 'published' ? 'published' : 'draft');
+        setPrimaryCategory(data.primaryCategoryId || '');
+        setSubcategory(data.subcategory || '');
+        setDifficulty(data.difficulty || 'Intermediate');
+        setIsFeatured(Boolean(data.isFeatured));
+        setMetaTitle(data.seo?.metaTitle || '');
+        setMetaDescription(data.seo?.metaDescription || '');
+        setSeoSlug(data.seo?.slug || '');
+      }
+    } catch (error) {
+      console.error('Error loading article:', error);
+      toast.error('Could not load this draft.');
+    } finally {
+      setLoading(false);
+      setHydrated(true);
+      skipAutoSave.current = true;
+    }
+  };
+
+  const handleCoverUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
     if (!file || !auth.currentUser) return;
 
     if (file.size > 5 * 1024 * 1024) {
-      toast.error("Image is too large. Max size is 5MB.");
+      toast.error('That image is over 5MB. Compress it and try again.');
       return;
     }
 
     setUploadingCover(true);
     try {
-      const storageRef = ref(storage, `article_covers/${auth.currentUser.uid}/${Date.now()}_${file.name}`);
-      const uploadTask = uploadBytesResumable(storageRef, file);
-
-      uploadTask.on('state_changed', 
+      const storageRef = ref(null, `article_covers/${auth.currentUser.uid}/${Date.now()}_${file.name}`);
+      const task = uploadBytesResumable(storageRef, file);
+      task.on(
+        'state_changed',
         null,
         (error) => {
-          console.error("Upload failed", error);
-          toast.error(error.message || "Failed to upload image.");
+          console.error(error);
+          toast.error(error.message || 'Upload failed');
           setUploadingCover(false);
         },
         async () => {
-          const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-          setCoverImage(downloadURL);
+          const url = await getDownloadURL(task.snapshot.ref);
+          setCoverImage(url);
+          setCoverUrlInput(url);
           setShowCoverModal(false);
           setUploadingCover(false);
-        }
+          toast.success('Cover updated');
+        },
       );
     } catch (error: any) {
-      console.error("Upload failed", error);
-      toast.error(error.message || "Failed to upload image. Please try again.");
+      console.error(error);
+      toast.error(error?.message || 'Upload failed');
       setUploadingCover(false);
     } finally {
       if (coverFileInputRef.current) coverFileInputRef.current.value = '';
     }
   };
 
-  const loadArticle = async (docId: string) => {
-    try {
-      const docRef = doc(db, 'articles', docId);
-      const docSnap = await getDoc(docRef);
-      if (docSnap.exists() && docSnap.data().authorUid === auth.currentUser?.uid) {
-        const data = docSnap.data();
-        setTitle(data.title || '');
-        setSubtitle(data.subtitle || '');
-        setCoverImage(data.coverImage || null);
-        setContent(data.content || '');
-        setTags(data.tags || []);
-        setStatus(data.status || 'draft');
-        setPrimaryCategory(data.primaryCategoryId || '');
-        setSubcategory(data.subcategory || '');
-        setDifficulty(data.difficulty || 'Intermediate');
-        setIsFeatured(data.isFeatured || false);
-      } else if (docSnap.exists()) {
-        navigate('/articles'); // unauthorized
+  const handleSave = useCallback(
+    async (isPublishing = false, notify = false) => {
+      if (!auth.currentUser) {
+        toast.error('Sign in to save your story');
+        return;
       }
-    } catch (error) {
-      console.error(error);
-    } finally {
-      setLoading(false);
-    }
-  };
+      if (!title.trim()) {
+        if (notify || isPublishing) toast.error('Add a headline first');
+        return;
+      }
+      if (isPublishing && !primaryCategory) {
+        toast.error('Choose a category before publishing');
+        return;
+      }
+      if (isPublishing && plainText(content).length < 30) {
+        toast.error('Write a little more before publishing');
+        return;
+      }
 
-  const handleSave = useCallback(async (isPublishing = false) => {
-    if (!auth.currentUser || !title.trim()) return;
-    
-    setSaving(true);
-    try {
-      const articleRef = doc(db, 'articles', id);
-      const articleDoc = await getDoc(articleRef);
-      
-      // Calculate basic reading time based on word count
-      const wordCount = content.replace(/<[^>]*>?/gm, '').split(/\s+/).length;
-      const readingTime = Math.ceil(wordCount / 200);
+      setSaving(true);
+      try {
+        const articleRef = doc(db, 'articles', id);
+        const existing = await getDoc(articleRef);
+        const isNew = !existing.exists();
+        const cleanTags = tags.slice(0, 5);
 
-      const payload = {
-        id,
-        authorUid: auth.currentUser.uid,
-        authorName: auth.currentUser.displayName || 'Anonymous',
-        title: title.trim(),
-        subtitle: subtitle.trim(),
-        coverImage: coverImage || '',
-        content,
-        tags,
-        primaryCategoryId: primaryCategory,
-        subcategory,
-        difficulty,
-        isFeatured,
-        status: isPublishing ? 'published' : status,
-        readingTime,
-        updatedAt: serverTimestamp(),
-        seo: {
-          metaTitle: title.trim(),
-          metaDescription: subtitle.trim() || String(content || '').replace(/<[^>]*>?/gm, '').substring(0, 160).trim(),
-          keywords: tags,
-          slug: generateSlug(title),
-          canonicalUrl: `https://creatorspace.app/article/${id}`,
-          ogType: 'article',
-          ogImage: coverImage || '',
-          twitterCard: 'summary_large_image'
+        const payload: Record<string, any> = {
+          id,
+          authorUid: auth.currentUser.uid,
+          authorName: auth.currentUser.displayName || 'A Kith writer',
+          authorPhoto: auth.currentUser.photoURL || '',
+          title: title.trim(),
+          subtitle: subtitle.trim(),
+          coverImage: coverImage || '',
+          content,
+          tags: cleanTags,
+          primaryCategoryId: primaryCategory,
+          subcategory,
+          difficulty,
+          isFeatured,
+          status: isPublishing ? 'published' : status,
+          readingTime,
+          updatedAt: serverTimestamp(),
+          seo: {
+            metaTitle: metaTitle.trim() || title.trim(),
+            metaDescription: seoDescription,
+            keywords: cleanTags,
+            slug: generateSlug(slugValue),
+            canonicalUrl: canonical,
+            ogType: 'article',
+            ogImage: coverImage || '',
+            twitterCard: 'summary_large_image',
+          },
+        };
+
+        if (isNew) {
+          Object.assign(payload, {
+            createdAt: serverTimestamp(),
+            viewsCount: 0,
+            likesCount: 0,
+            commentsCount: 0,
+          });
         }
-      };
+        if (isPublishing && status !== 'published') {
+          payload.publishedAt = serverTimestamp();
+        }
 
-      if (!articleDoc.exists()) {
-        Object.assign(payload, {
-          createdAt: serverTimestamp(),
-          viewsCount: 0,
-          likesCount: 0,
-        });
+        await setDoc(articleRef, payload, { merge: true });
+        setStatus(isPublishing ? 'published' : status);
+        setLastSaved(new Date());
+        if (notify) toast.success(isPublishing ? 'Your story is live' : 'Draft saved');
+        if (isPublishing) navigate(`/article/${id}`);
+      } catch (error) {
+        console.error('Error saving article:', error);
+        toast.error('Could not save the story. Try again.');
+      } finally {
+        setSaving(false);
       }
+    },
+    [
+      id,
+      title,
+      subtitle,
+      coverImage,
+      content,
+      tags,
+      primaryCategory,
+      subcategory,
+      difficulty,
+      isFeatured,
+      status,
+      readingTime,
+      metaTitle,
+      seoDescription,
+      slugValue,
+      canonical,
+      navigate,
+    ],
+  );
 
-      if (isPublishing && status !== 'published') {
-        Object.assign(payload, { publishedAt: serverTimestamp() });
-      }
-
-      await setDoc(articleRef, payload, { merge: true });
-      setStatus(isPublishing ? 'published' : status);
-      setLastSaved(new Date());
-      
-      if (isPublishing) {
-        navigate(`/article/${id}`);
-      }
-    } catch (error) {
-      console.error(error);
-    } finally {
-      setSaving(false);
-    }
-  }, [id, title, subtitle, coverImage, content, tags, status, navigate]);
-
-  // Auto-save effect
+  // A quiet autosave for drafts. Publishing is always an explicit action.
   useEffect(() => {
-    if (!title.trim() || status === 'published') return;
-    
-    const timeoutId = setTimeout(() => {
-      handleSave(false);
-    }, 3000); // auto-save after 3 seconds of inactivity
+    if (!hydrated || loading || status === 'published' || !title.trim()) return;
+    if (skipAutoSave.current) {
+      skipAutoSave.current = false;
+      return;
+    }
+    const timeout = window.setTimeout(() => {
+      void handleSave(false, false);
+    }, 3000);
+    return () => window.clearTimeout(timeout);
+  }, [
+    hydrated,
+    loading,
+    status,
+    title,
+    subtitle,
+    coverImage,
+    content,
+    tags,
+    primaryCategory,
+    subcategory,
+    difficulty,
+    isFeatured,
+    metaTitle,
+    metaDescription,
+    seoSlug,
+    handleSave,
+  ]);
 
-    return () => clearTimeout(timeoutId);
-  }, [title, subtitle, coverImage, content, tags]);
-
-  const addTag = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && tagInput.trim() && tags.length < 5) {
-      e.preventDefault();
-      if (!tags.includes(tagInput.trim())) {
-        setTags([...tags, tagInput.trim()]);
-      }
+  const addTagValue = (raw: string) => {
+    const clean = raw.trim().replace(/^#/, '').slice(0, 26);
+    if (!clean) return;
+    if (tags.length >= 5) {
+      toast.error('Five tags is plenty');
+      return;
+    }
+    if (tags.some((tag) => tag.toLowerCase() === clean.toLowerCase())) {
       setTagInput('');
+      return;
+    }
+    setTags((current) => [...current, clean]);
+    setTagInput('');
+  };
+
+  const onTagKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter' || event.key === ',') {
+      event.preventDefault();
+      addTagValue(tagInput);
+    }
+    if (event.key === 'Backspace' && !tagInput && tags.length > 0) {
+      setTags((current) => current.slice(0, -1));
     }
   };
 
-  const removeTag = (tagToRemove: string) => {
-    setTags(tags.filter(t => t !== tagToRemove));
+  const openCoverModal = () => {
+    setCoverUrlInput(coverImage || '');
+    setShowCoverModal(true);
   };
+
+  const applyCoverUrl = () => {
+    if (!coverUrlInput.trim()) {
+      toast.error('Paste a link or choose a shelf image');
+      return;
+    }
+    setCoverImage(coverUrlInput.trim());
+    setShowCoverModal(false);
+    toast.success('Cover updated');
+  };
+
+  const manualSave = () => void handleSave(false, true);
+  const publish = () => void handleSave(true, true);
 
   if (loading) {
     return (
-      <div className="flex h-screen items-center justify-center">
-        <Loader2 className="animate-spin text-primary" size={32} />
+      <div className="grid min-h-[60vh] place-items-center bg-background">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 size={26} className="animate-spin text-primary" />
+          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-faint">Opening the studio</p>
+        </div>
       </div>
     );
   }
 
+  const canPreview = Boolean(articleId || lastSaved);
+
   return (
-    <div className="min-h-screen bg-background pb-20">
-      {/* Top Navbar */}
-      <div className="sticky top-0 z-50 bg-background/80 backdrop-blur-md border-b border-white/5 py-4">
-        <div className="max-w-4xl mx-auto px-4 flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <button 
-              onClick={() => navigate('/articles')}
-              className="p-2 hover:bg-white/10 rounded-full transition-colors"
-            >
-              <ArrowLeft size={20} />
-            </button>
-            <div className="flex flex-col">
-              <span className="font-bold">
-                {status === 'published' ? 'Editing Published Article' : 'Draft'}
-              </span>
-              <span className="text-xs text-white/40">
-                {saving ? 'Saving...' : lastSaved ? `Saved ${lastSaved.toLocaleTimeString()}` : 'Unsaved changes'}
-              </span>
-            </div>
+    <div className="min-h-full bg-background pb-24 text-foreground">
+      <Helmet>
+        <title>{status === 'published' ? 'Edit story' : 'New story'} — Kith Journal</title>
+        <meta name="robots" content="noindex,nofollow" />
+      </Helmet>
+
+      {/* Studio header */}
+      <div className="sticky top-0 z-40 border-b border-border bg-background/85 backdrop-blur-md">
+        <div className="mx-auto flex max-w-[1200px] items-center gap-2 px-3 py-2 sm:px-6">
+          <Button variant="ghost" size="icon-sm" onClick={() => navigate('/articles')} aria-label="Back to journal">
+            <ArrowLeft size={18} />
+          </Button>
+
+          <div className="min-w-0 flex-1">
+            <p className="truncate font-display text-sm font-semibold tracking-[-0.02em]">
+              {status === 'published' ? 'Editing a published story' : 'New story'}
+            </p>
+            <p className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-faint">
+              {saving ? (
+                <>
+                  <Loader2 size={11} className="animate-spin text-primary" />
+                  Saving…
+                </>
+              ) : lastSaved ? (
+                <>
+                  <CheckCircle2 size={11} className="text-success" />
+                  Saved {lastSaved.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
+                </>
+              ) : (
+                <>
+                  <Cloud size={11} />
+                  Autosaves after 3s
+                </>
+              )}
+            </p>
           </div>
 
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => handleSave(false)}
+          <div className="flex items-center gap-1.5">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={manualSave}
               disabled={saving || !title.trim()}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl border border-white/10 hover:bg-white/5 disabled:opacity-50 transition-colors"
+              leftIcon={<Save size={14} />}
+              className="hidden sm:inline-flex"
             >
-              <Save size={16} />
-              <span className="hidden sm:inline">Save Draft</span>
-            </button>
-            <button
-              onClick={() => handleSave(true)}
-              disabled={saving || !title.trim()}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-primary text-black font-bold hover:brightness-110 disabled:opacity-50 transition-colors"
+              {status === 'published' ? 'Save changes' : 'Save draft'}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => window.open(`/article/${id}`, '_blank', 'noopener,noreferrer')}
+              disabled={!canPreview || saving}
+              leftIcon={<Eye size={14} />}
+              className="hidden sm:inline-flex"
             >
-              <Send size={16} />
-              Publish
-            </button>
+              Preview
+            </Button>
+            <Button
+              size="sm"
+              onClick={publish}
+              loading={saving}
+              disabled={!title.trim()}
+              leftIcon={<Send size={14} />}
+            >
+              <span className="hidden sm:inline">{status === 'published' ? 'Update' : 'Publish'}</span>
+              <span className="sm:hidden">Publish</span>
+            </Button>
           </div>
         </div>
       </div>
 
-      <div className="max-w-4xl mx-auto px-4 py-8 space-y-8">
-        {/* Cover Image */}
-        <div className="space-y-2">
-          {coverImage ? (
-            <div className="relative aspect-[21/9] w-full rounded-2xl overflow-hidden group">
-              <img src={(coverImage && coverImage.trim() !== '') ? coverImage : `https://picsum.photos/seed/${id}/800/400`} alt="Cover" className="w-full h-full object-cover" />
-              <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-4">
-                <button 
-                  onClick={() => {
-                    setCoverUrlInput(coverImage);
-                    setShowCoverModal(true);
-                  }}
-                  className="px-4 py-2 bg-white/20 hover:bg-white/30 backdrop-blur-md rounded-xl font-medium transition-colors"
-                >
-                  Change Image
-                </button>
-                <button 
-                  onClick={() => setCoverImage(null)}
-                  className="px-4 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-500 backdrop-blur-md rounded-xl font-medium transition-colors"
-                >
-                  Remove
-                </button>
-              </div>
-            </div>
-          ) : showCoverModal ? (
-             <div className="w-full py-12 border-2 border-dashed border-white/10 rounded-2xl flex flex-col items-center justify-center bg-white/5 bg-black/20 p-8 space-y-4">
-               <div className="flex w-full max-w-lg items-center gap-2 flex-wrap sm:flex-nowrap">
-                 <input
-                   type="url"
-                   value={coverUrlInput}
-                   onChange={(e) => setCoverUrlInput(e.target.value)}
-                   placeholder="Paste Cover Image URL here..."
-                   className="flex-1 bg-black/40 border border-white/10 rounded-xl px-4 py-3 outline-none focus:border-primary transition-colors min-w-[200px]"
-                   autoFocus={!uploadingCover}
-                   disabled={uploadingCover}
-                   onKeyDown={(e) => {
-                     if (e.key === 'Enter') {
-                       e.preventDefault();
-                       if (coverUrlInput) setCoverImage(coverUrlInput);
-                       setShowCoverModal(false);
-                     } else if (e.key === 'Escape') {
-                       setShowCoverModal(false);
-                     }
-                   }}
-                 />
-                 <button
-                   onClick={() => {
-                     if (coverUrlInput) setCoverImage(coverUrlInput);
-                     setShowCoverModal(false);
-                   }}
-                   disabled={uploadingCover}
-                   className="p-3 bg-primary text-black rounded-xl hover:brightness-110 transition-all font-bold disabled:opacity-50"
-                 >
-                   <Check size={20} />
-                 </button>
-                 
-                 <div className="hidden sm:block w-px h-8 bg-white/10 mx-1" />
-                 
-                 <input 
-                   type="file" 
-                   ref={coverFileInputRef}
-                   onChange={handleCoverUpload}
-                   accept="image/*"
-                   className="hidden"
-                 />
-                 <button
-                   onClick={() => coverFileInputRef.current?.click()}
-                   disabled={uploadingCover}
-                   className="flex items-center gap-2 px-4 py-3 bg-white/10 text-white rounded-xl hover:bg-white/20 transition-all font-medium disabled:opacity-50 whitespace-nowrap"
-                 >
-                   {uploadingCover ? <Loader2 size={16} className="animate-spin" /> : <UploadCloud size={18} />}
-                   <span className="hidden sm:inline">{uploadingCover ? 'Uploading...' : 'Upload File'}</span>
-                 </button>
-
-                 <button
-                   onClick={() => setShowCoverModal(false)}
-                   className="p-3 bg-white/10 text-white rounded-xl hover:bg-white/20 transition-all"
-                 >
-                   <X size={20} />
-                 </button>
-               </div>
-             </div>
-          ) : (
-            <button
-              onClick={() => {
-                setCoverUrlInput('');
-                setShowCoverModal(true);
-              }}
-              className="w-full py-12 border-2 border-dashed border-white/10 rounded-2xl flex flex-col items-center justify-center text-white/40 hover:text-white hover:border-white/30 transition-colors bg-white/5"
-            >
-              <ImageIcon size={32} className="mb-2" />
-              <span>Add Cover Image</span>
-            </button>
-          )}
-        </div>
-
-        {/* Title & Subtitle */}
-        <div className="space-y-4">
-          <input
-            type="text"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="Article Title..."
-            className="w-full bg-transparent text-4xl sm:text-5xl font-display font-bold placeholder:text-white/20 focus:outline-none"
-          />
-          <input
-            type="text"
-            value={subtitle}
-            onChange={(e) => setSubtitle(e.target.value)}
-            placeholder="Subtitle (optional)..."
-            className="w-full bg-transparent text-xl sm:text-2xl text-white/60 placeholder:text-white/20 focus:outline-none"
-          />
-        </div>
-
-        {/* Article Taxonomy Settings */}
-        <div className="bg-white/5 border border-white/10 rounded-[24px] p-6 space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Category */}
-            <div className="space-y-2">
-              <label className="text-xs font-bold uppercase tracking-widest text-white/40 flex items-center gap-2">
-                <ListFilter size={14} /> Category
-              </label>
-              <div className="relative">
-                <select
-                  value={primaryCategory}
-                  onChange={(e) => {
-                    setPrimaryCategory(e.target.value);
-                    setSubcategory('');
-                  }}
-                  className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 outline-none focus:border-primary transition-colors appearance-none"
-                >
-                  <option value="">Select Category</option>
-                  {ARTICLE_CATEGORIES.map(cat => (
-                    <option key={cat.id} value={cat.id}>{cat.name}</option>
-                  ))}
-                </select>
-                <ChevronDown size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-white/40 pointer-events-none" />
-              </div>
-            </div>
-
-            {/* Subcategory */}
-            <div className="space-y-2">
-              <label className="text-xs font-bold uppercase tracking-widest text-white/40 flex items-center gap-2">
-                <Sliders size={14} /> Subcategory
-              </label>
-              <div className="relative">
-                <select
-                  value={subcategory}
-                  onChange={(e) => setSubcategory(e.target.value)}
-                  disabled={!primaryCategory}
-                  className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 outline-none focus:border-primary transition-colors appearance-none disabled:opacity-50"
-                >
-                  <option value="">Select Subcategory</option>
-                  {ARTICLE_CATEGORIES.find(c => c.id === primaryCategory)?.subcategories.map(sub => (
-                    <option key={sub} value={sub}>{sub}</option>
-                  ))}
-                </select>
-                <ChevronDown size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-white/40 pointer-events-none" />
-              </div>
-            </div>
-          </div>
-
-          <div className="space-y-4">
-            <label className="text-xs font-bold uppercase tracking-widest text-white/40">Difficulty Level</label>
-            <div className="flex flex-wrap gap-3">
-              {(['Beginner', 'Intermediate', 'Advanced', 'Expert'] as ArticleDifficulty[]).map((level) => (
+      <div className="mx-auto max-w-[1200px] px-4 pt-6 sm:px-6 sm:pt-8">
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_330px]">
+          {/* Editor ------------------------------------------------------ */}
+          <main className="min-w-0 space-y-4">
+            {/* Cover */}
+            <div className="overflow-hidden rounded-panel border border-border">
+              {coverImage ? (
+                <div className="group relative">
+                  <ArticleCover
+                    src={coverImage}
+                    title={title}
+                    categoryId={primaryCategory}
+                    seed={id}
+                    priority
+                    showStamp
+                    className="aspect-[21/9] w-full"
+                  />
+                  <div className="absolute inset-0 flex items-center justify-center gap-2 bg-[#0e0b13]/45 opacity-0 backdrop-blur-[2px] transition-opacity group-hover:opacity-100">
+                    <Button variant="secondary" size="sm" onClick={openCoverModal} leftIcon={<ImageIcon size={14} />}>
+                      Change cover
+                    </Button>
+                    <Button
+                      variant="danger"
+                      size="sm"
+                      onClick={() => setCoverImage('')}
+                      leftIcon={<X size={14} />}
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                </div>
+              ) : (
                 <button
-                  key={level}
-                  onClick={() => setDifficulty(level)}
-                  className={`px-4 py-2 rounded-xl text-sm font-bold border transition-all ${
-                    difficulty === level 
-                      ? 'bg-primary text-black border-primary' 
-                      : 'bg-white/5 border-white/10 text-white/40 hover:border-white/20'
-                  }`}
+                  type="button"
+                  onClick={openCoverModal}
+                  className="group flex w-full items-center gap-4 px-5 py-5 text-left transition-colors hover:bg-muted/60"
                 >
-                  {level}
+                  <span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-primary/12 text-primary ring-1 ring-inset ring-primary/15 transition-transform group-hover:scale-105">
+                    <ImageIcon size={20} />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block font-display text-sm font-semibold tracking-[-0.02em] text-foreground">
+                      Add a cover
+                    </span>
+                    <span className="block text-[11px] text-muted-foreground">
+                      Upload your own or start from the editorial shelf
+                    </span>
+                  </span>
+                  <ImageIcon size={16} className="shrink-0 text-faint" />
+                </button>
+              )}
+            </div>
+
+            {/* Headline */}
+            <div className="px-1">
+              <textarea
+                value={title}
+                onChange={(event) => setTitle(event.target.value)}
+                placeholder="Give your story a headline…"
+                aria-label="Article title"
+                rows={2}
+                maxLength={280}
+                className="w-full resize-none bg-transparent font-serif text-[clamp(2rem,5vw,3.45rem)] font-normal leading-[1.02] tracking-[-0.025em] text-foreground outline-none placeholder:text-faint"
+              />
+              <textarea
+                value={subtitle}
+                onChange={(event) => setSubtitle(event.target.value)}
+                placeholder="A subtitle that earns the click (optional)…"
+                aria-label="Article subtitle"
+                rows={2}
+                maxLength={220}
+                className="mt-1 w-full resize-none bg-transparent text-sm leading-relaxed text-muted-foreground outline-none placeholder:text-faint sm:text-base"
+              />
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-faint">
+                <span>{words.toLocaleString()} words</span>
+                <span className="h-1 w-1 rounded-full bg-faint" />
+                <span>{readingTime} min read</span>
+                {status === 'published' && (
+                  <>
+                    <span className="h-1 w-1 rounded-full bg-faint" />
+                    <span className="inline-flex items-center gap-1 text-success">
+                      <Globe size={11} /> Live
+                    </span>
+                  </>
+                )}
+              </div>
+            </div>
+
+            {/* Tags */}
+            <section className="border-t border-border pt-5">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-muted-foreground">Tags</p>
+                <span className="text-[10px] font-semibold text-faint">{tags.length}/5</span>
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                {tags.map((tag) => (
+                  <span
+                    key={tag}
+                    className="inline-flex items-center gap-1 rounded-full border border-primary/25 bg-primary/10 py-1 pl-2.5 pr-1 text-[10px] font-bold uppercase tracking-[0.1em] text-primary"
+                  >
+                    #{tag}
+                    <button
+                      type="button"
+                      onClick={() => setTags((current) => current.filter((item) => item !== tag))}
+                      aria-label={`Remove ${tag} tag`}
+                      className="grid h-5 w-5 place-items-center rounded-full transition-colors hover:bg-primary/15"
+                    >
+                      <X size={11} />
+                    </button>
+                  </span>
+                ))}
+                {tags.length < 5 && (
+                  <input
+                    value={tagInput}
+                    onChange={(event) => setTagInput(event.target.value)}
+                    onKeyDown={onTagKeyDown}
+                    onBlur={() => addTagValue(tagInput)}
+                    placeholder="Add a tag and press Enter"
+                    className="min-w-[180px] flex-1 bg-transparent py-1 text-sm text-foreground outline-none placeholder:text-faint"
+                    aria-label="Add a tag"
+                  />
+                )}
+              </div>
+              <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+                Tags power search, related stories and the keywords in your SEO metadata.
+              </p>
+            </section>
+
+            {/* Editor */}
+            <section className="border-t border-border pt-5">
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <p className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.18em] text-muted-foreground">
+                  <Sparkles size={12} className="text-primary" />
+                  The story
+                </p>
+                <p className="text-[10px] font-semibold text-faint">Headings become your table of contents</p>
+              </div>
+              <RichTextEditor content={content} onChange={setContent} />
+            </section>
+
+            <div className="flex items-center justify-between gap-2 px-1 lg:hidden">
+              <Button variant="secondary" onClick={manualSave} disabled={saving || !title.trim()} leftIcon={<Save size={14} />}>
+                Save draft
+              </Button>
+              <Button onClick={publish} loading={saving} disabled={!title.trim()} leftIcon={<Send size={14} />}>
+                Publish
+              </Button>
+            </div>
+          </main>
+
+          {/* Rail -------------------------------------------------------- */}
+          <aside className="custom-scrollbar min-w-0 space-y-6 self-start lg:sticky lg:top-[68px] lg:max-h-[calc(100vh-5.5rem)] lg:overflow-y-auto lg:border-l lg:border-border lg:pl-5 lg:pr-1">
+            {/* Readiness */}
+            <section className="border-t border-border pt-5 first:border-t-0 first:pt-0">
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="flex items-center gap-1.5 font-display text-[15px] font-semibold tracking-[-0.03em]">
+                  <CheckCircle2 size={15} className={readyCount === readiness.length ? 'text-success' : 'text-primary'} />
+                  Ready to publish?
+                </h2>
+                <Badge variant={readyCount === readiness.length ? 'success' : 'neutral'}>
+                  {readyCount}/{readiness.length}
+                </Badge>
+              </div>
+              <div className="mt-2 h-1 overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-primary transition-[width] duration-300"
+                  style={{ width: `${(readyCount / readiness.length) * 100}%` }}
+                />
+              </div>
+              <ul className="mt-3 space-y-1.5">
+                {readiness.map((item) => (
+                  <li key={item.label} className="flex items-start gap-2 text-[11px] leading-relaxed">
+                    {item.done ? (
+                      <Check size={13} className="mt-0.5 shrink-0 text-success" />
+                    ) : (
+                      <span className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full border border-border-strong" />
+                    )}
+                    <span className={item.done ? 'text-foreground/70' : 'text-muted-foreground'}>{item.label}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+
+            {/* Publishing */}
+            <section className="border-t border-border pt-5">
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="font-display text-[15px] font-semibold tracking-[-0.03em]">Publishing</h2>
+                <Badge variant={status === 'published' ? 'success' : 'neutral'} dot>
+                  {status === 'published' ? 'Published' : 'Draft'}
+                </Badge>
+              </div>
+
+              <div className="mt-3 space-y-3">
+                <Field label="Category">
+                  <Select
+                    value={primaryCategory}
+                    onChange={(event) => {
+                      setPrimaryCategory(event.target.value);
+                      setSubcategory('');
+                    }}
+                  >
+                    <option value="">Choose a category</option>
+                    {ARTICLE_CATEGORIES.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+
+                <Field label="Subcategory">
+                  <Select
+                    value={subcategory}
+                    onChange={(event) => setSubcategory(event.target.value)}
+                    disabled={!category}
+                  >
+                    <option value="">Choose a subcategory</option>
+                    {category?.subcategories.map((item) => (
+                      <option key={item} value={item}>
+                        {item}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+
+                <div>
+                  <p className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.18em] text-muted-foreground">
+                    Reading level
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {DIFFICULTIES.map((level) => (
+                      <button
+                        key={level}
+                        type="button"
+                        onClick={() => setDifficulty(level)}
+                        className={cn(
+                          'rounded-full border px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.1em] transition-colors',
+                          difficulty === level
+                            ? 'border-primary bg-primary text-primary-foreground'
+                            : 'border-border bg-surface text-muted-foreground hover:border-border-strong hover:text-foreground',
+                        )}
+                      >
+                        {level}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <label className="flex cursor-pointer items-center justify-between gap-3 border-t border-border pt-3">
+                  <span className="min-w-0">
+                    <span className="block text-[11px] font-semibold text-foreground">Feature on the journal</span>
+                    <span className="block text-[10px] leading-snug text-muted-foreground">
+                      Featured stories lead the discovery page.
+                    </span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={isFeatured}
+                    onChange={(event) => setIsFeatured(event.target.checked)}
+                    className="h-4 w-4 shrink-0 accent-[var(--ds-primary)]"
+                  />
+                </label>
+              </div>
+            </section>
+
+            {/* SEO */}
+            <section className="border-t border-border pt-5">
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="flex items-center gap-1.5 font-display text-[15px] font-semibold tracking-[-0.03em]">
+                  <Link2 size={15} className="text-primary" />
+                  Search & social
+                </h2>
+                <Badge variant={seoDescription.length >= 70 && seoTitle.length >= 20 ? 'success' : 'warning'}>
+                  {seoDescription.length >= 70 && seoTitle.length >= 20 ? 'Ready' : 'Check'}
+                </Badge>
+              </div>
+
+              <div className="mt-3 space-y-3">
+                <Field
+                  label="Meta title"
+                  hint={`${seoTitle.length}/60 characters`}
+                >
+                  <Input
+                    value={metaTitle}
+                    onChange={(event) => setMetaTitle(event.target.value)}
+                    placeholder={title || 'Your story title'}
+                    maxLength={70}
+                    className="h-10"
+                  />
+                </Field>
+
+                <Field
+                  label="Meta description"
+                  hint={`${seoDescription.length}/160 characters`}
+                >
+                  <Textarea
+                    value={metaDescription}
+                    onChange={(event) => setMetaDescription(event.target.value)}
+                    placeholder={subtitle || plainText(content).slice(0, 150) || 'A short, useful summary for search engines.'}
+                    maxLength={180}
+                    className="min-h-[84px] py-2 text-xs leading-relaxed"
+                  />
+                </Field>
+
+                <Field label="Slug" hint="Keep it short and readable.">
+                  <div className="flex items-center rounded-control border border-border bg-surface pl-2.5 focus-within:border-primary focus-within:ring-4 focus-within:ring-primary/10">
+                    <span className="text-[10px] text-faint">/article/</span>
+                    <input
+                      value={seoSlug}
+                      onChange={(event) =>
+                        setSeoSlug(event.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))
+                      }
+                      placeholder={generateSlug(title) || 'your-story'}
+                      className="h-10 min-w-0 flex-1 bg-transparent px-1 text-xs text-foreground outline-none placeholder:text-faint"
+                    />
+                  </div>
+                </Field>
+
+                <details className="group border-t border-border pt-3">
+                  <summary className="flex cursor-pointer list-none items-center justify-between px-3 py-2 text-[10px] font-bold uppercase tracking-[0.14em] text-muted-foreground [&::-webkit-details-marker]:hidden">
+                    Preview search & social
+                    <ChevronDown size={13} className="transition-transform group-open:rotate-180" />
+                  </summary>
+                  <div className="space-y-3 border-t border-border p-3">
+                    <div>
+                      <p className="mb-1.5 text-[9px] font-bold uppercase tracking-[0.16em] text-faint">Google</p>
+                      <div className="border-l-2 border-border pl-3">
+                        <p className="truncate text-[10px] text-muted-foreground">
+                          {origin.replace(/^https?:\/\//, '')} › article › {slugValue || 'your-story'}
+                        </p>
+                        <p className="mt-0.5 line-clamp-2 text-[15px] font-medium leading-snug text-info">{seoTitle}</p>
+                        <p className="mt-0.5 line-clamp-3 text-[11px] leading-relaxed text-muted-foreground">
+                          {seoDescription}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div>
+                      <p className="mb-1.5 text-[9px] font-bold uppercase tracking-[0.16em] text-faint">Social card</p>
+                      <div className="overflow-hidden">
+                        <ArticleCover
+                          src={coverImage}
+                          title={seoTitle}
+                          categoryId={primaryCategory}
+                          seed={id}
+                          hideWordmark
+                          className="aspect-[1.91/1] w-full"
+                        />
+                        <div className="p-2.5">
+                          <p className="text-[8px] font-bold uppercase tracking-[0.14em] text-faint">
+                            {origin.replace(/^https?:\/\//, '')}
+                          </p>
+                          <p className="mt-0.5 line-clamp-2 text-[11px] font-semibold leading-snug">{seoTitle}</p>
+                          <p className="mt-0.5 line-clamp-2 text-[10px] leading-relaxed text-muted-foreground">
+                            {seoDescription}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </details>
+              </div>
+            </section>
+          </aside>
+        </div>
+      </div>
+
+      {/* Cover dialog */}
+      <Dialog
+        open={showCoverModal}
+        onClose={() => setShowCoverModal(false)}
+        title="Choose a cover"
+        description="Upload a photo, paste a link, or start from the editorial shelf."
+        size="lg"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setShowCoverModal(false)}>
+              Cancel
+            </Button>
+            <Button onClick={applyCoverUrl} disabled={!coverUrlInput.trim()}>
+              Use this image
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <Field label="Image URL" hint="Use a wide image — around 1600×900 works well.">
+            <Input
+              value={coverUrlInput}
+              onChange={(event) => setCoverUrlInput(event.target.value)}
+              placeholder="https://…"
+              type="url"
+            />
+          </Field>
+
+          <div>
+            <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.16em] text-muted-foreground">
+              From the shelf
+            </p>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              {COVER_PRESETS.map((preset) => (
+                <button
+                  key={preset.url}
+                  type="button"
+                  onClick={() => {
+                    setCoverImage(preset.url);
+                    setCoverUrlInput(preset.url);
+                    setShowCoverModal(false);
+                    toast.success('Cover updated');
+                  }}
+                  className={cn(
+                    'group relative aspect-[16/10] overflow-hidden rounded-control border-2 transition-all',
+                    coverUrlInput === preset.url
+                      ? 'border-primary shadow-soft'
+                      : 'border-transparent hover:border-border-strong',
+                  )}
+                >
+                  <img
+                    src={preset.url}
+                    alt={preset.label}
+                    loading="lazy"
+                    className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
+                  />
+                  <span className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent px-2 py-1.5 text-left text-[9px] font-bold uppercase tracking-[0.1em] text-[#ffffff]">
+                    {preset.label}
+                  </span>
+                  {coverUrlInput === preset.url && (
+                    <span className="absolute right-1.5 top-1.5 grid h-5 w-5 place-items-center rounded-full bg-primary text-primary-foreground">
+                      <Check size={12} />
+                    </span>
+                  )}
                 </button>
               ))}
             </div>
           </div>
-        </div>
 
-        {/* Tags */}
-        <div className="flex flex-wrap items-center gap-2">
-          {tags.map(tag => (
-            <span key={tag} className="flex items-center gap-1 px-3 py-1 rounded-full bg-white/10 text-sm">
-              #{tag}
-              <button onClick={() => removeTag(tag)} className="p-0.5 hover:bg-white/20 rounded-full transition-colors">
-                <X size={12} />
-              </button>
-            </span>
-          ))}
-          {tags.length < 5 && (
+          <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
             <input
-              type="text"
-              value={tagInput}
-              onChange={(e) => setTagInput(e.target.value)}
-              onKeyDown={addTag}
-              placeholder="Add tag and press Enter..."
-              className="bg-transparent text-sm min-w-[200px] text-white/60 placeholder:text-white/20 focus:outline-none"
+              ref={coverFileInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handleCoverUpload}
+              className="hidden"
             />
-          )}
+            <Button
+              variant="secondary"
+              size="sm"
+              loading={uploadingCover}
+              leftIcon={<UploadCloud size={14} />}
+              onClick={() => coverFileInputRef.current?.click()}
+            >
+              Upload from device
+            </Button>
+            <p className="text-[11px] text-muted-foreground">JPG, PNG or WebP · up to 5MB</p>
+          </div>
         </div>
-
-        {/* Main Editor */}
-        <div className="pt-4">
-          <RichTextEditor 
-            content={content} 
-            onChange={(html) => setContent(html)} 
-          />
-        </div>
-      </div>
+      </Dialog>
     </div>
   );
+}
+
+/* -------------------------------------------------------------------------- */
+
+function generateSlug(text: string) {
+  return text
+    .toLowerCase()
+    .replace(/[^\w\s-]/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/--+/g, '-')
+    .trim();
 }

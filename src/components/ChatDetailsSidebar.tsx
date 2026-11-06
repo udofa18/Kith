@@ -92,7 +92,7 @@ export default function ChatDetailsSidebar({ me, userId, conv, exists, messages,
 
   const name = nameOf(profile);
   const first = name.split(' ')[0];
-  const presence = presenceLabel(profile?.lastActiveAt, now);
+  const presence = presenceLabel(profile?.lastActiveAt, now, profile);
   const localTime = localTimeIn(profile?.timezone, now);
   const joined = toDate(profile?.createdAt);
   const pinned = isFavourited(conv, me);

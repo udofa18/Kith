@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { ref, uploadBytes, getDownloadURL } from '../../lib/storage';
 import { Building2, Camera, Check, Loader2, X } from 'lucide-react';
 import { toast } from 'react-hot-toast';
-import { storage } from '../../firebase';
 import { usersRepository, type OnboardingProfile } from '../../services/db/usersRepository';
 import StepLayout from './StepLayout';
 
@@ -77,7 +76,7 @@ export default function ProfileStep({ uid, initial, onNext }: ProfileStepProps) 
     }
     setUploading(true);
     try {
-      const snapshot = await uploadBytes(ref(storage, `avatars/${uid}/${Date.now()}_${file.name}`), file);
+      const snapshot = await uploadBytes(ref(null, `avatars/${uid}/${Date.now()}_${file.name}`), file);
       update({ profileImage: await getDownloadURL(snapshot.ref) });
     } catch (err: any) {
       console.error('Avatar upload failed:', err);

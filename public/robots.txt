@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+
+# Private or editor-only surfaces
+Disallow: /write
+Disallow: /settings
+Disallow: /admin

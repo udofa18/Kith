@@ -26,6 +26,7 @@
     "@react-google-maps/api": "^2.20.8",
     "@remotion/animated-emoji": "^4.0.452",
     "@remotion/player": "^4.0.452",
+    "@supabase/server": "^1.9.2",
     "@supabase/supabase-js": "^2.108.2",
     "@tailwindcss/typography": "^0.5.19",
     "@tailwindcss/vite": "^4.1.14",

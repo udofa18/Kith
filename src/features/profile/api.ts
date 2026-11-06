@@ -6,8 +6,8 @@ import {
   collection, collectionGroup, doc, documentId, getCountFromServer, getDoc, getDocs, limit, orderBy,
   query, serverTimestamp, startAfter, updateDoc, where, type QueryDocumentSnapshot,
 } from 'firebase/firestore';
-import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
-import { db, storage } from '../../firebase';
+import { getDownloadURL, ref, uploadBytes } from '../../lib/storage';
+import { auth, db } from '../../firebase';
 
 export interface Profile {
   id: string;
@@ -95,7 +95,7 @@ export const POSTS_PAGE = 10;
 
 export const fetchPostCount = (userId: string) => count(query(collection(db, 'posts'), where('authorUid', '==', userId)));
 
-export async function fetchProfilePosts(userId: string, cursor?: QueryDocumentSnapshot) {
+export async function fetchProfilePosts(userId: string, cursor?: QueryDocumentSnapshot, includeFollowers = true) {
   const snap = await getDocs(query(
     collection(db, 'posts'),
     where('authorUid', '==', userId),
@@ -103,8 +103,11 @@ export async function fetchProfilePosts(userId: string, cursor?: QueryDocumentSn
     ...(cursor ? [startAfter(cursor)] : []),
     limit(POSTS_PAGE),
   ));
+  const visible = snap.docs.filter((d) =>
+    includeFollowers || d.data().visibility !== 'followers' || d.data().authorUid === auth.currentUser?.uid,
+  );
   return {
-    posts: snap.docs.map(d => ({ id: d.id, ...d.data() })) as any[],
+    posts: visible.map(d => ({ id: d.id, ...d.data() })) as any[],
     cursor: snap.docs.length === POSTS_PAGE ? snap.docs[snap.docs.length - 1] : undefined,
   };
 }
@@ -117,9 +120,11 @@ export interface MediaTile {
 }
 
 /** Photos and videos from the user's recent posts, one tile per post. */
-export async function fetchProfileMedia(userId: string): Promise<MediaTile[]> {
+export async function fetchProfileMedia(userId: string, includeFollowers = true): Promise<MediaTile[]> {
   const snap = await getDocs(query(collection(db, 'posts'), where('authorUid', '==', userId), orderBy('createdAt', 'desc'), limit(60)));
-  return snap.docs.flatMap(d => {
+  return snap.docs.filter((d) =>
+    includeFollowers || d.data().visibility !== 'followers' || d.data().authorUid === auth.currentUser?.uid,
+  ).flatMap(d => {
     const media = (d.data().media || []).filter((m: any) => m?.url);
     return media.length ? [{ postId: d.id, url: media[0].url, type: media[0].type === 'video' ? 'video' : 'image', more: media.length - 1 }] : [];
   });
@@ -190,11 +195,38 @@ export async function fetchSectionCounts(userId: string, isMe: boolean): Promise
 export async function fetchSection(key: SectionKey, userId: string, isMe: boolean): Promise<any[]> {
   const snap = await getDocs(sectionQuery(key, userId, isMe));
   if (key !== 'communities') return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+  const viewerUid = auth.currentUser?.uid ?? null;
+  const userSnap = isMe ? null : await getDoc(doc(db, 'users', userId)).catch(() => null);
+  const settings = userSnap?.exists() ? userSnap.data().settings : null;
+  const audience = settings?.communities?.showMembership ?? settings?.profile?.showCommunities ?? 'everyone';
+
+  if (!isMe && audience === 'me') return [];
+
+  if (!isMe && (audience === 'followers' || audience === 'mutuals' || audience === 'members')) {
+    if (!viewerUid) return [];
+    const viewerFollows = (await getDoc(doc(db, 'users', viewerUid, 'following', userId)).catch(() => null))?.exists();
+    const followsViewer = (await getDoc(doc(db, 'users', userId, 'following', viewerUid)).catch(() => null))?.exists();
+    if (audience === 'followers' && !viewerFollows) return [];
+    if (audience === 'mutuals' && !(viewerFollows && followsViewer)) return [];
+    if (audience === 'members') {
+      const memberships = await getDocs(query(
+        collectionGroup(db, 'members'),
+        where('userId', '==', viewerUid),
+        limit(1),
+      )).catch(() => null);
+      if (!memberships?.size) return [];
+    }
+  }
+
+  const showRole = settings?.communities?.showRole !== false;
   const communities = await Promise.all(snap.docs.map(async m => {
     const communityId = m.ref.parent.parent?.id;
     if (!communityId) return null;
     const c = await getDoc(doc(db, 'communities', communityId)).catch(() => null);
-    return c?.exists() ? { id: c.id, ...c.data(), userRole: m.data().role } : null;
+    return c?.exists()
+      ? { id: c.id, ...c.data(), userRole: showRole ? m.data().role : undefined }
+      : null;
   }));
   return communities.filter(Boolean);
 }
@@ -221,7 +253,7 @@ export async function fetchBookmarks(userId: string): Promise<any[]> {
 
 /** Replaces your cover photo. */
 export async function uploadBanner(userId: string, file: File): Promise<string> {
-  const storageRef = ref(storage, `avatars/${userId}/banner_${Date.now()}`);
+  const storageRef = ref(null, `avatars/${userId}/banner_${Date.now()}`);
   await uploadBytes(storageRef, file, { contentType: file.type });
   const url = await getDownloadURL(storageRef);
   await updateDoc(doc(db, 'users', userId), { bannerImage: url, updatedAt: serverTimestamp() });

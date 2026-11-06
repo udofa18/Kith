@@ -17,5 +17,5 @@ CREATE TABLE IF NOT EXISTS feed_preferences (
 ALTER TABLE feed_preferences ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY feed_preferences_all ON feed_preferences FOR ALL
-  USING (user_id = auth.uid()::text)
-  WITH CHECK (user_id = auth.uid()::text);
+  USING (user_id = public.current_uid()::text)
+  WITH CHECK (user_id = public.current_uid()::text);

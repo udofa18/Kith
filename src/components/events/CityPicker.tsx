@@ -36,7 +36,7 @@ export default function CityPicker({ value, onChange, cities, onlineCount, locat
   return (
     <div className="relative">
       <button onClick={() => setOpen(o => !o)} aria-haspopup="listbox" aria-expanded={open} className="h-full flex items-center gap-2 pl-4 pr-3 py-3 rounded-full hover:bg-black/5 dark:hover:bg-white/10 transition-colors font-semibold text-sm whitespace-nowrap">
-        <MapPin size={17} className="text-pink-500" />
+        <MapPin size={17} className="text-primary" />
         <span className="max-w-[9rem] truncate">{label}</span>
         <ChevronDown size={15} className={`text-black/45 dark:text-white/45 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
@@ -48,9 +48,9 @@ export default function CityPicker({ value, onChange, cities, onlineCount, locat
             <div className="p-3 border-b border-black/10 dark:border-white/10">
               <div className="relative">
                 <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-black/40 dark:text-white/40" />
-                <input autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Search a city" className="w-full pl-9 pr-3 py-2 rounded-xl bg-black/5 dark:bg-white/[0.06] text-sm outline-none focus:ring-2 focus:ring-pink-500/50" />
+                <input autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Search a city" className="w-full pl-9 pr-3 py-2 rounded-xl bg-muted text-sm outline-none focus:ring-2 focus:ring-primary/40" />
               </div>
-              <button onClick={useMyLocation} className="mt-2 w-full flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-semibold text-pink-600 dark:text-pink-400 hover:bg-pink-500/10 transition-colors"><Crosshair size={15} /> Use my location</button>
+              <button onClick={useMyLocation} className="mt-2 w-full flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-semibold text-primary hover:bg-primary/10 transition-colors"><Crosshair size={15} /> Use my location</button>
             </div>
             <div className="max-h-64 overflow-y-auto p-1.5">
               {!q && <Row active={value === 'all'} onClick={() => pick('all')} icon={<Globe size={15} />} label="Anywhere" />}
@@ -71,7 +71,7 @@ function Row({ active, onClick, icon, label, count }: { active: boolean; onClick
       <span className="text-black/45 dark:text-white/45">{icon}</span>
       <span className="flex-1 truncate font-medium">{label}</span>
       {count !== undefined && <span className="text-xs text-black/40 dark:text-white/40">{count}</span>}
-      {active && <Check size={15} className="text-pink-500" />}
+      {active && <Check size={15} className="text-primary" />}
     </button>
   );
 }

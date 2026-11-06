@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowUp, Flame, Inbox, MessageSquare, Search as SearchIcon, Users } from 'lucide-react';
@@ -19,13 +19,22 @@ import FeedEmpty from './FeedEmpty';
 import PageHeader from '../../../components/ui/PageHeader';
 import LiveNowRow from './LiveNowRow';
 import AwayDigest from './AwayDigest';
+import CreateInstantSessionModal from '../../../components/CreateInstantSessionModal';
 
-export function tabFromParams(params: URLSearchParams): FeedTab {
+export function tabFromParams(params: URLSearchParams, fallback: FeedTab = 'foryou'): FeedTab {
   const view = params.get('view');
   if (view === 'following' || view === 'trending' || view === 'foryou') return view;
   if (params.get('search') || params.get('hashtag')) return 'search';
-  return 'foryou';
+  return fallback;
 }
+
+const createdAtMs = (item: { data?: Record<string, any> }) => {
+  const value = item.data?.createdAt;
+  if (!value) return 0;
+  if (typeof value?.toMillis === 'function') return value.toMillis();
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+};
 
 export default function FeedPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -35,13 +44,38 @@ export default function FeedPage() {
   const editorRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const mountedAt = useRef(Date.now());
+  const [showInstantSession, setShowInstantSession] = useState(false);
 
-  const tab = tabFromParams(searchParams);
+  const defaultTab: FeedTab = user?.settings?.feed?.defaultTab === 'following' ? 'following' : 'foryou';
+  const tab = tabFromParams(searchParams, defaultTab);
   const search = searchParams.get('search') || undefined;
   const hashtag = searchParams.get('hashtag') || undefined;
   const params = useMemo<SearchParams>(() => (tab === 'search' ? { search, hashtag } : {}), [tab, search, hashtag]);
 
   const feed = useFeed(tab, uid, params);
+  const feedSettings = user?.settings?.feed;
+
+  // Format filters and "pause personalisation" are applied to the merged pages so
+  // they also affect cached results that were fetched before the setting changed.
+  const items = useMemo(() => {
+    if (!feedSettings) return feed.items;
+    let next = feed.items.filter((item) => {
+      if (!feedSettings.showArticles && item.type === 'article') return false;
+      if (!feedSettings.showProductsEvents && (item.type === 'event' || item.type === 'product')) return false;
+      if (!feedSettings.showPolls && (item.type === 'poll' || item.data?.poll)) return false;
+      if (
+        !feedSettings.showReposts &&
+        (item.data?.originalPostId || item.data?.type === 'repost' || item.data?.type === 'quote')
+      ) {
+        return false;
+      }
+      return true;
+    });
+    if (feedSettings.pausePersonalization) {
+      next = [...next].sort((a, b) => createdAtMs(b) - createdAtMs(a));
+    }
+    return next;
+  }, [feed.items, feedSettings]);
   const { data: viewer } = useQuery({
     queryKey: queryKeys.feedViewer(uid),
     queryFn: () => fetchViewerContext(uid),
@@ -144,7 +178,12 @@ export default function FeedPage() {
               </button>
             </div>
           )}
-          {(tab === 'foryou' || tab === 'following') && (<>{uid && <StatusTray />}<LiveNowRow /></>)}
+          {(tab === 'foryou' || tab === 'following') && (
+            <>
+              {uid && <StatusTray />}
+              <LiveNowRow onGoLive={uid ? () => setShowInstantSession(true) : undefined} />
+            </>
+          )}
           {uid ? (
             <div ref={editorRef}>
               {tab === 'foryou' && <AwayDigest uid={uid} />}
@@ -164,7 +203,7 @@ export default function FeedPage() {
         <FeedList
           tab={tab}
           uid={uid}
-          items={feed.items}
+          items={items}
           isLoading={feed.isLoading}
           isError={feed.isError}
           hasNextPage={feed.hasNextPage}
@@ -174,6 +213,11 @@ export default function FeedPage() {
           empty={<EmptyState tab={tab} followsAnyone={(viewer?.followingIds.size ?? 0) > 0} query={hashtag ? `#${hashtag.replace(/^#/, "")}` : search} onGoTrending={() => setTab('trending')} />}
         />
       )}
+
+      <CreateInstantSessionModal
+        isOpen={showInstantSession}
+        onClose={() => setShowInstantSession(false)}
+      />
     </div>
   );
 }

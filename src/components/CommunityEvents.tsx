@@ -5,6 +5,7 @@ import { Calendar, Check, Clock, MapPin, Plus, Users, Video } from 'lucide-react
 import { auth, db } from '../firebase';
 import { formatDate } from '../lib/utils';
 import CreateEventModal from './CreateEventModal';
+import { formatEventPrice } from '../lib/payments';
 
 interface Props {
   communityId: string;
@@ -111,7 +112,7 @@ export default function CommunityEvents({ communityId, isAdmin, isMember, canCre
                       {start && <span className="flex items-center gap-1"><Clock size={13} />{formatDate(start, 'EEE, h:mm a')}</span>}
                       <span className="flex items-center gap-1">{e.isOffline ? <><MapPin size={13} />{e.locationName || 'In person'}</> : <><Video size={13} />Online</>}</span>
                       <span className="flex items-center gap-1"><Users size={13} />{e.attendeeCount || 0}{e.maxAttendees > 0 ? ` / ${e.maxAttendees}` : ''} going{full && ' · Full'}</span>
-                      {e.isPaid && <span className="text-amber-600 dark:text-amber-400 font-medium">${e.price}</span>}
+                      {e.isPaid && <span className="text-amber-600 dark:text-amber-400 font-medium">{formatEventPrice(e)}</span>}
                     </p>
                     {e.description && <p className="mt-1.5 text-sm text-foreground/50 line-clamp-1">{e.description}</p>}
                   </div>

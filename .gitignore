@@ -9,3 +9,4 @@ coverage/
 .antigravity/
 data/firestore-export/
 data/transformed/
+supabase/.temp/

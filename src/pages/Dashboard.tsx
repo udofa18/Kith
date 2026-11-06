@@ -1,339 +1,478 @@
-import { useState, useEffect, useRef } from 'react';
-import { collection, query, where, onSnapshot, orderBy, getDocs, doc, updateDoc, getDoc } from 'firebase/firestore';
-import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
-import { db, auth, storage, OperationType, handleFirestoreError } from '../firebase';
-import { 
-  BarChart3, 
-  Camera,
-  Check,
-  CreditCard, 
-  Download, 
-  Eye, 
-  Github,
-  Globe,
-  Layout, 
-  MapPin,
-  Package, 
-  Plus, 
-  Settings, 
-  TrendingUp, 
-  Users,
-  Zap
-} from 'lucide-react';
-import { Link, useSearchParams } from 'react-router-dom';
-import { motion } from 'motion/react';
-import ProductCard from '../components/ProductCard';
-import Sidebar from '../components/Sidebar';
+import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { toast } from 'react-hot-toast';
+import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { AlertTriangle, ArrowUpRight, CheckCircle2, Download, Edit3, Eye, Megaphone, Package, Plus, ShoppingBag, Star, TrendingUp, Wallet } from 'lucide-react';
+import { auth } from '../firebase';
+import { supabase } from '../supabase';
+import { Badge, Button, Card, EmptyState, Skeleton } from '../components/ui';
+import { typeLabel } from '../components/marketplace/MarketCard';
+import { BalanceResponse, ConnectStatus, downloadProduct, formatPrice, getConnectStatus, getCreatorBalance, startCheckout } from '../lib/payments';
+import { cn } from '../lib/cn';
+
+type Tab = 'products' | 'sales' | 'purchases';
+
+interface ProductRow {
+  id: string;
+  title: string;
+  product_type: string | null;
+  cover_url: string | null;
+  price_cents: number;
+  currency: string;
+  sales_count: number;
+  rating_avg: number | string | null;
+  rating_count: number;
+  status: 'draft' | 'published' | 'paused' | 'archived';
+  promoted_until: string | null;
+}
+
+/** Must match PRODUCT_PROMO_TIERS in api/_lib/payments.ts. The server sets the real price. */
+const PROMO_TIERS = [
+  { id: 'promo_7d', label: '7 days', cents: 500 },
+  { id: 'promo_30d', label: '30 days', cents: 1500 },
+] as const;
+
+interface SaleRow {
+  id: string;
+  product_id: string;
+  unit_price_cents: number;
+  creator_amount_cents: number;
+  currency: string;
+  products: { title: string } | null;
+  orders: { status: string; paid_at: string | null } | null;
+}
+
+interface PurchaseRow {
+  id: string;
+  product_id: string;
+  price_cents: number | null;
+  created_at: string;
+  products: { title: string; product_type: string | null; cover_url: string | null; currency: string } | null;
+}
+
+const MONTHS = 6;
+
+function lastMonths(count: number): Array<{ key: string; label: string }> {
+  const now = new Date();
+  return Array.from({ length: count }, (_, i) => {
+    const d = new Date(now.getFullYear(), now.getMonth() - (count - 1 - i), 1);
+    return {
+      key: `${d.getFullYear()}-${d.getMonth()}`,
+      label: d.toLocaleString('en-US', { month: 'short' }),
+    };
+  });
+}
 
 export default function Dashboard() {
-  const [searchParams, setSearchParams] = useSearchParams();
-  const initialTab = searchParams.get('tab') || 'overview';
-  const [activeTab, setActiveTab] = useState(initialTab);
-  const [myProducts, setMyProducts] = useState<any[]>([]);
-  const [purchases, setPurchases] = useState<any[]>([]);
-  const [profile, setProfile] = useState<any>(null);
-  const [saving, setSaving] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [error, setError] = useState('');
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [stats, setStats] = useState({
-    totalSales: 0,
-    totalImpressions: 0,
-    totalRevenue: 0
-  });
-  const [migrating, setMigrating] = useState(false);
-  const [migrationResults, setMigrationResults] = useState<string | null>(null);
+  const uid = auth.currentUser?.uid ?? null;
+  const [tab, setTab] = useState<Tab>('products');
+  const [products, setProducts] = useState<ProductRow[]>([]);
+  const [sales, setSales] = useState<SaleRow[]>([]);
+  const [purchases, setPurchases] = useState<PurchaseRow[]>([]);
+  const [payout, setPayout] = useState<ConnectStatus | null>(null);
+  const [balance, setBalance] = useState<BalanceResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState<string | null>(null);
 
-  const runMigration = async () => {
-    if (!auth.currentUser || auth.currentUser.email !== 'danieludofa452@gmail.com') return;
-    setMigrating(true);
-    setMigrationResults(null);
+  useEffect(() => {
+    if (!uid || !supabase) {
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const [productRes, saleRes, purchaseRes, payoutRes, balanceRes] = await Promise.all([
+        supabase!
+          .from('products')
+          .select('id, title, product_type, cover_url, price_cents, currency, sales_count, rating_avg, rating_count, status, promoted_until')
+          .eq('creator_uid', uid)
+          .order('created_at', { ascending: false }),
+        supabase!
+          .from('order_items')
+          .select('id, product_id, unit_price_cents, creator_amount_cents, currency, products(title), orders!inner(status, paid_at)')
+          .eq('creator_id', uid)
+          .eq('orders.status', 'paid')
+          .order('created_at', { ascending: false })
+          .limit(500),
+        supabase!
+          .from('purchases')
+          .select('id, product_id, price_cents, created_at, products(title, product_type, cover_url, currency)')
+          .eq('status', 'completed')
+          .order('created_at', { ascending: false }),
+        getConnectStatus().catch(() => null),
+        getCreatorBalance().catch(() => null),
+      ]);
+      if (cancelled) return;
+
+      const firstError = productRes.error ?? saleRes.error ?? purchaseRes.error;
+      if (firstError) setError(firstError.message);
+      setProducts((productRes.data ?? []) as ProductRow[]);
+      setSales((saleRes.data ?? []) as unknown as SaleRow[]);
+      setPurchases((purchaseRes.data ?? []) as unknown as PurchaseRow[]);
+      setPayout(payoutRes);
+      setBalance(balanceRes);
+      setLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [uid]);
+
+  const stats = useMemo(() => {
+    const usdSales = sales.filter(s => s.currency === 'USD');
+    const revenueCents = usdSales.reduce((acc, s) => acc + Number(s.creator_amount_cents || 0), 0);
+    const published = products.filter(p => p.status === 'published').length;
+    const rated = products.filter(p => p.rating_count > 0);
+    const reviews = rated.reduce((acc, p) => acc + p.rating_count, 0);
+    const weighted = rated.reduce((acc, p) => acc + Number(p.rating_avg || 0) * p.rating_count, 0);
+    return {
+      revenueCents,
+      salesCount: sales.length,
+      published,
+      rating: reviews > 0 ? weighted / reviews : null,
+      reviews,
+    };
+  }, [products, sales]);
+
+  const monthly = useMemo(() => {
+    const buckets = lastMonths(MONTHS);
+    const totals = new Map(buckets.map(b => [b.key, 0]));
+    for (const s of sales) {
+      if (s.currency !== 'USD' || !s.orders?.paid_at) continue;
+      const d = new Date(s.orders.paid_at);
+      const key = `${d.getFullYear()}-${d.getMonth()}`;
+      if (totals.has(key)) totals.set(key, (totals.get(key) ?? 0) + Number(s.creator_amount_cents || 0) / 100);
+    }
+    return buckets.map(b => ({ month: b.label, amount: Number((totals.get(b.key) ?? 0).toFixed(2)) }));
+  }, [sales]);
+
+  const payoutReady = !!payout?.connected && !!payout.payoutsEnabled;
+  const hasRevenue = monthly.some(m => m.amount > 0);
+
+  const handleDownload = async (productId: string) => {
+    setDownloading(productId);
     try {
-      let postsCount = 0;
-      let eventsCount = 0;
-
-      // Update Posts
-      const postsSnap = await getDocs(collection(db, 'posts'));
-      for (const d of postsSnap.docs) {
-        const data = d.data();
-        if (!data.visibility) {
-          const visibility = data.communityId ? 'community' : 'public';
-          await updateDoc(doc(db, 'posts', d.id), { visibility });
-          postsCount++;
-        }
-      }
-
-      // Update Events
-      const eventsSnap = await getDocs(collection(db, 'events'));
-      for (const d of eventsSnap.docs) {
-        const data = d.data();
-        if (!data.visibility) {
-          const visibility = data.communityId ? 'community' : 'public';
-          await updateDoc(doc(db, 'events', d.id), { visibility });
-          eventsCount++;
-        }
-      }
-
-      setMigrationResults(`Successfully updated ${postsCount} posts and ${eventsCount} events.`);
-    } catch (err) {
-      console.error("Migration error:", err);
-      setMigrationResults(`Migration failed: ${err instanceof Error ? err.message : String(err)}`);
+      await downloadProduct(productId);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Download failed');
     } finally {
-      setMigrating(false);
+      setDownloading(null);
     }
   };
 
-  useEffect(() => {
-    if (!auth.currentUser) return;
+  return (
+    <div className="h-full w-full overflow-y-auto custom-scrollbar text-foreground">
+      <div className="mx-auto max-w-[1200px] space-y-8 px-6 pb-20 pt-8">
+        <header className="flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
+          <div className="space-y-1">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Creator dashboard</p>
+            <h1 className="font-display text-3xl font-extrabold tracking-tight md:text-4xl">Your business, at a glance</h1>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <Link to="/payouts" className="inline-flex items-center gap-2 rounded-full border border-border-strong px-4 py-2 text-sm font-semibold transition-colors hover:bg-muted">
+              <Wallet size={16} />
+              Payouts
+              <Badge variant={payoutReady ? 'success' : 'warning'}>{payoutReady ? 'Active' : 'Set up'}</Badge>
+            </Link>
+            <Link to="/upload" className="inline-flex items-center gap-2 rounded-full bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground shadow-glow-primary transition-colors hover:bg-[var(--ds-primary-hover)]">
+              <Plus size={18} /> New product
+            </Link>
+          </div>
+        </header>
 
-    const productsQuery = query(
-      collection(db, 'products'), 
-      where('creatorUid', '==', auth.currentUser.uid),
-      orderBy('createdAt', 'desc')
+        {!loading && !payoutReady && (
+          <div className="flex flex-col gap-4 rounded-card border border-warning/40 bg-warning/10 p-5 md:flex-row md:items-center md:justify-between">
+            <div className="flex items-start gap-3">
+              <AlertTriangle size={20} className="mt-0.5 shrink-0 text-warning" />
+              <div>
+                <p className="font-semibold">Set up payouts to sell paid products</p>
+                <p className="text-sm text-muted-foreground">Free products work now. Paid products go live once Stripe has your bank details.</p>
+              </div>
+            </div>
+            <Link to="/payouts" className="inline-flex shrink-0 items-center justify-center rounded-full bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground">
+              Finish setup
+            </Link>
+          </div>
+        )}
+
+        {!loading && balance && (
+          <section className="flex flex-col gap-4 rounded-card border border-border bg-surface p-5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-3">
+              <span className="grid h-10 w-10 place-items-center rounded-control bg-primary/12 text-primary">
+                <Wallet size={18} />
+              </span>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Available to withdraw</p>
+                <p className="font-display text-2xl font-extrabold">{formatPrice(balance.availableCents, balance.currency)}</p>
+                {balance.pendingCents > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    {formatPrice(balance.pendingCents, balance.currency)} on hold until sales clear
+                  </p>
+                )}
+              </div>
+            </div>
+            <Link
+              to="/payouts"
+              className="inline-flex shrink-0 items-center justify-center gap-2 rounded-full bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground shadow-glow-primary transition-colors hover:bg-[var(--ds-primary-hover)]"
+            >
+              <ArrowUpRight size={16} /> Withdraw
+            </Link>
+          </section>
+        )}
+
+        {error && (
+          <p role="alert" className="text-sm text-destructive">Some data couldn't load: {error}</p>
+        )}
+
+        <section className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          {loading ? (
+            Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-32" />)
+          ) : (
+            <>
+              <StatCard icon={<TrendingUp size={18} />} label="Revenue" value={formatPrice(stats.revenueCents, 'USD')} hint="Your share after fees" />
+              <StatCard icon={<ShoppingBag size={18} />} label="Sales" value={String(stats.salesCount)} hint="Paid orders" />
+              <StatCard icon={<Package size={18} />} label="Published" value={String(stats.published)} hint={`${products.length} total incl. drafts`} />
+              <StatCard
+                icon={<Star size={18} />}
+                label="Average rating"
+                value={stats.rating !== null ? stats.rating.toFixed(1) : '—'}
+                hint={stats.reviews > 0 ? `From ${stats.reviews} reviews` : 'No reviews yet'}
+              />
+            </>
+          )}
+        </section>
+
+        <Card variant="elevated" className="space-y-4 p-6">
+          <div className="flex items-baseline justify-between">
+            <div>
+              <p className="font-semibold">Revenue</p>
+              <p className="text-sm text-muted-foreground">Last six months, in USD</p>
+            </div>
+          </div>
+          {loading ? (
+            <Skeleton className="h-56 w-full" />
+          ) : hasRevenue ? (
+            <div className="h-56 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={monthly} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="revenueFill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#ff6b4a" stopOpacity={0.35} />
+                      <stop offset="100%" stopColor="#ff6b4a" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--ds-border)" vertical={false} />
+                  <XAxis dataKey="month" tickLine={false} axisLine={false} tick={{ fill: 'var(--ds-muted-foreground)', fontSize: 12 }} />
+                  <YAxis tickLine={false} axisLine={false} width={48} tick={{ fill: 'var(--ds-muted-foreground)', fontSize: 12 }} />
+                  <Tooltip
+                    formatter={(value) => formatPrice(Math.round(Number(value) * 100), 'USD')}
+                    contentStyle={{ background: 'var(--ds-surface-raised)', border: '1px solid var(--ds-border)', borderRadius: 12, color: 'var(--ds-foreground)' }}
+                  />
+                  <Area type="monotone" dataKey="amount" stroke="#ff6b4a" strokeWidth={2} fill="url(#revenueFill)" />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          ) : (
+            <p className="py-12 text-center text-sm text-muted-foreground">Revenue will show here once you make your first sale.</p>
+          )}
+        </Card>
+
+        <div role="tablist" aria-label="Dashboard sections" className="flex gap-2 border-b border-border">
+          {(
+            [
+              { id: 'products', label: 'Products', icon: <Package size={16} /> },
+              { id: 'sales', label: 'Sales', icon: <ShoppingBag size={16} /> },
+              { id: 'purchases', label: 'Purchases', icon: <Download size={16} /> },
+            ] as const
+          ).map(t => {
+            const active = tab === t.id;
+            return (
+              <button
+                key={t.id}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => setTab(t.id)}
+                className={cn(
+                  '-mb-px inline-flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-semibold transition-colors',
+                  active ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {t.icon} {t.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {loading ? (
+          <div className="space-y-3">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Skeleton key={i} className="h-20 w-full" />
+            ))}
+          </div>
+        ) : tab === 'products' ? (
+          products.length === 0 ? (
+            <EmptyState
+              icon={<Package size={20} />}
+              title="No products yet"
+              description="Publish a course, e-book, template, or tool and it appears here."
+              action={<Link to="/upload" className="text-sm font-semibold text-primary hover:underline">Create your first product</Link>}
+            />
+          ) : (
+            <ul className="space-y-3">
+              {products.map(p => (
+                <li key={p.id} className="flex flex-col gap-4 rounded-card border border-border bg-surface p-4 sm:flex-row sm:items-center">
+                  <div className="h-16 w-24 shrink-0 overflow-hidden rounded-control bg-muted">
+                    {p.cover_url ? (
+                      <img src={p.cover_url} alt="" className="h-full w-full object-cover" />
+                    ) : (
+                      <div className="grid h-full w-full place-items-center text-faint"><Package size={18} /></div>
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="truncate font-semibold">{p.title}</p>
+                      <Badge variant={p.status === 'published' ? 'success' : 'neutral'}>{p.status === 'published' ? 'Live' : 'Draft'}</Badge>
+                      {p.promoted_until && new Date(p.promoted_until) > new Date() && (
+                        <Badge variant="primary">Promoted until {new Date(p.promoted_until).toLocaleDateString()}</Badge>
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {typeLabel(p.product_type)} · {p.price_cents === 0 ? 'Free' : formatPrice(p.price_cents, p.currency)} · {p.sales_count} sold
+                      {p.rating_count > 0 && ` · ${Number(p.rating_avg).toFixed(1)} ★`}
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <Link to={`/products/${p.id}`} className="inline-flex items-center gap-1.5 rounded-full border border-border-strong px-3.5 py-1.5 text-sm font-semibold hover:bg-muted">
+                      <Eye size={14} /> View
+                    </Link>
+                    <Link to={`/edit/${p.id}`} className="inline-flex items-center gap-1.5 rounded-full border border-border-strong px-3.5 py-1.5 text-sm font-semibold hover:bg-muted">
+                      <Edit3 size={14} /> Edit
+                    </Link>
+                    {p.status === 'published' && <PromoteControl productId={p.id} />}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )
+        ) : tab === 'sales' ? (
+          sales.length === 0 ? (
+            <EmptyState icon={<ShoppingBag size={20} />} title="No sales yet" description="Paid orders for your products show up here." />
+          ) : (
+            <div className="overflow-hidden rounded-card border border-border">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-muted text-xs uppercase tracking-widest text-muted-foreground">
+                  <tr>
+                    <th className="px-4 py-3 font-semibold">Product</th>
+                    <th className="px-4 py-3 font-semibold">Date</th>
+                    <th className="px-4 py-3 text-right font-semibold">Price</th>
+                    <th className="px-4 py-3 text-right font-semibold">You earn</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {sales.map(s => (
+                    <tr key={s.id} className="hover:bg-muted/50">
+                      <td className="px-4 py-3 font-medium">{s.products?.title ?? 'Product'}</td>
+                      <td className="px-4 py-3 text-muted-foreground">{s.orders?.paid_at ? new Date(s.orders.paid_at).toLocaleDateString() : '—'}</td>
+                      <td className="px-4 py-3 text-right">{formatPrice(s.unit_price_cents, s.currency)}</td>
+                      <td className="px-4 py-3 text-right font-semibold">{formatPrice(s.creator_amount_cents, s.currency)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )
+        ) : purchases.length === 0 ? (
+          <EmptyState
+            icon={<Download size={20} />}
+            title="Nothing bought yet"
+            description="Products you buy from other creators show up here."
+            action={<Link to="/marketplace" className="text-sm font-semibold text-primary hover:underline">Browse the market</Link>}
+          />
+        ) : (
+          <ul className="space-y-3">
+            {purchases.map(p => (
+              <li key={p.id} className="flex items-center gap-4 rounded-card border border-border bg-surface p-4">
+                <div className="h-12 w-16 shrink-0 overflow-hidden rounded-control bg-muted">
+                  {p.products?.cover_url && <img src={p.products.cover_url} alt="" className="h-full w-full object-cover" />}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-semibold">{p.products?.title ?? 'Product'}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {new Date(p.created_at).toLocaleDateString()}
+                    {p.price_cents !== null && ` · ${formatPrice(p.price_cents, p.products?.currency ?? 'USD')}`}
+                  </p>
+                </div>
+                <Button size="sm" variant="outline" loading={downloading === p.product_id} onClick={() => handleDownload(p.product_id)} leftIcon={<Download size={14} />}>
+                  Download
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {!loading && payoutReady && tab === 'products' && products.length > 0 && (
+          <p className="flex items-center gap-2 text-xs text-muted-foreground">
+            <CheckCircle2 size={14} className="text-success" /> Payouts are active. Paid sales go to your Kith balance, ready to withdraw.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function StatCard({ icon, label, value, hint }: { icon: React.ReactNode; label: string; value: string; hint: string }) {
+  return (
+    <Card variant="elevated" className="space-y-3 p-5">
+      <span className="grid h-9 w-9 place-items-center rounded-control bg-primary/12 text-primary">{icon}</span>
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">{label}</p>
+        <p className="font-display text-2xl font-extrabold">{value}</p>
+      </div>
+      <p className="text-xs text-faint">{hint}</p>
+    </Card>
+  );
+}
+
+function PromoteControl({ productId }: { productId: string }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const promote = async (tierId: string) => {
+    setBusy(true);
+    try {
+      const result = await startCheckout('product_boost', productId, tierId);
+      if (!result.authorizationUrl) throw new Error('Could not start checkout');
+      window.location.href = result.authorizationUrl;
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not start checkout');
+      setBusy(false);
+    }
+  };
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="inline-flex items-center gap-1.5 rounded-full bg-primary/12 px-3.5 py-1.5 text-sm font-semibold text-primary hover:bg-primary/20"
+      >
+        <Megaphone size={14} /> Promote
+      </button>
     );
-    
-    const unsubscribeProducts = onSnapshot(productsQuery, (snapshot) => {
-      const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setMyProducts(docs);
-      
-      const totalImp = docs.reduce((acc, curr: any) => acc + (curr.impressions || 0), 0);
-      const totalSalesCount = docs.reduce((acc, curr: any) => acc + (curr.salesCount || 0), 0);
-      const totalRev = docs.reduce((acc, curr: any) => acc + ((curr.salesCount || 0) * (curr.price || 0)), 0);
-      
-      setStats(prev => ({ 
-        ...prev, 
-        totalImpressions: totalImp,
-        totalSales: totalSalesCount,
-        totalRevenue: totalRev
-      }));
-    }, (err) => {
-      handleFirestoreError(err, OperationType.LIST, 'products');
-    });
-
-    const purchasesQuery = query(
-      collection(db, 'purchases'),
-      where('buyerUid', '==', auth.currentUser.uid),
-      orderBy('createdAt', 'desc')
-    );
-
-    const unsubscribePurchases = onSnapshot(purchasesQuery, async (snapshot) => {
-      const purchaseList = [];
-      for (const d of snapshot.docs) {
-        const purchaseData = d.data();
-        const productSnap = await getDoc(doc(db, 'products', purchaseData.productId));
-        purchaseList.push({
-          id: d.id,
-          ...purchaseData,
-          product: productSnap.exists() ? productSnap.data() : null
-        });
-      }
-      setPurchases(purchaseList);
-    });
-
-    const unsubscribeProfile = onSnapshot(doc(db, 'users', auth.currentUser.uid), (doc) => {
-      if (doc.exists()) {
-        setProfile(doc.data());
-      }
-    }, (err) => {
-      handleFirestoreError(err, OperationType.GET, `users/${auth.currentUser?.uid}`);
-    });
-
-    return () => {
-      unsubscribeProducts();
-      unsubscribePurchases();
-      unsubscribeProfile();
-    };
-  }, []);
+  }
 
   return (
-    <div className="h-full overflow-hidden bg-background">
-      <div className="flex h-full max-w-[1600px] mx-auto px-2 overflow-hidden w-full">
-        <div className="flex-1 h-full overflow-y-auto custom-scrollbar pt-4 px-4 min-w-0">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-8 mb-12">
-            <div>
-              <h1 className="text-4xl font-bold tracking-tight mb-2 uppercase italic tracking-tighter">Creator_Dashboard</h1>
-              <p className="text-white/30 text-xs font-mono">ANALYTICS // CONTENT_MANAGEMENT // SYSTEM_STATS</p>
-            </div>
-            <div className="flex items-center gap-4">
-               <Link 
-                  to="/settings" 
-                  className="px-6 py-3 glass rounded-xl font-bold text-xs uppercase tracking-widest border border-white/10 hover:bg-white/5 transition-all flex items-center gap-2"
-                >
-                  <Settings size={16} /> Account Setup
-                </Link>
-            </div>
-          </div>
-
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-12">
-        {[
-          { label: 'Total Sales', value: stats.totalSales, icon: <CreditCard className="text-green-400" />, trend: '+12%' },
-          { label: 'Impressions', value: stats.totalImpressions, icon: <Eye className="text-blue-400" />, trend: '+24%' },
-          { label: 'Revenue', value: `$${stats.totalRevenue}`, icon: <TrendingUp className="text-purple-400" />, trend: '+8%' },
-          { label: 'Experience (XP)', value: profile?.xp || 0, icon: <Zap className="text-yellow-400" />, trend: 'Level 1' }
-        ].map((stat, i) => (
-          <div key={i} className="glass rounded-3xl p-8 relative overflow-hidden">
-            <div className="absolute top-0 right-0 p-4 opacity-10">
-              {stat.icon}
-            </div>
-            <div className="text-white/50 text-sm font-medium mb-2 uppercase tracking-widest">{stat.label}</div>
-            <div className="text-3xl font-bold mb-4">{stat.value}</div>
-            <div className="text-xs font-mono text-green-400 flex items-center gap-1">
-              {stat.trend} <span className="text-white/20">vs last month</span>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* Tabs */}
-      <div className="flex items-center gap-8 border-b border-white/5 mb-12">
-        {[
-          { id: 'overview', label: 'Overview', icon: <BarChart3 size={18} /> },
-          { id: 'products', label: 'My Products', icon: <Package size={18} /> },
-          { id: 'purchases', label: 'Downloads', icon: <Download size={18} /> },
-          ...(auth.currentUser?.email === 'danieludofa452@gmail.com' ? [{ id: 'maintenance', label: 'Maintenance', icon: <Zap size={18} /> }] : [])
-        ].map(tab => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className={`flex items-center gap-2 pb-4 text-sm font-medium transition-all relative ${
-              activeTab === tab.id ? 'text-white' : 'text-white/50 hover:text-white'
-            }`}
-          >
-            {tab.icon} {tab.label}
-            {activeTab === tab.id && (
-              <motion.div 
-                layoutId="activeTab" 
-                className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary neon-glow" 
-              />
-            )}
-          </button>
-        ))}
-      </div>
-
-      {/* Tab Content */}
-      <div>
-        {activeTab === 'overview' && (
-          <div className="space-y-12">
-            <div className="glass rounded-[40px] p-12 text-center">
-              <div className="w-20 h-20 glass rounded-2xl flex items-center justify-center mx-auto mb-8">
-                <BarChart3 className="text-primary" size={40} />
-              </div>
-              <h3 className="text-2xl font-bold mb-4">Analytics coming soon</h3>
-              <p className="text-white/50 max-w-md mx-auto">
-                We're building a comprehensive analytics suite to help you understand your audience better.
-              </p>
-            </div>
-          </div>
-        )}
-
-        {activeTab === 'products' && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-            {myProducts.map(product => (
-              <ProductCard key={product.id} product={product} />
-            ))}
-            {myProducts.length === 0 && (
-              <div className="col-span-full py-20 text-center glass rounded-3xl">
-                <p className="text-white/50 mb-6">You haven't published any products yet.</p>
-                <Link to="/upload" className="text-primary hover:underline font-bold">
-                  Publish your first product
-                </Link>
-              </div>
-            )}
-          </div>
-        )}
-
-        {activeTab === 'purchases' && (
-          <div className="glass rounded-[40px] overflow-hidden border border-white/5 shadow-2xl">
-            <table className="w-full text-left">
-              <thead className="bg-white/5 text-[10px] font-black uppercase tracking-[0.2em] text-white/30">
-                <tr>
-                  <th className="px-8 py-6">Product</th>
-                  <th className="px-8 py-6">Purchase Date</th>
-                  <th className="px-8 py-6">Amount</th>
-                  <th className="px-8 py-6">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/5">
-                {purchases.map(purchase => (
-                  <tr key={purchase.id} className="group hover:bg-white/[0.02] transition-colors">
-                    <td className="px-8 py-6">
-                      <div className="flex items-center gap-4">
-                        <div className="w-12 h-12 rounded-xl bg-white/5 overflow-hidden border border-white/10 group-hover:border-primary/50 transition-all flex items-center justify-center">
-                          {purchase.product?.previewImage && purchase.product.previewImage.trim() !== '' ? (
-                            <img src={purchase.product.previewImage} alt="" className="w-full h-full object-cover" />
-                          ) : (
-                            <Package size={20} className="text-white/20" />
-                          )}
-                        </div>
-                        <div>
-                          <p className="font-bold text-white group-hover:text-primary transition-colors">{purchase.product?.title || 'Unknown Product'}</p>
-                          <p className="text-xs text-white/30 uppercase font-black">{purchase.product?.productType}</p>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-8 py-6">
-                      <p className="text-sm font-bold text-white/50">{new Date(purchase.createdAt).toLocaleDateString()}</p>
-                    </td>
-                    <td className="px-8 py-6 text-sm font-black text-white/80">
-                      ${purchase.amount}
-                    </td>
-                    <td className="px-8 py-6">
-                      <Link 
-                        to={`/products/${purchase.productId}`}
-                        className="px-6 py-2 bg-white/5 hover:bg-primary text-white rounded-xl text-xs font-black uppercase tracking-widest transition-all"
-                      >
-                        Download Files
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
-                {purchases.length === 0 && (
-                  <tr className="text-sm text-white/50 italic">
-                    <td colSpan={4} className="px-8 py-20 text-center">
-                       <div className="flex flex-col items-center gap-4">
-                          <Download size={48} className="text-white/10" />
-                          <p>You haven't purchased any assets yet.</p>
-                          <Link to="/explore" className="text-primary hover:underline font-black uppercase tracking-widest">Start Exploring</Link>
-                       </div>
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {activeTab === 'maintenance' && auth.currentUser?.email === 'danieludofa452@gmail.com' && (
-          <div className="space-y-8">
-            <div className="glass rounded-[40px] p-12">
-              <h3 className="text-2xl font-bold mb-4">Data Migration & Maintenance</h3>
-              <p className="text-white/50 mb-8 max-w-2xl">
-                Use these tools to fix data inconsistencies caused by schema updates. 
-                This will update all legacy posts and events to have the required "visibility" field.
-              </p>
-
-              <div className="flex flex-col gap-4">
-                <button
-                  onClick={runMigration}
-                  disabled={migrating}
-                  className="w-fit px-8 py-4 bg-primary text-white rounded-2xl font-bold neon-glow flex items-center gap-2 disabled:opacity-50"
-                >
-                  {migrating ? 'Migrating...' : 'Fix Legacy Posts & Events'} <Zap size={20} />
-                </button>
-
-                {migrationResults && (
-                  <div className={`p-4 rounded-xl ${migrationResults.includes('failed') ? 'bg-red-500/10 text-red-400' : 'bg-green-500/10 text-green-400'}`}>
-                    {migrationResults}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-      </div>
-      </div>
+    <div className="flex flex-wrap items-center gap-2">
+      {PROMO_TIERS.map(t => (
+        <Button key={t.id} size="sm" variant="outline" disabled={busy} loading={busy} onClick={() => promote(t.id)}>
+          {t.label} · {formatPrice(t.cents, 'USD')}
+        </Button>
+      ))}
+      <Button size="sm" variant="ghost" onClick={() => setOpen(false)} disabled={busy}>
+        Cancel
+      </Button>
     </div>
   );
 }

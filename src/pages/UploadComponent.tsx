@@ -1,10 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { db, auth, storage, OperationType, handleFirestoreError } from '../firebase';
+import { db, auth, OperationType, handleFirestoreError } from '../firebase';
 import { collection, addDoc, doc, getDoc, updateDoc } from 'firebase/firestore';
-import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
+import { ref, uploadBytesResumable, getDownloadURL } from '../lib/storage';
 import { generateProductDescription } from "../services/geminiService";
+import { hasPayoutAccount, syncProductToStore } from "../lib/productSync";
+import { formatPrice } from "../lib/payments";
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   AlertCircle, 
@@ -60,6 +62,7 @@ export default function UploadComponent() {
     productType: 'asset',
     tags: [],
     price: 0,
+    currency: 'USD',
     description: '',
     previewImage: '',
     previewImages: [],
@@ -151,10 +154,11 @@ export default function UploadComponent() {
   setUploadProgress(prev => ({ ...prev, [type]: 0 }));
 
   return new Promise<string | null>((resolve) => {
-    const folder = `${type}s`;
+    // Paid product files go to a private folder. Previews stay public.
+    const folder = type === 'product' ? 'private_products' : 'previews';
     const storageRef = ref(
-      storage,
-      `${folder}/${auth.currentUser!.uid}/${Date.now()}_${file.name}`
+        null,
+        `${folder}/${auth.currentUser!.uid}/${Date.now()}_${file.name}`
     );
 
     const uploadTask = uploadBytesResumable(storageRef, file);
@@ -224,11 +228,18 @@ export default function UploadComponent() {
       const payload = {
         ...formData,
         price: Number(formData.price),
+        currency: formData.currency === 'NGN' ? 'NGN' : 'USD',
         updatedAt: new Date().toISOString()
       };
 
+      if (payload.price > 0 && !(await hasPayoutAccount())) {
+        setError('Set up your payout account before selling paid products.');
+        return;
+      }
+
       if (isEditMode && id) {
         await updateDoc(doc(db, 'products', id), payload);
+        await syncProductToStore(id, payload);
         navigate(`/products/${id}`);
       } else {
         const docRef = await addDoc(collection(db, 'products'), {
@@ -243,6 +254,7 @@ export default function UploadComponent() {
           avgRating: 5.0,
           reviewCount: 0
         });
+        await syncProductToStore(docRef.id, payload);
         navigate(`/products/${docRef.id}`);
       }
     } catch (err) {
@@ -568,7 +580,22 @@ export default function UploadComponent() {
                        <div className="flex items-center gap-8 bg-black/[0.02] dark:bg-white/[0.02] p-10 rounded-[48px] border border-black/5 dark:border-white/5 relative overflow-hidden group">
                           <div className="absolute inset-0 bg-teal-500/5 dark:bg-teal-500/5 opacity-0 group-hover:opacity-100 transition-opacity" />
                           <div className="flex-1 space-y-4 relative z-10">
-                             <label className="text-[10px] font-black uppercase tracking-widest text-teal-600 dark:text-teal-400">Price (USD)</label>
+                             <div className="flex items-center justify-between gap-4">
+                               <label className="text-[10px] font-black uppercase tracking-widest text-teal-600 dark:text-teal-400">Price</label>
+                               {formData.currency === 'NGN' ? (
+                                 <select
+                                   aria-label="Price currency"
+                                   value="NGN"
+                                   onChange={() => setFormData({ ...formData, currency: 'USD', price: 0 })}
+                                   className="rounded-full border border-black/10 dark:border-white/10 bg-transparent px-3 py-1.5 text-xs font-bold"
+                                 >
+                                   <option value="NGN">NGN (switch to USD)</option>
+                                   <option value="USD">USD</option>
+                                 </select>
+                               ) : (
+                                 <span className="text-xs font-bold text-black/50 dark:text-white/50">USD</span>
+                               )}
+                             </div>
                              <div className="relative">
                                 <DollarSign className="absolute left-6 top-1/2 -translate-y-1/2 text-black/20 dark:text-white/20" size={32} />
                                 <input 
@@ -584,11 +611,11 @@ export default function UploadComponent() {
                        <div className="grid grid-cols-2 gap-6 text-center">
                           <div className="p-8 bg-black/5 dark:bg-[#121212] rounded-[32px] border border-black/5 dark:border-white/5 group hover:border-black/20 dark:hover:border-white/20 transition-all">
                              <p className="text-[10px] font-black uppercase tracking-widest text-black/20 dark:text-white/20 mb-4">Platform Fee (10%)</p>
-                             <p className="text-3xl font-black text-red-600 dark:text-red-500/80">-${(Number(formData.price) * 0.1).toFixed(2)}</p>
+                             <p className="text-3xl font-black text-red-600 dark:text-red-500/80">-{formatPrice(Math.round(Number(formData.price) * 10), formData.currency || 'USD')}</p>
                           </div>
                           <div className="p-8 bg-teal-500/10 rounded-[32px] border border-teal-500/20 group hover:bg-teal-500/20 transition-all">
                              <p className="text-[10px] font-black uppercase tracking-widest text-teal-600 dark:text-teal-400 mb-4">Your Earnings</p>
-                             <p className="text-4xl font-black text-teal-700 dark:text-white">${(Number(formData.price) * 0.9).toFixed(2)}</p>
+                             <p className="text-4xl font-black text-teal-700 dark:text-white">{formatPrice(Math.round(Number(formData.price) * 90), formData.currency || 'USD')}</p>
                           </div>
                        </div>
                     </div>

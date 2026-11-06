@@ -5,6 +5,7 @@ import { isFillingFast, isLive, spotsLeft, startsInLabel } from '../lib/eventRan
 import { emojiFor } from '../lib/eventCategories';
 import { themeGradient } from '../lib/eventTheme';
 import { cityOf } from '../lib/eventCities';
+import { formatEventPrice } from '../lib/payments';
 
 const hasImage = (url?: string) => !!url && url.trim() !== '' && !url.includes('picsum.photos');
 
@@ -27,7 +28,7 @@ export default function EventCard({ event, compact = false, promoted = false, is
   const going = event.attendeeCount || 0;
   const city = cityOf(event);
   const where = event.isOffline ? event.locationName || city || 'Location TBD' : 'Online';
-  const price = event.isPaid ? `$${event.price}` : 'Free';
+  const price = formatEventPrice(event);
 
   const card = (
     <article className={`group relative overflow-hidden rounded-3xl bg-black ring-1 ring-black/10 dark:ring-white/10 hover:ring-2 hover:ring-pink-500/70 hover:-translate-y-1 hover:shadow-2xl hover:shadow-pink-500/10 transition-all duration-300 ${compact ? 'aspect-[16/10]' : 'aspect-[4/5]'} ${promoted ? 'ring-2 ring-amber-400/70' : ''}`} style={{ color: '#fff' }}>

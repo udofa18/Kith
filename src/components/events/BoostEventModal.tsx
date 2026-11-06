@@ -2,11 +2,12 @@ import { useState } from 'react';
 import { Check, Megaphone, Rocket, Sparkles } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { auth } from '../../firebase';
+import { startCheckout } from '../../lib/payments';
 import { isPromoted } from '../../lib/eventRanking';
 import { formatDate } from '../../lib/utils';
 import ModalShell, { ghostBtn, primaryBtn } from '../ui/ModalShell';
 
-// Display only. The server owns the real prices (api/_lib/boost.ts).
+// Display only. The server owns the real prices (BOOST_TIERS in api/_lib/payments.ts).
 const TIERS = [
   { id: 'feed_3d', name: 'Feed boost', days: 3, price: 9, icon: Megaphone, perks: ['Promoted card in the events feed'] },
   { id: 'spotlight_3d', name: 'Spotlight', days: 3, price: 29, icon: Sparkles, perks: ['Top of the Events page', 'Plus feed placement'] },
@@ -25,14 +26,9 @@ export default function BoostEventModal({ event, isOpen, onClose }: { event: any
     if (!user) return toast.error('Sign in to boost your event');
     setLoading(true);
     try {
-      const res = await fetch('/api/boost-checkout', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await user.getIdToken()}` },
-        body: JSON.stringify({ eventId: event.id, tierId }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.url) throw new Error(data.error || 'Could not start checkout');
-      window.location.href = data.url;
+      const result = await startCheckout('event_boost', event.id, tierId);
+      if (!result.authorizationUrl) throw new Error('Could not start checkout');
+      window.location.href = result.authorizationUrl;
     } catch (e: any) {
       toast.error(e.message);
       setLoading(false);

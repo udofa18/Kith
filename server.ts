@@ -9,7 +9,22 @@ import axios from 'axios';
 import multer from 'multer';
 import { fetchMetadata, validateUrl } from './api/_lib/unfurl';
 import { issueLivekitToken } from './api/_lib/livekitToken';
-import { createBoostCheckout, confirmBoost } from './api/_lib/boost';
+import {
+  listBanks,
+  createPayoutAccount,
+  createCheckout,
+  getOrderStatus,
+  handlePaystackWebhook,
+  handleStripeWebhook,
+  startConnectOnboarding,
+  getConnectStatus,
+  getCreatorBalance,
+  requestWithdrawal,
+} from './api/_lib/payments';
+import { createDownloadUrl } from './api/_lib/downloads';
+import { ensureFirebaseRoleClaim } from './api/_lib/authClaims';
+import sitemapHandler from './api/sitemap';
+import rssHandler from './api/rss';
 
 dotenv.config();
 
@@ -27,6 +42,19 @@ const upload = multer({
 async function startServer() {
   const app = express();
   const PORT = 3000;
+
+  // Must be registered before express.json(): Paystack's signature covers the raw bytes.
+  app.post('/api/payments/paystack-webhook', express.raw({ type: '*/*' }), async (req, res) => {
+    const signature = req.headers['x-paystack-signature'];
+    const { status, body } = await handlePaystackWebhook(req.body as Buffer, typeof signature === 'string' ? signature : undefined);
+    res.status(status).json(body);
+  });
+
+  app.post('/api/payments/stripe-webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+    const signature = req.headers['stripe-signature'];
+    const { status, body } = await handleStripeWebhook(req.body as Buffer, typeof signature === 'string' ? signature : undefined);
+    res.status(status).json(body);
+  });
 
   app.use(express.json());
 
@@ -122,18 +150,53 @@ async function startServer() {
     }
   });
 
-  // Event boosts (mirrors api/boost-checkout.ts and api/boost-confirm.ts)
-  for (const [route, fn] of [['checkout', createBoostCheckout], ['confirm', confirmBoost]] as const) {
-    app.post(`/api/boost-${route}`, async (req, res) => {
-      try {
-        const { status, body } = await fn(req.body, req.headers.authorization);
-        res.status(status).json(body);
-      } catch (error: any) {
-        console.error('Boost error:', error);
-        res.status(500).json({ error: 'Boost failed' });
-      }
-    });
-  }
+
+  // Supabase third-party auth needs the Firebase role claim on new accounts.
+  app.post('/api/auth/role-claim', async (req, res) => {
+    const { status, body } = await ensureFirebaseRoleClaim(req.headers.authorization);
+    res.status(status).json(body);
+  });
+
+  // Creator marketplace payments (mirrors api/payments/*.ts)
+  app.get('/api/payments/banks', async (_req, res) => {
+    const { status, body } = await listBanks();
+    res.status(status).json(body);
+  });
+  app.post('/api/payments/payout-account', async (req, res) => {
+    const { status, body } = await createPayoutAccount(req.body, req.headers.authorization);
+    res.status(status).json(body);
+  });
+  app.post('/api/payments/checkout', async (req, res) => {
+    const { status, body } = await createCheckout(req.body, req.headers.authorization);
+    res.status(status).json(body);
+  });
+  app.post('/api/payments/connect-onboard', async (req, res) => {
+    const { status, body } = await startConnectOnboarding(req.body, req.headers.authorization);
+    res.status(status).json(body);
+  });
+  app.get('/api/payments/connect-status', async (req, res) => {
+    const { status, body } = await getConnectStatus(req.headers.authorization);
+    res.status(status).json(body);
+  });
+  app.get('/api/payments/balance', async (req, res) => {
+    const { status, body } = await getCreatorBalance(req.headers.authorization);
+    res.status(status).json(body);
+  });
+  app.post('/api/payments/withdraw', async (req, res) => {
+    const { status, body } = await requestWithdrawal(req.body, req.headers.authorization);
+    res.status(status).json(body);
+  });
+  app.get('/api/payments/order', async (req, res) => {
+    const id = typeof req.query.id === 'string' ? req.query.id : '';
+    const { status, body } = await getOrderStatus(id, req.headers.authorization);
+    res.status(status).json(body);
+  });
+  app.get('/api/payments/download', async (req, res) => {
+    const productId = typeof req.query.productId === 'string' ? req.query.productId : '';
+    const fileId = typeof req.query.fileId === 'string' ? req.query.fileId : undefined;
+    const { status, body } = await createDownloadUrl(productId, fileId, req.headers.authorization);
+    res.status(status).json(body);
+  });
 
   // Simple in-memory cache for unfurl results
   const unfurlCache = new Map<string, { data: any, timestamp: number }>();
@@ -174,6 +237,10 @@ async function startServer() {
     const { default: handler } = await import(`./api/gemini/${req.params.fn}.ts`);
     return handler(req, res);
   });
+
+  // Public content feeds. Vercel rewrites /sitemap.xml and /rss.xml to the same handlers.
+  app.get('/sitemap.xml', (req, res) => sitemapHandler(req as any, res as any));
+  app.get('/rss.xml', (req, res) => rssHandler(req as any, res as any));
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== 'production') {

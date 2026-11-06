@@ -53,6 +53,9 @@ export async function searchPeople(raw: string, max = 8): Promise<PersonResult[]
   const people = new Map<string, PersonResult>();
   const add = (id: string, u: any) => {
     if (people.has(id)) return;
+    // Respect a member's discovery choice even if a prefix query returned them.
+    if (u?.settings?.privacy?.discoverable === false || u?.privacySearchable === false) return;
+    if (u?.settings?.profile?.visibility === 'hidden') return;
     people.set(id, {
       id,
       username: u.username || '',

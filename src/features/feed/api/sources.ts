@@ -84,12 +84,12 @@ export async function fetchRecent(type: SourceType, count: number, cursor?: Sour
   };
 }
 
-/** Public posts by any of `authorIds`, newest first, strictly older than `before`. */
+/** Public and followers-only posts by any of `authorIds`, newest first, strictly older than `before`. */
 export async function fetchPostsByAuthors(authorIds: string[], count: number, before?: string): Promise<FeedItem[]> {
   if (authorIds.length === 0) return [];
 
   if (shouldReadCollectionFromSupabase('posts')) {
-    let q = getSupabase().from('posts').select('*').in('author_uid', authorIds).eq('visibility', 'public');
+    let q = getSupabase().from('posts').select('*').in('author_uid', authorIds).in('visibility', ['public', 'followers']);
     if (before) q = q.lt('created_at', before);
     const { data, error } = await q.order('created_at', { ascending: false }).limit(count);
     if (error) throw error;
@@ -102,7 +102,7 @@ export async function fetchPostsByAuthors(authorIds: string[], count: number, be
   const snaps = await Promise.all(chunks.map(chunk => getDocs(query(
     collection(db, 'posts'),
     where('authorUid', 'in', chunk),
-    where('visibility', '==', 'public'),
+    where('visibility', 'in', ['public', 'followers']),
     ...(before ? [where('createdAt', '<', Timestamp.fromDate(new Date(before)))] : []),
     orderBy('createdAt', 'desc'),
     limit(count),

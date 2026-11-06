@@ -18,6 +18,7 @@ import { toast } from 'react-hot-toast';
 import { updateDailyStats } from '../lib/stats';
 import VerifiedBadge from './VerifiedBadge';
 import { useCurrentUser } from '../contexts/CurrentUserContext';
+import { useLiveStatus } from '../contexts/LiveStatusContext';
 import PostMedia from './post/PostMedia';
 import LinkPreview, { firstUrl } from './post/LinkPreview';
 import { buildSearchTokens, extractHashtags, mergeTags, normalizeTag } from '../features/search/tokens';
@@ -109,6 +110,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
     staleTime: 1000 * 60 * 10,
   });
   const currentUserProfile = useCurrentUser();
+  const liveEvent = useLiveStatus().liveFor(post.authorUid);
 
   // Defer per-card reads and live updates until the card is actually on screen.
   const { ref: cardRef, inView, seen } = useInView();
@@ -688,14 +690,23 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
 
       <div className="flex items-start gap-3">
         <UserHoverCard userId={post.authorUid}>
-          <Link to={`/creators/${post.authorUid}`} className={`${compact ? 'w-9 h-9' : 'w-10 h-10'} rounded-full bg-black/10 dark:bg-white/10 overflow-hidden flex-shrink-0 block`}>
+          <Link
+            to={`/creators/${post.authorUid}`}
+            className={`${compact ? 'w-9 h-9' : 'w-10 h-10'} relative rounded-full bg-black/10 dark:bg-white/10 flex-shrink-0 block ${liveEvent ? 'ring-2 ring-red-500 ring-offset-2 ring-offset-background' : ''}`}
+            title={liveEvent ? `Live now${liveEvent.title ? `: ${liveEvent.title}` : ''}` : undefined}
+          >
             <img 
               src={(authorProfile?.profileImage && authorProfile.profileImage?.trim() !== '') ? authorProfile.profileImage : (post.authorPhoto && post.authorPhoto?.trim() !== '' ? post.authorPhoto : `https://api.dicebear.com/7.x/avataaars/svg?seed=${post.authorUid}`)} 
               alt={post.authorName} 
               referrerPolicy="no-referrer"
               onError={avatarFallback(post.authorUid)}
-              className="w-full h-full object-cover"
+              className="w-full h-full rounded-full object-cover"
             />
+            {liveEvent && (
+              <span className="absolute -bottom-1.5 left-1/2 z-10 -translate-x-1/2 rounded-full bg-red-500 px-1.5 py-[1px] text-[7px] font-black uppercase tracking-[0.14em] text-white shadow-lg">
+                Live
+              </span>
+            )}
           </Link>
         </UserHoverCard>
         <div className="flex-1 min-w-0">
@@ -709,6 +720,16 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
                 </UserHoverCard>
               {authorProfile?.username && (
                 <span className="text-black/50 dark:text-white/50 truncate">@{authorProfile.username}</span>
+              )}
+              {liveEvent && (
+                <Link
+                  to={`/live/${liveEvent.id}`}
+                  onClick={(event) => event.stopPropagation()}
+                  className="inline-flex items-center gap-1 rounded-full bg-red-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.12em] text-red-500 transition-colors hover:bg-red-500/15"
+                >
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-500" />
+                  Live
+                </Link>
               )}
               <span className="text-black/30 dark:text-white/30" aria-hidden>·</span>
               <span className="text-black/50 dark:text-white/50 whitespace-nowrap">{formatPostDate(post.createdAt)}</span>

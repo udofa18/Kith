@@ -1,6 +1,6 @@
 import { useParams, useLocation } from 'react-router-dom';
 import { useEffect, useState } from 'react';
-import { db } from '../firebase';
+import { auth, db } from '../firebase';
 import { doc, getDoc } from 'firebase/firestore';
 import PostCard from '../components/PostCard';
 import PageHeader from '../components/ui/PageHeader';
@@ -18,14 +18,29 @@ export default function PostDetails() {
   useEffect(() => {
     const fetchPost = async () => {
       if (!id) return;
-      if (post && post.id === id) {
+      if (post && post.id === id && post.visibility !== 'followers') {
         setLoading(false);
         return;
       }
       setLoading(true);
       try {
         const postDoc = await getDoc(doc(db, 'posts', id));
-        setPost(postDoc.exists() ? { id: postDoc.id, ...postDoc.data() } : null);
+        if (!postDoc.exists()) {
+          setPost(null);
+          return;
+        }
+        const data = postDoc.data();
+        if (data.visibility === 'followers' && auth.currentUser?.uid !== data.authorUid) {
+          const viewer = auth.currentUser?.uid;
+          const follows = viewer
+            ? await getDoc(doc(db, 'users', viewer, 'following', data.authorUid)).catch(() => null)
+            : null;
+          if (!follows?.exists()) {
+            setPost(null);
+            return;
+          }
+        }
+        setPost({ id: postDoc.id, ...data });
       } catch (error) {
         console.error("Error fetching post:", error);
       } finally {

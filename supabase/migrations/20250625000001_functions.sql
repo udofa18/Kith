@@ -1,12 +1,27 @@
 -- RLS helper functions (ported from firestore.rules)
--- Firebase Auth UIDs are stored in auth.uid() via third-party JWT integration
+-- Firebase Auth UIDs are stored in public.current_uid() via third-party JWT integration
+
+-- Supabase's built-in auth.uid() casts the JWT `sub` claim to UUID. Firebase UIDs are not UUIDs,
+-- so every policy uses this TEXT-returning equivalent instead.
+CREATE OR REPLACE FUNCTION public.current_uid()
+RETURNS TEXT
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT coalesce(
+    nullif(current_setting('request.jwt.claim.sub', true), ''),
+    (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')
+  );
+$$;
+
+GRANT EXECUTE ON FUNCTION public.current_uid() TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION public.is_authenticated()
 RETURNS BOOLEAN
 LANGUAGE sql
 STABLE
 AS $$
-  SELECT auth.uid() IS NOT NULL;
+  SELECT public.current_uid() IS NOT NULL;
 $$;
 
 CREATE OR REPLACE FUNCTION public.current_user_id()
@@ -14,7 +29,7 @@ RETURNS TEXT
 LANGUAGE sql
 STABLE
 AS $$
-  SELECT auth.uid()::text;
+  SELECT public.current_uid()::text;
 $$;
 
 CREATE OR REPLACE FUNCTION public.is_admin()
@@ -26,10 +41,10 @@ SET search_path = public
 AS $$
   SELECT EXISTS (
     SELECT 1 FROM users
-    WHERE id = auth.uid()::text
+    WHERE id = public.current_uid()::text
       AND role = 'admin'
   )
-  OR auth.uid()::text = 'gxUXkEvkM2hMUjKbckogrgVfA2g2';
+  OR public.current_uid()::text = 'gxUXkEvkM2hMUjKbckogrgVfA2g2';
 $$;
 
 CREATE OR REPLACE FUNCTION public.is_community_admin(p_community_id TEXT)
@@ -42,7 +57,7 @@ AS $$
   SELECT EXISTS (
     SELECT 1 FROM community_members
     WHERE community_id = p_community_id
-      AND user_id = auth.uid()::text
+      AND user_id = public.current_uid()::text
       AND role IN ('owner', 'admin')
   );
 $$;
@@ -57,7 +72,7 @@ AS $$
   SELECT EXISTS (
     SELECT 1 FROM community_members
     WHERE community_id = p_community_id
-      AND user_id = auth.uid()::text
+      AND user_id = public.current_uid()::text
       AND role = 'owner'
   );
 $$;
@@ -73,7 +88,7 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
-  v_sender_id TEXT := auth.uid()::text;
+  v_sender_id TEXT := public.current_uid()::text;
   v_remaining INT;
   v_tx_id TEXT;
 BEGIN

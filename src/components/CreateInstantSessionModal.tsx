@@ -6,6 +6,8 @@ import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
 import { createNotification } from '../lib/notifications';
 import { sendDirectMessage } from '../features/messages/api';
+import { createStatus } from '../features/status/api';
+import { normalizeSettings } from '../features/settings/preferences';
 import Avatar from './ui/Avatar';
 import ModalShell, { fieldInput, fieldLabel, ghostBtn, primaryBtn } from './ui/ModalShell';
 
@@ -64,13 +66,26 @@ export default function CreateInstantSessionModal({ isOpen, onClose }: CreateIns
       const now = new Date();
       const expiresAt = new Date(now.getTime() + 30 * 60000);
 
+      const userSnap = await getDoc(doc(db, 'users', auth.currentUser.uid));
+      const userData = userSnap.exists() ? userSnap.data() : null;
+      const activitySettings = normalizeSettings(userData).activity;
+      const instant = activitySettings.instantSessions;
+      const visibility =
+        instant.visibleTo === 'nobody' || instant.visibleTo === 'me'
+          ? 'unlisted'
+          : instant.visibleTo === 'everyone' && instant.appearInHappeningNow
+            ? 'public'
+            : instant.visibleTo === 'followers'
+              ? 'followers'
+              : 'unlisted';
+
       const eventData = {
         title: title.trim(),
         description: 'Instant live session',
         hostId: auth.currentUser.uid,
         eventType: 'user',
         type: 'instant',
-        visibility: 'unlisted',
+        visibility,
         startDate: now.toISOString(),
         endDate: expiresAt.toISOString(),
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -110,6 +125,41 @@ export default function CreateInstantSessionModal({ isOpen, onClose }: CreateIns
           });
         }
         toast.success('Invitations sent!', { id: 'invites' });
+      }
+
+      const senderName = userData?.displayName || auth.currentUser.displayName || 'Someone';
+
+      if (instant.notifyFollowers && visibility === 'followers') {
+        const followersSnap = await getDocs(collection(db, 'users', auth.currentUser.uid, 'followers')).catch(() => null);
+        const followers = followersSnap?.docs.slice(0, 100) ?? [];
+        await Promise.all(
+          followers.map((follower) =>
+            createNotification({
+              recipientId: follower.id,
+              senderId: auth.currentUser!.uid,
+              senderName,
+              senderPhoto: auth.currentUser!.photoURL || '',
+              type: 'event_invite',
+              content: `is live now: ${title.trim()}`,
+              relatedId: eventId,
+            }),
+          ),
+        ).catch(() => undefined);
+      }
+
+      if (instant.autoShareToStatus && instant.visibleTo !== 'me') {
+        await createStatus(
+          {
+            uid: auth.currentUser.uid,
+            name: senderName,
+            username: userData?.username || auth.currentUser.email?.split('@')[0] || 'member',
+            photo: auth.currentUser.photoURL || '',
+          },
+          {
+            text: `Live now: ${title.trim()}\n${window.location.origin}/live/${eventId}`,
+            audience: activitySettings.statusAudience === 'only-me' ? 'only-me' : 'followers',
+          },
+        ).catch(() => undefined);
       }
 
       toast.success('Session started!');

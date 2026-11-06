@@ -3,20 +3,30 @@
  * Required for Supabase third-party Firebase Auth integration.
  *
  * Usage:
- *   GOOGLE_APPLICATION_CREDENTIALS=path/to/service-account.json \
- *   npx tsx scripts/set-firebase-role-claim.ts
+ *   npm run db:claims            # apply to every Firebase user
+ *   npm run db:claims -- --dry-run
+ *
+ * Credentials come from FIREBASE_SERVICE_ACCOUNT (JSON) in .env, or from
+ * GOOGLE_APPLICATION_CREDENTIALS if that is set instead.
  *
  * Options:
  *   --dry-run   List users without updating claims
  */
 
+import 'dotenv/config';
 import admin from 'firebase-admin';
-import firebaseConfig from '../firebase-applet-config.json' assert { type: 'json' };
+import firebaseConfig from '../firebase-applet-config.json' with { type: 'json' };
 
 const dryRun = process.argv.includes('--dry-run');
+const serviceAccount = process.env.FIREBASE_SERVICE_ACCOUNT;
 
 if (!admin.apps.length) {
-  admin.initializeApp({ projectId: firebaseConfig.projectId });
+  admin.initializeApp({
+    credential: serviceAccount
+      ? admin.credential.cert(JSON.parse(serviceAccount))
+      : admin.credential.applicationDefault(),
+    projectId: firebaseConfig.projectId,
+  });
 }
 
 const auth = admin.auth();

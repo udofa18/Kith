@@ -7,10 +7,11 @@ import {
   collection, deleteField, doc, getDoc, getDocs, increment, limit, onSnapshot, orderBy, query,
   serverTimestamp, setDoc, startAfter, updateDoc, where, writeBatch, type QueryDocumentSnapshot,
 } from 'firebase/firestore';
-import { getDownloadURL, ref, uploadBytesResumable } from 'firebase/storage';
-import { db, storage } from '../../firebase';
+import { getDownloadURL, ref, uploadBytesResumable } from '../../lib/storage';
+import { db } from '../../firebase';
 import { createNotification } from '../../lib/notifications';
 import { getConversationId, type ConversationData, type ConversationStatus } from '../../lib/messaging';
+import { canMessageTarget } from '../settings/preferences';
 
 export interface Message {
   id: string;
@@ -127,6 +128,43 @@ interface SendOptions {
  * needed (accepted if you follow each other, otherwise a request) and upgrades a request to a
  * chat once you follow each other.
  */
+async function assertCanMessage(me: string, otherId: string) {
+  const target = await getDoc(doc(db, 'users', otherId)).catch(() => null);
+  if (!target?.exists()) return;
+
+  const data = target.data();
+  const messaging = data?.settings?.messaging;
+  const policy = messaging?.whoCanDM;
+  const requestsAllowed = messaging?.requests !== false;
+
+  if ((!policy || policy === 'anyone') && requestsAllowed) return;
+
+  const [viewerFollows, viewerIsFollowed] = await Promise.all([
+    getDoc(doc(db, 'users', me, 'following', otherId)).then((snap) => snap.exists()).catch(() => false),
+    getDoc(doc(db, 'users', otherId, 'following', me)).then((snap) => snap.exists()).catch(() => false),
+  ]);
+
+  if (!canMessageTarget({ settings: data.settings }, { viewerFollows, viewerIsFollowed })) {
+    const error = new Error(
+      policy === 'nobody'
+        ? "This person isn't accepting messages."
+        : policy === 'mutuals'
+          ? 'Only mutuals can message this person.'
+          : 'Only followers can message this person.',
+    );
+    error.name = 'DmBlockedError';
+    throw error;
+  }
+
+  // The requests toggle closes first contact from people outside the person's
+  // mutuals, even when the broader DM policy would otherwise allow it.
+  if (!requestsAllowed && !(viewerFollows && viewerIsFollowed)) {
+    const error = new Error('This person only accepts messages from mutuals.');
+    error.name = 'DmBlockedError';
+    throw error;
+  }
+}
+
 async function writeMessage({ convId, me, otherId, status, requestedBy, content, preview, extra = {}, notify = true, mutedByOther = false }: SendOptions) {
   const convRef = doc(db, 'conversations', convId);
   const messageRef = doc(collection(db, 'conversations', convId, 'messages'));
@@ -134,6 +172,7 @@ async function writeMessage({ convId, me, otherId, status, requestedBy, content,
   let created = false;
   let nextStatus = status;
 
+  await assertCanMessage(me.uid, otherId);
   const mutual = status !== 'accepted' ? await followsEachOther(me.uid, otherId) : true;
 
   if (status === null) {
@@ -204,7 +243,7 @@ export function sendText(opts: Omit<SendOptions, 'preview' | 'extra'> & { replyT
 export async function sendAttachment(opts: Omit<SendOptions, 'content' | 'preview' | 'extra'> & { file: File; caption?: string; onProgress?: (p: number) => void }) {
   const { file, caption, onProgress, ...rest } = opts;
   const path = `messages/${rest.me.uid}/${rest.convId}/${Date.now()}_${file.name.replace(/[^\w.-]/g, '_')}`;
-  const task = uploadBytesResumable(ref(storage, path), file, { contentType: file.type });
+  const task = uploadBytesResumable(ref(null, path), file, { contentType: file.type });
   await new Promise<void>((resolve, reject) => {
     task.on('state_changed', s => onProgress?.(s.bytesTransferred / s.totalBytes), reject, () => resolve());
   });
@@ -296,11 +335,11 @@ export function toggleReaction(convId: string, message: Message, emoji: string, 
 
 // ---------------------------------------------------------------- Read state, typing, requests
 
-/** Marks the chat read for `uid`: clears their unread count and records when. */
-export function markRead(convId: string, uid: string) {
+/** Marks the chat read for `uid`: clears their unread count and, if enabled, records when. */
+export function markRead(convId: string, uid: string, receipts = true) {
   return updateDoc(doc(db, 'conversations', convId), {
     [`unreadCount.${uid}`]: 0,
-    [`readAt.${uid}`]: serverTimestamp(),
+    [`readAt.${uid}`]: receipts ? serverTimestamp() : deleteField(),
   }).catch(() => undefined);
 }
 
@@ -380,8 +419,18 @@ export function heartbeat(uid: string) {
   return updateDoc(doc(db, 'users', uid), { lastActiveAt: serverTimestamp() }).catch(() => undefined);
 }
 
-/** "Active now", "Active 5m ago", … or null if unknown or long ago. */
-export function presenceLabel(lastActiveAt: any, now = Date.now()): string | null {
+/** "Active now", "Active 5m ago", … or null if unknown, hidden by the member, or long ago. */
+export function presenceLabel(lastActiveAt: any, now = Date.now(), target?: any): string | null {
+  const activity = target?.settings?.activity;
+  if (
+    activity &&
+    (activity.presence === 'nobody' ||
+      activity.presence === 'me' ||
+      activity.lastActive === 'me' ||
+      activity.lastActive === 'nobody')
+  ) {
+    return null;
+  }
   const at = toDate(lastActiveAt);
   if (!at) return null;
   const mins = Math.floor((now - at.getTime()) / 60000);

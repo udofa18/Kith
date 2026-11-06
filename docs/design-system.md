@@ -147,7 +147,8 @@ Variants: `neutral`, `primary`, `success`, `warning`, `danger`, `info`.
 </Dialog>
 ```
 
-Destructive confirmations should use `ConfirmModal`, which composes `Dialog` + `Button`.
+Destructive confirmations should use `ConfirmModal` (with variants) or `ConfirmDialog`, both of
+which compose `Dialog` + `Button`.
 
 ### Other primitives
 
@@ -175,5 +176,36 @@ When touching a surface:
 - [x] Core primitives: Button, Input/Field, Card, Badge, Avatar, Dialog, EmptyState, Skeleton
 - [x] ConfirmModal, PageHeader, RailSection now compose primitives
 - [x] Living reference at `/design-system`
+- [x] Journal surfaces: discovery, card system, reader and composer migrated
 - [ ] Migrate legacy page-level controls incrementally (feed composer, marketplace filters, settings forms)
 - [ ] Remove the broad `html.light .text-white` override once legacy pages use semantic tokens
+
+## Journal patterns
+
+The article surfaces are the reference implementation for an editorial slice inside the product.
+
+- **Article art** — `components/articles/ArticleCover` shows an authored photo when one exists and
+  otherwise draws a deterministic, category-tinted illustration. Missing covers never leave a hole,
+  and category colour stays in the illustration rather than the chrome.
+- **Article card** — `ArticleCard` has four compositions: `default` (feed row), `grid` (related),
+  `featured` (editor's pick) and `compact` (rails). All share the same border, radius, hover lift,
+  avatar, metadata and save affordance.
+- **Discovery** — `/articles` uses a search field, sort segmented control, difficulty and topic
+  chips, curated shelves, a sticky filter bar and a trending/topics/voices rail. The feed uses flat
+  divider rows; only the featured story and related grid are card-shaped. Filters are applied
+  client-side over the latest page so no extra composite indexes are required.
+- **Reader** — `/article/:id` adds reading progress, a heading-derived table of contents, text-size
+  controls, persistent likes/bookmarks, author follow, comments, related stories, and a warm
+  editorial header with a serif headline and a drop cap. The contents rail is an independent sticky
+  gutter outside the centered reading column; it only appears when the surface is wide enough.
+- **Composer** — `/write` is a two-column studio: cover picker with presets/upload, title and
+  subtitle, tags, rich-text body, publishing controls, readiness checklist, and live search/social
+  previews for the metadata it saves. Images prompt for alt text and an optional caption; captions
+  render as `<figcaption>` in the reader.
+- **SEO** — the reader emits canonical, robots, Open Graph, Twitter and `BlogPosting` +
+  `BreadcrumbList` JSON-LD. The journal index emits `CollectionPage` + `ItemList`. Drafts are
+  `noindex`. `/sitemap.xml` and `/rss.xml` are served by `api/sitemap.ts` and `api/rss.ts` from the
+  published-article feed.
+
+When extending the journal, keep using the shared primitives. The only intentional raw colours are
+inside generated cover illustrations, photo overlays and the code block surface.

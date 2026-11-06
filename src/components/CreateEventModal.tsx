@@ -1,19 +1,28 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { addDoc, collection, doc, getDoc, getDocs, query, updateDoc, where } from 'firebase/firestore';
-import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
-import { Camera, Globe, Lock, MapPin, Users, Video } from 'lucide-react';
+import { getDownloadURL, ref, uploadBytes } from '../lib/storage';
+import { ArrowLeft, Camera, Check, Globe, Lock, MapPin, Users, Video, X } from 'lucide-react';
 import { importLibrary, setOptions } from '@googlemaps/js-api-loader';
 import { toast } from 'react-hot-toast';
-import { auth, db, storage, handleFirestoreError, OperationType } from '../firebase';
+import { auth, db, handleFirestoreError, OperationType } from '../firebase';
 import { EVENT_CATEGORIES } from '../lib/eventCategories';
+import { EVENT_THEMES, themeOf } from '../lib/eventTheme';
 import EventCard from './EventCard';
 import ModalShell, { fieldInput, fieldLabel, ghostBtn, primaryBtn } from './ui/ModalShell';
+import { normalizeSettings } from '../features/settings/preferences';
 
 const TITLE_MAX = 100;
 const ABOUT_MAX = 1000;
 const IMAGE_MAX_MB = 5;
-const STEPS = ['Basics', 'Look', 'When & where', 'Tickets'] as const;
+const STEPS = [
+  { emoji: '✍️', heading: 'Basics' },
+  { emoji: '🎨', heading: 'Look' },
+  { emoji: '📍', heading: 'When & where' },
+  { emoji: '🎟️', heading: 'Tickets' },
+] as const;
+const SUNSET = `linear-gradient(90deg, ${EVENT_THEMES[0].from}, ${EVENT_THEMES[0].to})`;
 const PLATFORMS = ['zoom', 'meet', 'teams', 'other'];
 
 const dayStr = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -21,7 +30,7 @@ const localTz = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
 const blank = (communityId?: string) => ({
   title: '', description: '', category: 'Tech', banner: '',
   hostType: communityId ? 'community' : 'user', selectedCommunityId: communityId || '',
-  visibility: 'public', isPaid: false, price: 0,
+  visibility: 'public', isPaid: false, price: 0, currency: 'USD' as 'NGN' | 'USD', theme: '',
   startDate: '', startTime: '18:00', endDate: '', endTime: '20:00', timezone: localTz(),
   isOffline: false, locationName: '', locationAddress: '', locationCoords: null as { lat: number; lng: number } | null,
   onlineType: 'internal', externalPlatform: 'zoom', externalUrl: '', maxAttendees: 0,
@@ -77,7 +86,7 @@ export default function CreateEventModal({ isOpen, onClose, communityId, eventId
           ...blank(),
           title: d.title || '', description: d.description || '', category: d.category || 'Tech', banner: d.banner || '',
           hostType: d.eventType || 'user', selectedCommunityId: d.communityId || '', visibility: d.visibility || 'public',
-          isPaid: !!d.isPaid, price: d.price || 0,
+          isPaid: !!d.isPaid, price: d.price || 0, currency: d.currency === 'NGN' ? 'NGN' as const : 'USD' as const, theme: d.theme || '',
           startDate: d.startDate?.split('T')[0] || '', startTime: d.startDate?.split('T')[1]?.slice(0, 5) || '18:00',
           endDate: d.endDate?.split('T')[0] || '', endTime: d.endDate?.split('T')[1]?.slice(0, 5) || '20:00',
           timezone: d.timezone || localTz(), isOffline: !!d.isOffline, locationName: d.locationName || '',
@@ -87,8 +96,15 @@ export default function CreateEventModal({ isOpen, onClose, communityId, eventId
         });
       });
     } else if (!communityId && auth.currentUser) {
-      getDocs(query(collection(db, 'communities'), where('creatorId', '==', auth.currentUser.uid)))
-        .then(s => setMyCommunities(s.docs.map(d => ({ id: d.id, ...d.data() }))))
+      Promise.all([
+        getDocs(query(collection(db, 'communities'), where('creatorId', '==', auth.currentUser.uid))),
+        getDoc(doc(db, 'users', auth.currentUser.uid)),
+      ])
+        .then(([s, userSnap]) => {
+          setMyCommunities(s.docs.map(d => ({ id: d.id, ...d.data() })));
+          const preferred = normalizeSettings(userSnap.data()).events.defaultVisibility;
+          set({ visibility: preferred === 'followers' ? 'followers' : 'public' });
+        })
         .catch(() => undefined);
     }
   }, [isOpen, eventId, communityId]);
@@ -132,6 +148,7 @@ export default function CreateEventModal({ isOpen, onClose, communityId, eventId
       : !form.isOffline && form.onlineType === 'external' && !/^https?:\/\//i.test(form.externalUrl.trim()) ? 'Add the full link people should join (https://…).'
       : null,
     form.isPaid && !(Number(form.price) > 0) ? 'Set a ticket price above $0, or choose Free.' : null,
+    form.isPaid && form.currency === 'NGN' ? 'Card payments take USD. Switch the ticket price to USD.' : null,
   ][step];
 
   const pickBanner = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -156,7 +173,7 @@ export default function CreateEventModal({ isOpen, onClose, communityId, eventId
       setSaving(bannerFile ? 'Uploading banner…' : 'Saving…');
       let banner = form.banner;
       if (bannerFile) {
-        const r = ref(storage, `events/${user.uid}/${Date.now()}_${bannerFile.name.replace(/[^\w.-]/g, '_')}`);
+        const r = ref(null, `events/${user.uid}/${Date.now()}_${bannerFile.name.replace(/[^\w.-]/g, '_')}`);
         await uploadBytes(r, bannerFile, { contentType: bannerFile.type });
         banner = await getDownloadURL(r);
       }
@@ -165,7 +182,7 @@ export default function CreateEventModal({ isOpen, onClose, communityId, eventId
       const data: any = {
         title, description: form.description.trim(), category: form.category,
         hostId: user.uid, eventType: form.hostType, visibility: form.visibility,
-        isPaid: form.isPaid, price: form.isPaid ? Number(form.price) : 0,
+        isPaid: form.isPaid, price: form.isPaid ? Number(form.price) : 0, currency: form.currency, ...(form.theme ? { theme: form.theme } : {}),
         startDate: startIso, endDate: endIso, timezone: form.timezone, isOffline: form.isOffline,
         status: 'upcoming', attendeeCount: 0, createdAt: new Date().toISOString(),
       };
@@ -222,7 +239,7 @@ export default function CreateEventModal({ isOpen, onClose, communityId, eventId
   const preview = {
     id: title || 'preview', title: title || 'Your event title', category: form.category,
     banner: bannerUrl || form.banner, startDate: startIso || new Date(Date.now() + 2 * 86_400_000).toISOString(),
-    isOffline: form.isOffline, locationName: form.locationName, isPaid: form.isPaid, price: form.price,
+    isOffline: form.isOffline, locationName: form.locationName, isPaid: form.isPaid, price: form.price, currency: form.currency,
     status: 'upcoming', attendeeCount: 0, hostName: me?.displayName, maxAttendees: form.maxAttendees,
   };
   const chip = (active: boolean) => `px-3.5 py-1.5 rounded-full text-sm font-medium transition-colors ${active ? 'bg-pink-500 text-white' : 'bg-black/5 dark:bg-white/[0.07] hover:bg-black/10 dark:hover:bg-white/10'}`;
@@ -374,6 +391,7 @@ export default function CreateEventModal({ isOpen, onClose, communityId, eventId
           <p className={fieldLabel}>Who can see it?</p>
           <div className="mt-2 grid grid-cols-2 gap-2">
             <Choice active={form.visibility === 'public'} onClick={() => set({ visibility: 'public' })} icon={Globe} title="Public" body="Listed for everyone." />
+            <Choice active={form.visibility === 'followers'} onClick={() => set({ visibility: 'followers' })} icon={Users} title="Followers" body="Only people who follow you." />
             <Choice active={form.visibility === 'community'} onClick={() => form.hostType === 'community' ? set({ visibility: 'community' }) : toast('Community-only needs a community host')} icon={Lock} title="Members only" body="Only your community's members." />
           </div>
         </div>
@@ -385,7 +403,14 @@ export default function CreateEventModal({ isOpen, onClose, communityId, eventId
           </div>
           {form.isPaid && (
             <div className="mt-3 flex items-center gap-2">
-              <span className="text-sm text-black/55 dark:text-white/55">USD</span>
+              {form.currency === 'NGN' ? (
+                <select aria-label="Ticket currency" value="NGN" onChange={() => set({ currency: 'USD', price: 0 })} className={`${fieldInput} mt-0 w-40`}>
+                  <option value="NGN">NGN (switch to USD)</option>
+                  <option value="USD">USD</option>
+                </select>
+              ) : (
+                <span className="text-sm text-black/55 dark:text-white/55">USD</span>
+              )}
               <input aria-label="Ticket price" type="number" min={1} step={1} value={form.price || ''} onChange={e => set({ price: Number(e.target.value) })} placeholder="10" className={`${fieldInput} mt-0 w-32`} />
             </div>
           )}
