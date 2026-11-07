@@ -152,7 +152,7 @@ export default function EventsPage() {
                 )}
               </p>
               <h1 className="mt-4 max-w-2xl font-serif text-[38px] leading-[0.98] tracking-[-0.02em] sm:text-[58px]">
-                Find your next <em className="not-italic text-primary">room</em>.
+                Find your next <em className="italic text-primary">room</em>.
               </h1>
               <p className="mt-4 max-w-lg text-[14px] leading-relaxed text-muted-foreground">
                 Small gatherings, big ideas, rooms that stay open late. See what’s happening near you — or open a door of your own.

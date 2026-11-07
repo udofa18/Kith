@@ -67,6 +67,13 @@
     @apply bg-background text-foreground font-sans antialiased overflow-x-hidden;
     accent-color: var(--color-primary);
   }
+
+  /* Stay inside the visible viewport on iOS, above Safari's bottom bar.
+     100vh is the large viewport and hides the bottom nav behind browser chrome. */
+  .app-shell {
+    height: 100vh;
+    height: 100dvh;
+  }
   
   html {
     color-scheme: dark;

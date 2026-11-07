@@ -11,7 +11,7 @@ export default function FeedTabs({ active, onChange }: { active: FeedTab; onChan
   return (
     <div
       role="tablist"
-      className="flex px-2 border-b border-black/10 dark:border-white/10 bg-background/85 backdrop-blur-md sticky top-0 z-20"
+      className="flex px-2 border-b border-black/10 dark:border-white/10 bg-background sticky top-0 z-30"
     >
       {TABS.map(tab => {
         const selected = active === tab.id;

@@ -276,7 +276,7 @@ export default function MobileNav({ user }: { user: any }) {
     <>
       <nav
         aria-label="Mobile navigation"
-        className="mobile-nav md:hidden shrink-0 border-t border-[var(--mn-border)]"
+        className="mobile-nav md:hidden relative z-40 shrink-0 border-t border-[var(--mn-border)]"
       >
         <div className="grid grid-cols-5 items-center gap-0.5 px-2 pt-1.5 pb-[calc(0.45rem+env(safe-area-inset-bottom))]">
           <Tab to="/feed" icon={Home} label="Feed" active={isFeedHome} tone={TONES.feed} />

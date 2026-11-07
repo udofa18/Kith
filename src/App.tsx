@@ -186,7 +186,7 @@ function AppContent({ user, onboardingRequired }: { user: any, onboardingRequire
   };
 
   const mainContent = (
-    <div className="h-screen flex flex-col md:flex-row bg-background overflow-hidden text-foreground">
+    <div className="app-shell flex flex-col md:flex-row bg-background overflow-hidden text-foreground">
       {showSidebar && isDesktop && <AppSidebar user={user} />}
       <main className="min-h-0 flex-1 overflow-hidden transition-all duration-300 relative">
         <div className="h-full overflow-y-auto custom-scrollbar">

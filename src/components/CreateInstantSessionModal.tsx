@@ -57,7 +57,14 @@ export default function CreateInstantSessionModal({ isOpen, onClose }: CreateIns
     }
   }, [isOpen, step]);
 
-  const TOPICS = ['Open hangout', 'Ask me anything', 'Build in public', 'Chill & chat', 'Brainstorm', 'Quick Q&A'];
+  const TOPICS = [
+    { label: 'Open hangout', emoji: '☕️' },
+    { label: 'Ask me anything', emoji: '💬' },
+    { label: 'Build in public', emoji: '🛠️' },
+    { label: 'Chill & chat', emoji: '🌙' },
+    { label: 'Brainstorm', emoji: '💡' },
+    { label: 'Quick Q&A', emoji: '⚡️' },
+  ];
 
   const handleStartSession = async () => {
     if (!auth.currentUser || !title.trim()) return;
@@ -200,6 +207,24 @@ export default function CreateInstantSessionModal({ isOpen, onClose }: CreateIns
       </>)}
     >
       {step === 0 ? (<>
+        <div className="relative overflow-hidden rounded-[22px] border border-border bg-surface p-4">
+          <div className="pointer-events-none absolute -right-10 -top-14 h-36 w-36 rounded-full bg-primary/15 blur-3xl" />
+          <div className="relative flex items-center gap-3">
+            <Avatar src={auth.currentUser?.photoURL} seed={auth.currentUser?.uid || 'you'} size={44} />
+            <div className="min-w-0 flex-1">
+              <p className="flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-[0.16em] text-red-500">
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-500" /> Live preview
+              </p>
+              <p className="mt-1 truncate font-display text-[15px] font-semibold">{title.trim() || 'Your room name'}</p>
+            </div>
+            <span className="shrink-0 rounded-full bg-foreground/[0.06] px-2 py-1 font-mono text-[9px] font-bold text-muted-foreground">30:00</span>
+          </div>
+          <div className="relative mt-3 flex items-center justify-between border-t border-border pt-3 text-[10px] text-muted-foreground">
+            <span className="truncate">{auth.currentUser?.displayName || 'You'} · host</span>
+            <span className="inline-flex shrink-0 items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-success" /> Ready to go</span>
+          </div>
+        </div>
+
         <div>
           <label htmlFor="is-title" className={fieldLabel}>What's it about?</label>
           <input
@@ -210,14 +235,15 @@ export default function CreateInstantSessionModal({ isOpen, onClose }: CreateIns
           />
           <div className="mt-3 flex flex-wrap gap-2">
             {TOPICS.map(t => (
-              <button key={t} type="button" onClick={() => setTitle(t)} aria-pressed={title === t}
-                className={`px-3.5 py-1.5 rounded-full text-sm font-medium transition-colors ${title === t ? 'bg-primary text-white' : 'bg-black/5 dark:bg-white/[0.07] hover:bg-black/10 dark:hover:bg-white/10'}`}>
-                {t}
+              <button key={t.label} type="button" onClick={() => setTitle(t.label)} aria-pressed={title === t.label}
+                className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-sm font-medium transition-colors ${title === t.label ? 'bg-primary text-white' : 'bg-foreground/[0.05] hover:bg-foreground/10'}`}>
+                <span className="text-[13px] leading-none">{t.emoji}</span>
+                {t.label}
               </button>
             ))}
           </div>
         </div>
-        <p className="flex items-start gap-2 text-xs text-black/55 dark:text-white/55">
+        <p className="flex items-start gap-2 text-xs text-muted-foreground">
           <Zap size={15} className="shrink-0 text-primary" />
           Anyone with the link can drop in. The room wraps up on its own after 30 minutes and never appears in the events list.
         </p>

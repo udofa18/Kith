@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { doc, getDoc, onSnapshot, setDoc, updateDoc, deleteDoc, collection, query, where, getDocs, addDoc, serverTimestamp, writeBatch, increment } from 'firebase/firestore';
 import { db, auth, handleFirestoreError, OperationType } from '../firebase';
@@ -22,7 +22,8 @@ import {
   ParticipantName,
   ParticipantPlaceholder,
   ConnectionQualityIndicator,
-  useRoomContext
+  useRoomContext,
+  useParticipants
 } from '@livekit/components-react';
 import { Track, Participant } from 'livekit-client';
 import { motion, AnimatePresence } from 'motion/react';
@@ -57,11 +58,21 @@ import {
   MessageSquare,
   Globe,
   Minimize2,
-  MonitorPlay
+  MonitorPlay,
+  Settings2,
+  Timer,
+  UserX,
+  VolumeX,
+  Star,
+  Lock,
+  Unlock,
+  Sparkles,
+  ChevronRight
 } from 'lucide-react';
 import LiveChat from '../components/live/LiveChat';
 import LivePolls from '../components/live/LivePolls';
 import LiveQA from '../components/live/LiveQA';
+import Avatar from '../components/ui/Avatar';
 import axios from 'axios';
 import { createNotification } from '../lib/notifications';
 import { gainXP } from '../lib/xp';
@@ -69,6 +80,7 @@ import ConfirmModal from '../components/ConfirmModal';
 import { toast } from 'react-hot-toast';
 import { useLiveSession } from '../contexts/LiveSessionContext';
 import { sendDirectMessage } from '../features/messages/api';
+import { DEFAULT_LIVE_SETTINGS, normalizeLiveSettings, type LiveSessionSettings } from '../lib/liveSessionSettings';
 
 export default function LiveSession() {
   const { eventId } = useParams();
@@ -78,7 +90,9 @@ export default function LiveSession() {
   const [error, setError] = useState<string | null>(null);
   const [audioNeedsActivation, setAudioNeedsActivation] = useState(false);
   const [activeTab, setActiveTab] = useState<'chat' | 'polls' | 'qa' | 'participants'>('chat');
-  const [showSidebar, setShowSidebar] = useState(true);
+  const [showSidebar, setShowSidebar] = useState(() =>
+    typeof window === 'undefined' ? true : window.matchMedia('(min-width: 1024px)').matches,
+  );
   const [isHost, setIsHost] = useState(false);
   const [isCoHost, setIsCoHost] = useState(false);
   const canManage = isHost || isCoHost;
@@ -90,8 +104,89 @@ export default function LiveSession() {
   const [guestName, setGuestName] = useState<string>('');
   const [showGuestPrompt, setShowGuestPrompt] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
+  const [liveEvent, setLiveEvent] = useState<any>(null);
+  const [settings, setSettings] = useState<LiveSessionSettings>(DEFAULT_LIVE_SETTINGS);
+  const [showStudio, setShowStudio] = useState(false);
+  const [extending, setExtending] = useState(false);
+  const [spotlightIdentity, setSpotlightIdentity] = useState<string | null>(null);
+  const [isDesktop, setIsDesktop] = useState(() =>
+    typeof window === 'undefined' ? true : window.matchMedia('(min-width: 1024px)').matches,
+  );
 
-  const event = session.eventData;
+  const event = liveEvent || session.eventData;
+
+  useEffect(() => {
+    const media = window.matchMedia('(min-width: 1024px)');
+    const sync = () => setIsDesktop(media.matches);
+    sync();
+    media.addEventListener('change', sync);
+    return () => media.removeEventListener('change', sync);
+  }, []);
+
+  // Keep the room's event document live so extensions and host changes land instantly.
+  useEffect(() => {
+    if (!eventId) return;
+    return onSnapshot(
+      doc(db, 'events', eventId),
+      snap => { if (snap.exists()) setLiveEvent({ id: snap.id, ...snap.data() }); },
+      () => undefined,
+    );
+  }, [eventId]);
+
+  // Host-controlled room settings are shared by every participant.
+  useEffect(() => {
+    if (!eventId) return;
+    return onSnapshot(
+      doc(db, 'eventSessions', eventId),
+      snap => setSettings(normalizeLiveSettings(snap.exists() ? snap.data().settings : undefined)),
+      () => undefined,
+    );
+  }, [eventId]);
+
+  const updateSetting = async (key: keyof LiveSessionSettings, value: boolean) => {
+    if (!eventId || !canManage) return;
+    const previous = settings;
+    const next = { ...settings, [key]: value };
+    setSettings(next);
+    try {
+      await setDoc(
+        doc(db, 'eventSessions', eventId),
+        { settings: next, updatedAt: new Date().toISOString() },
+        { merge: true },
+      );
+    } catch {
+      setSettings(previous);
+      toast.error('Could not update the room setting');
+    }
+  };
+
+  const extendSession = async (minutes = 15) => {
+    if (!eventId || !canManage || !event?.expiresAt) return;
+    setExtending(true);
+    try {
+      const base = Math.max(Date.now(), new Date(event.expiresAt).getTime());
+      const next = new Date(base + minutes * 60_000);
+      await updateDoc(doc(db, 'events', eventId), {
+        expiresAt: next.toISOString(),
+        endDate: next.toISOString(),
+      });
+      await setDoc(
+        doc(db, 'eventSessions', eventId),
+        { expiresAt: next.toISOString(), extendedAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+        { merge: true },
+      );
+      toast.success(`Room extended by ${minutes} minutes`);
+    } catch {
+      toast.error('Could not extend this session');
+    } finally {
+      setExtending(false);
+    }
+  };
+
+  const moderatorIds = useMemo(
+    () => [event?.hostId, ...(event?.coHostIds || [])].filter(Boolean) as string[],
+    [event?.hostId, event?.coHostIds],
+  );
 
   useEffect(() => {
     if (!eventId) return;
@@ -106,14 +201,14 @@ export default function LiveSession() {
   }, [eventId, startSession, session.isActive, session.eventId]);
 
   useEffect(() => {
-    if (session.eventData) {
-      const hostId = session.eventData.hostId;
+    if (event) {
+      const hostId = event.hostId;
       const currentIsHost = auth.currentUser ? hostId === auth.currentUser.uid : false;
-      const currentIsCoHost = auth.currentUser ? session.eventData.coHostIds?.includes(auth.currentUser.uid) : false;
+      const currentIsCoHost = auth.currentUser ? event.coHostIds?.includes(auth.currentUser.uid) : false;
       setIsHost(currentIsHost);
       setIsCoHost(currentIsCoHost);
     }
-  }, [session.eventData]);
+  }, [event]);
 
   useEffect(() => {
     if (!session.isActive && !loading && !error) {
@@ -149,31 +244,29 @@ export default function LiveSession() {
             endTime: new Date().toISOString(),
             updatedAt: new Date().toISOString()
           }, { merge: true });
-          toast.error('Session expired (30m limit)');
+          toast('The room has wrapped up');
           navigate(`/events/${eventId}`);
         } catch (error) {
           console.error("Error auto-ending session:", error);
         }
       } else if (!canManage) {
-        toast.error('Session expired');
+        toast('The room has wrapped up');
         navigate(`/events/${eventId}`);
       }
     };
 
-    const interval = setInterval(() => {
+    const tick = () => {
       const expires = new Date(event.expiresAt).getTime();
-      const now = new Date().getTime();
-      const diff = Math.max(0, Math.floor((expires - now) / 1000));
+      const diff = Math.max(0, Math.floor((expires - Date.now()) / 1000));
       setTimeRemaining(diff);
+      if (diff <= 0) endSessionFunc();
+    };
 
-      if (diff <= 0) {
-        clearInterval(interval);
-        endSessionFunc();
-      }
-    }, 1000);
+    tick();
+    const interval = setInterval(tick, 1000);
 
     return () => clearInterval(interval);
-  }, [event, eventId, canManage, ending]);
+  }, [event?.expiresAt, event?.isInstant, eventId, canManage, ending]);
 
   useEffect(() => {
     if (!eventId || canManage) return;
@@ -299,6 +392,18 @@ export default function LiveSession() {
     );
   }
 
+  // Room hooks below require a connected LiveKit room.
+  if (!session.token) {
+    return (
+      <div className="min-h-screen bg-[#050505] flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-10 h-10 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/35">Preparing the room</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="h-screen bg-[#050505] flex flex-col overflow-hidden relative">
       {/* Placeholder screen when PiP is active */}
@@ -363,174 +468,224 @@ export default function LiveSession() {
       </AnimatePresence>
 
       {/* Header */}
-      <header className="h-16 border-b border-white/5 px-6 flex items-center justify-between bg-black/40 backdrop-blur-md z-10">
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2">
-            <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse" />
-            <span className="text-xs font-bold uppercase tracking-widest text-red-500">Live</span>
+      <header className="z-10 flex min-h-16 items-center justify-between gap-3 border-b border-white/[0.06] bg-[#08060b]/85 px-3 backdrop-blur-xl sm:px-6">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <div className="flex shrink-0 items-center gap-2">
+            <div className="h-2 w-2 animate-pulse rounded-full bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.7)]" />
+            <span className="text-[10px] font-black uppercase tracking-[0.18em] text-red-400">Live</span>
           </div>
           {timeRemaining !== null && (
-            <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-yellow-500/10 border border-yellow-500/20 text-yellow-500">
-              <Clock size={12} className="animate-pulse" />
-              <span className="text-[10px] font-black font-mono">
+            <div className="flex shrink-0 items-center gap-1.5 rounded-full border border-amber-400/20 bg-amber-400/10 py-1 pl-2.5 pr-1 text-amber-300">
+              <Clock size={11} className="animate-pulse" />
+              <span className="font-mono text-[10px] font-bold">
                 {Math.floor(timeRemaining / 60)}:{String(timeRemaining % 60).padStart(2, '0')}
               </span>
+              {canManage && (
+                <button
+                  onClick={() => extendSession(15)}
+                  disabled={extending}
+                  title="Extend the room by 15 minutes"
+                  className="ml-0.5 flex items-center gap-1 rounded-full bg-amber-400/15 px-1.5 py-0.5 text-[9px] font-bold text-amber-200 transition-colors hover:bg-amber-400/30 disabled:opacity-50"
+                >
+                  {extending ? <Loader2 size={9} className="animate-spin" /> : <Timer size={9} />} +15m
+                </button>
+              )}
             </div>
           )}
-          <div className="h-4 w-px bg-white/10" />
-          <h1 className="font-bold truncate max-w-md">{event?.title}</h1>
+          <span className="hidden h-4 w-px bg-white/10 sm:block" />
+          <h1 className="truncate text-[13px] font-semibold text-white/90 sm:max-w-[38vw] sm:text-sm">{event?.title}</h1>
+          <RoomPresence />
         </div>
 
-        <div className="flex items-center gap-3">
-          <button 
+        <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
+          <button
             onClick={handleMinimize}
-            className="p-2 rounded-xl hover:bg-white/5 text-white/50 transition-all flex items-center gap-2"
-            title="Minimize to Pop-out Window"
+            className="hidden rounded-xl p-2 text-white/45 transition-colors hover:bg-white/5 hover:text-white sm:block"
+            title="Pop out this room"
           >
-            <Minimize2 size={20} />
+            <Minimize2 size={18} />
           </button>
-          <button 
+          <button
             onClick={() => setShowShareModal(true)}
-            className="p-2 rounded-xl hover:bg-white/5 text-white/50 transition-all flex items-center gap-2"
-            title="Share Session"
+            className="rounded-xl p-2 text-white/45 transition-colors hover:bg-white/5 hover:text-white"
+            title="Share this room"
           >
-            <Share2 size={20} />
-            <span className="text-xs font-bold hidden sm:inline">Share</span>
-          </button>
-          <button 
-            onClick={() => setShowSidebar(!showSidebar)}
-            className={`p-2 rounded-xl transition-all ${showSidebar ? 'bg-primary text-white' : 'hover:bg-white/5 text-white/50'}`}
-          >
-            <ChatIcon size={20} />
+            <Share2 size={18} />
           </button>
           {canManage && (
-            <button 
-              onClick={() => setShowEndSessionConfirm(true)}
-              className="px-4 py-2 rounded-xl bg-red-500 text-white font-bold hover:bg-red-600 transition-all text-xs"
+            <button
+              onClick={() => setShowStudio(true)}
+              className="flex items-center gap-1.5 rounded-xl border border-primary/25 bg-primary/10 px-2.5 py-2 text-[11px] font-bold text-primary transition-colors hover:bg-primary/20"
+              title="Creator studio"
             >
-              End Session
+              <Settings2 size={16} />
+              <span className="hidden md:inline">Studio</span>
             </button>
           )}
-          <button 
-            onClick={handleLeave}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 text-white/50 font-bold hover:bg-white/10 transition-all"
+          <button
+            onClick={() => setShowSidebar(!showSidebar)}
+            className={`rounded-xl p-2 transition-colors ${showSidebar ? 'bg-primary text-white' : 'text-white/45 hover:bg-white/5 hover:text-white'}`}
+            title={showSidebar ? 'Hide the side panel' : 'Open the side panel'}
           >
-            <LogOut size={18} /> Leave
+            <ChatIcon size={18} />
+          </button>
+          {canManage && (
+            <button
+              onClick={() => setShowEndSessionConfirm(true)}
+              className="hidden rounded-xl border border-red-500/30 bg-red-500/15 px-3 py-2 text-[11px] font-bold text-red-300 transition-colors hover:bg-red-500 hover:text-white sm:block"
+            >
+              End room
+            </button>
+          )}
+          <button
+            onClick={handleLeave}
+            className="flex items-center gap-1.5 rounded-xl bg-white/[0.06] px-2.5 py-2 text-[11px] font-bold text-white/55 transition-colors hover:bg-white/10 hover:text-white"
+          >
+            <LogOut size={16} /> <span className="hidden sm:inline">Leave</span>
           </button>
         </div>
       </header>
 
       {/* Main Content */}
-      <div className="flex-1 flex overflow-hidden">
-        <div className="flex-1 relative bg-black flex flex-col">
+      <div className="flex flex-1 overflow-hidden">
+        <div className="relative flex flex-1 flex-col bg-[#050409]">
           <LayoutContextProvider>
-              <AudioActivationGate 
-                audioNeedsActivation={audioNeedsActivation} 
-                setAudioNeedsActivation={setAudioNeedsActivation} 
+            <AudioActivationGate
+              audioNeedsActivation={audioNeedsActivation}
+              setAudioNeedsActivation={setAudioNeedsActivation}
+            />
+            <div className="relative flex-1 overflow-hidden">
+              <SessionLayout
+                hostId={event?.hostId}
+                spotlightIdentity={spotlightIdentity}
+                manualPinnedTrack={manualPinnedTrack}
+                onPin={(identity, source) => setManualPinnedTrack({ identity, source })}
               />
-              <div className="flex-1 relative overflow-hidden">
-                <SessionLayout 
-                  hostId={event?.hostId} 
-                  manualPinnedTrack={manualPinnedTrack}
-                  onPin={(identity, source) => setManualPinnedTrack({ identity, source })}
-                />
-              </div>
-              
-              {/* Notifications Overlay */}
-              <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[60] flex flex-col gap-2 pointer-events-none">
-                <AnimatePresence>
-                  {notifications.map(n => (
-                    <motion.div
-                      key={n.id}
-                      initial={{ y: -20, opacity: 0, scale: 0.9 }}
-                      animate={{ y: 0, opacity: 1, scale: 1 }}
-                      exit={{ y: -20, opacity: 0, scale: 0.9 }}
-                      className={`px-6 py-3 rounded-2xl shadow-2xl backdrop-blur-xl border flex items-center gap-3 ${
-                        n.type === 'hand' 
-                          ? 'bg-yellow-500/20 border-yellow-500/30 text-yellow-500' 
-                          : 'bg-white/10 border-white/10 text-white'
-                      }`}
-                    >
-                      {n.type === 'hand' ? <Hand size={18} fill="currentColor" /> : <Shield size={18} />}
-                      <span className="text-sm font-bold">{n.message}</span>
-                    </motion.div>
-                  ))}
-                </AnimatePresence>
-              </div>
+            </div>
 
-              <ParticipantListener 
-                onHandRaise={(name, identity) => {
-                  const isLocal = identity === auth.currentUser?.uid;
-                  addNotification(`${isLocal ? 'You' : name} raised ${isLocal ? 'your' : 'their'} hand!`, 'hand', isLocal);
-                }} 
-              />
-              
-              {/* Custom Controls Overlay - Ensure it's always visible at the bottom */}
-              <div className="absolute bottom-0 left-0 right-0 p-4 flex justify-center z-50 pointer-events-none">
-                <div className="pointer-events-auto">
-                  <CustomControlBar />
-                </div>
+            {/* Notifications Overlay */}
+            <div className="pointer-events-none absolute left-1/2 top-4 z-[60] flex -translate-x-1/2 flex-col gap-2">
+              <AnimatePresence>
+                {notifications.map(n => (
+                  <motion.div
+                    key={n.id}
+                    initial={{ y: -20, opacity: 0, scale: 0.9 }}
+                    animate={{ y: 0, opacity: 1, scale: 1 }}
+                    exit={{ y: -20, opacity: 0, scale: 0.9 }}
+                    className={`flex items-center gap-3 rounded-2xl border px-5 py-3 shadow-2xl backdrop-blur-xl ${
+                      n.type === 'hand'
+                        ? 'border-amber-400/30 bg-amber-400/20 text-amber-300'
+                        : 'border-white/10 bg-white/10 text-white'
+                    }`}
+                  >
+                    {n.type === 'hand' ? <Hand size={18} fill="currentColor" /> : <Sparkles size={17} />}
+                    <span className="text-sm font-bold">{n.message}</span>
+                  </motion.div>
+                ))}
+              </AnimatePresence>
+            </div>
+
+            <ParticipantListener
+              onHandRaise={(name, identity) => {
+                const isLocal = identity === auth.currentUser?.uid;
+                addNotification(`${isLocal ? 'You' : name} raised ${isLocal ? 'your' : 'their'} hand!`, 'hand', isLocal);
+              }}
+            />
+
+            <ModerationBridge
+              moderatorIds={moderatorIds}
+              onSpotlight={setSpotlightIdentity}
+              onLeave={handleLeave}
+              onNotice={message => addNotification(message, 'info')}
+            />
+
+            {/* Custom Controls Overlay */}
+            <div className="pointer-events-none absolute bottom-0 left-0 right-0 z-50 flex justify-center p-3 sm:p-4">
+              <div className="pointer-events-auto max-w-full">
+                <CustomControlBar allowReactions={settings.reactions} allowHands={settings.handRaise} />
               </div>
-              <RoomAudioRenderer />
-            </LayoutContextProvider>
+            </div>
+            <RoomAudioRenderer />
+          </LayoutContextProvider>
 
           {/* Share Modal */}
           <AnimatePresence>
             {showShareModal && (
-              <ShareModal 
-                isOpen={showShareModal} 
-                onClose={() => setShowShareModal(false)} 
-                eventId={eventId!} 
+              <ShareModal
+                isOpen={showShareModal}
+                onClose={() => setShowShareModal(false)}
+                eventId={eventId!}
                 eventTitle={event?.title}
               />
             )}
           </AnimatePresence>
+
+          <HostStudio
+            open={showStudio}
+            onClose={() => setShowStudio(false)}
+            settings={settings}
+            onChange={updateSetting}
+            hasTimer={!!event?.expiresAt}
+            timeRemaining={timeRemaining}
+            onExtend={() => extendSession(15)}
+            extending={extending}
+            onOpenPeople={() => { setShowStudio(false); setShowSidebar(true); setActiveTab('participants'); }}
+          />
         </div>
 
-        {/* Sidebar */}
+        {/* Side panel: docked on desktop, a drawer on mobile */}
         <AnimatePresence>
-          {showSidebar && (
-            <motion.div 
+          {showSidebar && (isDesktop ? (
+            <motion.aside
+              key="sidebar-dock"
               initial={{ width: 0, opacity: 0 }}
-              animate={{ width: 400, opacity: 1 }}
+              animate={{ width: 392, opacity: 1 }}
               exit={{ width: 0, opacity: 0 }}
-              className="flex flex-col border-l border-white/5 bg-[#0a0a0a]"
+              transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+              className="flex shrink-0 flex-col overflow-hidden border-l border-white/[0.06] bg-[#09070c]"
             >
-              {/* Tabs */}
-              <div className="flex border-b border-white/5">
-                <button 
-                  onClick={() => setActiveTab('chat')}
-                  className={`flex-1 py-4 text-xs font-bold uppercase tracking-widest transition-all border-b-2 ${
-                    activeTab === 'chat' ? 'border-primary text-primary' : 'border-transparent text-white/30 hover:text-white/60'
-                  }`}
-                >
-                  Chat
-                </button>
-                <button 
-                  onClick={() => setActiveTab('polls')}
-                  className={`flex-1 py-4 text-xs font-bold uppercase tracking-widest transition-all border-b-2 ${
-                    activeTab === 'polls' ? 'border-primary text-primary' : 'border-transparent text-white/30 hover:text-white/60'
-                  }`}
-                >
-                  Polls
-                </button>
-                <button 
-                  onClick={() => setActiveTab('qa')}
-                  className={`flex-1 py-4 text-xs font-bold uppercase tracking-widest transition-all border-b-2 ${
-                    activeTab === 'qa' ? 'border-primary text-primary' : 'border-transparent text-white/30 hover:text-white/60'
-                  }`}
-                >
-                  Q&A
-                </button>
-              </div>
-
-              <div className="flex-1 overflow-hidden">
-                {activeTab === 'chat' && <LiveChat eventId={eventId!} />}
-                {activeTab === 'polls' && <LivePolls eventId={eventId!} isHost={canManage} />}
-                {activeTab === 'qa' && <LiveQA eventId={eventId!} isHost={canManage} />}
-              </div>
+              <SidebarPanel
+                eventId={eventId!}
+                activeTab={activeTab}
+                setActiveTab={setActiveTab}
+                canManage={canManage}
+                settings={settings}
+                spotlightIdentity={spotlightIdentity}
+                onSpotlight={setSpotlightIdentity}
+                onClose={() => setShowSidebar(false)}
+                isDesktop
+              />
+            </motion.aside>
+          ) : (
+            <motion.div key="sidebar-drawer" className="fixed inset-0 z-[90] flex justify-end">
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setShowSidebar(false)}
+                className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+              />
+              <motion.aside
+                initial={{ x: '100%' }}
+                animate={{ x: 0 }}
+                exit={{ x: '100%' }}
+                transition={{ type: 'spring', damping: 30, stiffness: 280 }}
+                className="relative flex h-full w-[min(92vw,392px)] flex-col border-l border-white/[0.08] bg-[#09070c] shadow-2xl"
+              >
+                <SidebarPanel
+                  eventId={eventId!}
+                  activeTab={activeTab}
+                  setActiveTab={setActiveTab}
+                  canManage={canManage}
+                  settings={settings}
+                  spotlightIdentity={spotlightIdentity}
+                  onSpotlight={setSpotlightIdentity}
+                  onClose={() => setShowSidebar(false)}
+                  isDesktop={false}
+                />
+              </motion.aside>
             </motion.div>
-          )}
+          ))}
         </AnimatePresence>
 
         <ConfirmModal 
@@ -643,12 +798,490 @@ function ParticipantListener({ onHandRaise }: { onHandRaise: (name: string, iden
   return null;
 }
 
+/* ---------------------------------------------------------------- */
+/* Room presence, moderation, side panel and creator studio          */
+/* ---------------------------------------------------------------- */
+
+const roomEncoder = new TextEncoder();
+
+async function sendRoomData(
+  sender: { publishData: (data: Uint8Array, options?: any) => Promise<unknown> },
+  payload: Record<string, unknown>,
+  destinations?: string[],
+) {
+  await sender.publishData(roomEncoder.encode(JSON.stringify(payload)), {
+    reliable: true,
+    ...(destinations ? { destinationIdentities: destinations } : {}),
+  });
+}
+
+function RoomPresence() {
+  const participants = useParticipants();
+  return (
+    <span className="ml-1 hidden shrink-0 items-center gap-1.5 rounded-full border border-white/[0.06] bg-white/[0.04] px-2.5 py-1 text-[10px] font-medium text-white/50 md:flex">
+      <Users size={11} /> {participants.length}
+    </span>
+  );
+}
+
+function ModerationBridge({
+  moderatorIds,
+  onSpotlight,
+  onLeave,
+  onNotice,
+}: {
+  moderatorIds: string[];
+  onSpotlight: (identity: string | null) => void;
+  onLeave: () => void;
+  onNotice: (message: string) => void;
+}) {
+  const room = useRoomContext();
+  const { localParticipant } = useLocalParticipant();
+  const moderatorSet = useMemo(() => new Set(moderatorIds), [moderatorIds]);
+
+  useEffect(() => {
+    if (!localParticipant) return;
+
+    const handleData = (payload: Uint8Array, participant?: Participant) => {
+      try {
+        if (!participant || !moderatorSet.has(participant.identity)) return;
+        const data = JSON.parse(new TextDecoder().decode(payload));
+
+        if (data.type === 'spotlight') {
+          onSpotlight(data.target || null);
+          return;
+        }
+
+        if (data.type !== 'moderation' || data.target !== localParticipant.identity) return;
+
+        if (data.action === 'mute') {
+          localParticipant.setMicrophoneEnabled(false).catch(() => undefined);
+          onNotice('The host muted your microphone');
+        }
+
+        if (data.action === 'remove') {
+          onNotice('The host removed you from the room');
+          setTimeout(onLeave, 1200);
+        }
+      } catch {
+        // Ignore malformed data packets.
+      }
+    };
+
+    room.on('dataReceived', handleData);
+    return () => {
+      room.off('dataReceived', handleData);
+    };
+  }, [room, localParticipant, moderatorSet, onSpotlight, onLeave, onNotice]);
+
+  return null;
+}
+
+function SidebarPanel({
+  eventId,
+  activeTab,
+  setActiveTab,
+  canManage,
+  settings,
+  spotlightIdentity,
+  onSpotlight,
+  onClose,
+  isDesktop,
+}: {
+  eventId: string;
+  activeTab: 'chat' | 'polls' | 'qa' | 'participants';
+  setActiveTab: (tab: 'chat' | 'polls' | 'qa' | 'participants') => void;
+  canManage: boolean;
+  settings: LiveSessionSettings;
+  spotlightIdentity: string | null;
+  onSpotlight: (identity: string | null) => void;
+  onClose: () => void;
+  isDesktop: boolean;
+}) {
+  const tabs: { id: 'chat' | 'polls' | 'qa' | 'participants'; label: string; icon: ReactNode; locked?: boolean }[] = [
+    { id: 'chat', label: 'Chat', icon: <MessageSquare size={16} />, locked: !settings.chat },
+    { id: 'qa', label: 'Q&A', icon: <HelpCircle size={16} />, locked: !settings.qa },
+    { id: 'polls', label: 'Polls', icon: <BarChart2 size={16} />, locked: !settings.polls },
+    { id: 'participants', label: 'People', icon: <Users size={16} /> },
+  ];
+
+  return (
+    <>
+      <div className="flex items-center border-b border-white/[0.06] px-1">
+        {tabs.map(tab => {
+          const on = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`relative flex flex-1 flex-col items-center gap-1 py-3 text-[9px] font-bold uppercase tracking-[0.13em] transition-colors ${
+                on ? 'text-primary' : 'text-white/30 hover:text-white/60'
+              }`}
+            >
+              {tab.icon}
+              {tab.label}
+              {tab.locked && <Lock size={8} className="absolute right-2 top-2 text-amber-400/70" />}
+              {on && <span className="absolute inset-x-3 bottom-0 h-0.5 rounded-full bg-primary" />}
+            </button>
+          );
+        })}
+        {!isDesktop && (
+          <button onClick={onClose} aria-label="Close panel" className="ml-0.5 p-2 text-white/40 transition-colors hover:text-white">
+            <X size={18} />
+          </button>
+        )}
+      </div>
+
+      <div className="flex-1 overflow-hidden">
+        {activeTab === 'chat' && <LiveChat eventId={eventId} locked={!settings.chat} />}
+        {activeTab === 'qa' && <LiveQA eventId={eventId} isHost={canManage} locked={!settings.qa} />}
+        {activeTab === 'polls' && <LivePolls eventId={eventId} isHost={canManage} locked={!settings.polls} />}
+        {activeTab === 'participants' && (
+          <ParticipantsPanel
+            canManage={canManage}
+            spotlightIdentity={spotlightIdentity}
+            onSpotlight={onSpotlight}
+          />
+        )}
+      </div>
+    </>
+  );
+}
+
+function ParticipantsPanel({
+  canManage,
+  spotlightIdentity,
+  onSpotlight,
+}: {
+  canManage: boolean;
+  spotlightIdentity: string | null;
+  onSpotlight: (identity: string | null) => void;
+}) {
+  const participants = useParticipants();
+  const { localParticipant } = useLocalParticipant();
+  const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const sorted = [...participants].sort((a, b) => {
+    if (a.identity === localParticipant?.identity) return -1;
+    if (b.identity === localParticipant?.identity) return 1;
+    return Number(b.isSpeaking) - Number(a.isSpeaking) || (a.name || '').localeCompare(b.name || '');
+  });
+
+  const send = async (target: string, action: 'mute' | 'remove') => {
+    if (!localParticipant) return;
+    setBusyId(target);
+    try {
+      await sendRoomData(localParticipant, { type: 'moderation', action, target }, [target]);
+      toast.success(action === 'mute' ? 'Mute request sent' : 'Removal request sent');
+    } catch {
+      toast.error('Could not reach that participant');
+    } finally {
+      setBusyId(null);
+      setConfirmRemove(null);
+    }
+  };
+
+  const spotlight = async (target: string) => {
+    if (!localParticipant) return;
+    const next = spotlightIdentity === target ? null : target;
+    try {
+      await sendRoomData(localParticipant, { type: 'spotlight', target: next });
+      onSpotlight(next);
+      toast.success(next ? 'Spotlight shared with the room' : 'Spotlight cleared');
+    } catch {
+      toast.error('Could not update the spotlight');
+    }
+  };
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex-1 space-y-1 overflow-y-auto p-2.5 custom-scrollbar">
+        {sorted.map(participant => {
+          let meta: any = {};
+          try { meta = participant.metadata ? JSON.parse(participant.metadata) : {}; } catch { meta = {}; }
+          const isMe = participant.identity === localParticipant?.identity;
+          const isSpotlight = spotlightIdentity === participant.identity;
+
+          return (
+            <div
+              key={participant.identity}
+              className={`flex items-center gap-2.5 rounded-2xl px-2 py-2 transition-colors ${
+                isSpotlight ? 'bg-primary/[0.08] ring-1 ring-primary/20' : 'hover:bg-white/[0.04]'
+              }`}
+            >
+              <span className={`relative shrink-0 rounded-full ${participant.isSpeaking ? 'ring-2 ring-primary ring-offset-2 ring-offset-[#09070c]' : ''}`}>
+                <Avatar src={meta.photoURL || meta.avatar} seed={participant.identity} size={34} />
+              </span>
+
+              <div className="min-w-0 flex-1">
+                <p className="flex items-center gap-1.5 truncate text-[12px] font-semibold text-white/90">
+                  {participant.name || participant.identity}
+                  {isMe && <span className="text-[9px] font-medium text-white/35">you</span>}
+                  {isSpotlight && <Star size={10} className="fill-amber-400 text-amber-400" />}
+                </p>
+                <p className="mt-0.5 flex items-center gap-2 text-[10px] text-white/35">
+                  {participant.isMicrophoneEnabled ? <Mic size={10} /> : <MicOff size={10} className="text-red-400/80" />}
+                  <span>{participant.isCameraEnabled ? 'Camera on' : 'Camera off'}</span>
+                  {participant.isSpeaking && <span className="text-primary">Speaking</span>}
+                </p>
+              </div>
+
+              {canManage && !isMe && (
+                confirmRemove === participant.identity ? (
+                  <div className="flex shrink-0 items-center gap-1">
+                    <button onClick={() => send(participant.identity, 'remove')} disabled={busyId === participant.identity} className="rounded-full bg-red-500 px-2 py-1 text-[9px] font-bold text-white disabled:opacity-50">
+                      Remove
+                    </button>
+                    <button onClick={() => setConfirmRemove(null)} className="rounded-full px-1.5 py-1 text-[9px] font-semibold text-white/50">
+                      No
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex shrink-0 items-center gap-0.5">
+                    <button
+                      onClick={() => send(participant.identity, 'mute')}
+                      disabled={busyId === participant.identity}
+                      title="Mute microphone"
+                      className="rounded-lg p-1.5 text-white/35 transition-colors hover:bg-white/[0.06] hover:text-white disabled:opacity-40"
+                    >
+                      <VolumeX size={14} />
+                    </button>
+                    <button
+                      onClick={() => spotlight(participant.identity)}
+                      title={isSpotlight ? 'Clear spotlight' : 'Spotlight this person'}
+                      className={`rounded-lg p-1.5 transition-colors hover:bg-white/[0.06] ${isSpotlight ? 'text-amber-400' : 'text-white/35 hover:text-amber-300'}`}
+                    >
+                      <Star size={14} fill={isSpotlight ? 'currentColor' : 'none'} />
+                    </button>
+                    <button
+                      onClick={() => setConfirmRemove(participant.identity)}
+                      title="Remove from room"
+                      className="rounded-lg p-1.5 text-white/35 transition-colors hover:bg-red-500/10 hover:text-red-400"
+                    >
+                      <UserX size={14} />
+                    </button>
+                  </div>
+                )
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="shrink-0 border-t border-white/[0.06] px-3.5 py-3">
+        <p className="text-[10px] leading-relaxed text-white/25">
+          {canManage
+            ? 'Mute and spotlight requests are sent to each person in the room.'
+            : 'Only the host and co-hosts can moderate this room.'}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function HostStudio({
+  open,
+  onClose,
+  settings,
+  onChange,
+  hasTimer,
+  timeRemaining,
+  onExtend,
+  extending,
+  onOpenPeople,
+}: {
+  open: boolean;
+  onClose: () => void;
+  settings: LiveSessionSettings;
+  onChange: (key: keyof LiveSessionSettings, value: boolean) => void;
+  hasTimer: boolean;
+  timeRemaining: number | null;
+  onExtend: () => void;
+  extending: boolean;
+  onOpenPeople: () => void;
+}) {
+  const controls: { key: keyof LiveSessionSettings; label: string; description: string; icon: ReactNode }[] = [
+    { key: 'chat', label: 'Live chat', description: 'Let the audience talk between themselves.', icon: <MessageSquare size={16} /> },
+    { key: 'qa', label: 'Questions', description: 'Let people ask and upvote questions.', icon: <HelpCircle size={16} /> },
+    { key: 'polls', label: 'Polls', description: 'Let the audience vote on prompts.', icon: <BarChart2 size={16} /> },
+    { key: 'reactions', label: 'Reactions', description: 'Floating emoji and quick reactions.', icon: <Smile size={16} /> },
+    { key: 'handRaise', label: 'Hand raises', description: 'Let people ask to speak.', icon: <Hand size={16} /> },
+  ];
+
+  const timerLabel = hasTimer && timeRemaining !== null
+    ? `${Math.floor(timeRemaining / 60)}:${String(timeRemaining % 60).padStart(2, '0')} left`
+    : 'This room has no countdown';
+
+  return (
+    <AnimatePresence>
+      {open && (
+        <div className="fixed inset-0 z-[120] flex items-end justify-center sm:items-center sm:p-4">
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={onClose}
+            className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+          />
+          <motion.div
+            initial={{ y: 40, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: 40, opacity: 0 }}
+            transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+            className="relative flex max-h-[92dvh] w-full flex-col overflow-hidden rounded-t-[28px] border border-white/10 bg-[#0c0910] shadow-2xl sm:max-w-lg sm:rounded-[28px]"
+          >
+            <div className="flex items-center justify-between border-b border-white/[0.07] px-5 py-4">
+              <div className="flex items-center gap-3">
+                <span className="grid h-9 w-9 place-items-center rounded-xl border border-primary/25 bg-primary/10 text-primary">
+                  <Sparkles size={16} />
+                </span>
+                <div>
+                  <p className="text-[13px] font-bold text-white">Creator studio</p>
+                  <p className="text-[10px] text-white/35">Shape the room while you’re live</p>
+                </div>
+              </div>
+              <button onClick={onClose} aria-label="Close studio" className="rounded-full p-2 text-white/40 transition-colors hover:bg-white/5 hover:text-white">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="space-y-6 overflow-y-auto p-5 custom-scrollbar">
+              <section>
+                <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-white/30">Room controls</p>
+                <div className="mt-2 divide-y divide-white/[0.06] overflow-hidden rounded-2xl border border-white/[0.07] bg-white/[0.02]">
+                  {controls.map(control => (
+                    <StudioToggle
+                      key={control.key}
+                      icon={control.icon}
+                      label={control.label}
+                      description={control.description}
+                      checked={settings[control.key]}
+                      onChange={value => onChange(control.key, value)}
+                    />
+                  ))}
+                </div>
+              </section>
+
+              <section>
+                <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-white/30">Session timer</p>
+                <div className="mt-2 flex items-center justify-between gap-4 rounded-2xl border border-white/[0.07] bg-white/[0.02] px-4 py-3.5">
+                  <div>
+                    <p className="text-[12px] font-semibold text-white">{timerLabel}</p>
+                    <p className="mt-0.5 text-[10px] text-white/35">Give the conversation a little more room.</p>
+                  </div>
+                  <button
+                    onClick={onExtend}
+                    disabled={!hasTimer || extending}
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-amber-400/15 px-3 py-2 text-[11px] font-bold text-amber-300 transition-colors hover:bg-amber-400/25 disabled:opacity-40"
+                  >
+                    {extending ? <Loader2 size={12} className="animate-spin" /> : <Timer size={12} />} +15 min
+                  </button>
+                </div>
+              </section>
+
+              <section>
+                <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-white/30">Quick actions</p>
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  <MuteAllControl />
+                  <button
+                    onClick={onOpenPeople}
+                    className="flex items-center justify-center gap-2 rounded-2xl border border-white/[0.07] bg-white/[0.02] px-3 py-3 text-[11px] font-semibold text-white/65 transition-colors hover:bg-white/[0.05] hover:text-white"
+                  >
+                    <Users size={15} /> Manage people <ChevronRight size={13} className="text-white/25" />
+                  </button>
+                </div>
+              </section>
+
+              <p className="flex items-start gap-2 rounded-2xl bg-primary/[0.06] px-3.5 py-3 text-[10px] leading-relaxed text-white/40">
+                <Lock size={12} className="mt-0.5 shrink-0 text-primary/70" />
+                Controls apply instantly for everyone in the room. You can change them at any time.
+              </p>
+            </div>
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
+  );
+}
+
+function StudioToggle({
+  icon,
+  label,
+  description,
+  checked,
+  onChange,
+}: {
+  icon: ReactNode;
+  label: string;
+  description: string;
+  checked: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center gap-3 px-4 py-3">
+      <span className="text-white/40">{icon}</span>
+      <div className="min-w-0 flex-1">
+        <p className="text-[12px] font-semibold text-white/90">{label}</p>
+        <p className="mt-0.5 text-[10px] text-white/35">{description}</p>
+      </div>
+      <button
+        role="switch"
+        aria-checked={checked}
+        aria-label={`${checked ? 'Disable' : 'Enable'} ${label}`}
+        onClick={() => onChange(!checked)}
+        className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${checked ? 'bg-primary' : 'bg-white/15'}`}
+      >
+        <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all ${checked ? 'left-[18px]' : 'left-0.5'}`} />
+      </button>
+    </div>
+  );
+}
+
+function MuteAllControl() {
+  const participants = useParticipants();
+  const { localParticipant } = useLocalParticipant();
+  const [busy, setBusy] = useState(false);
+
+  const muteAll = async () => {
+    if (!localParticipant) return;
+    setBusy(true);
+    try {
+      const targets = participants.filter(p => p.identity !== localParticipant.identity && p.isMicrophoneEnabled);
+      await Promise.all(
+        targets.map(p => sendRoomData(localParticipant, { type: 'moderation', action: 'mute', target: p.identity }, [p.identity])),
+      );
+      toast.success(
+        targets.length > 0
+          ? `Muted ${targets.length} microphone${targets.length === 1 ? '' : 's'}`
+          : 'Everyone is already muted',
+      );
+    } catch {
+      toast.error('Could not mute everyone');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <button
+      onClick={muteAll}
+      disabled={busy}
+      className="flex items-center justify-center gap-2 rounded-2xl border border-white/[0.07] bg-white/[0.02] px-3 py-3 text-[11px] font-semibold text-white/65 transition-colors hover:bg-white/[0.05] hover:text-white disabled:opacity-50"
+    >
+      {busy ? <Loader2 size={15} className="animate-spin" /> : <VolumeX size={15} />} Mute everyone
+    </button>
+  );
+}
+
 function SessionLayout({ 
   hostId, 
+  spotlightIdentity,
   manualPinnedTrack, 
   onPin 
 }: { 
   hostId?: string; 
+  spotlightIdentity?: string | null;
   manualPinnedTrack: { identity: string; source: Track.Source } | null;
   onPin: (identity: string, source: Track.Source) => void;
 }) {
@@ -673,7 +1306,10 @@ function SessionLayout({
     : null;
     
   const hostTrack = cameraTracks.find(t => t.participant.identity === hostId);
-  const pinnedTrack = manualTrack || screenShareTrack || hostTrack || cameraTracks[0];
+  const spotlightTrack = spotlightIdentity
+    ? cameraTracks.find(t => t.participant.identity === spotlightIdentity)
+    : null;
+  const pinnedTrack = manualTrack || screenShareTrack || spotlightTrack || hostTrack || cameraTracks[0];
   
   // Other tracks to show in the sidebar (excluding the pinned one)
   const sidebarTracks = tracks.filter(t => t !== pinnedTrack);
@@ -836,7 +1472,7 @@ function CustomParticipantTile({
   );
 }
 
-function CustomControlBar() {
+function CustomControlBar({ allowReactions = true, allowHands = true }: { allowReactions?: boolean; allowHands?: boolean }) {
   const room = useRoomContext();
   const { localParticipant } = useLocalParticipant();
   const { toggle: toggleScreenShare, enabled: isScreenShareEnabled } = useTrackToggle({
@@ -928,6 +1564,10 @@ function CustomControlBar() {
   }, [room]);
 
   const toggleHand = async () => {
+    if (!allowHands) {
+      toast('The host has turned off hand raises');
+      return;
+    }
     const newState = !isHandRaised;
     setIsHandRaised(newState);
     
@@ -985,8 +1625,8 @@ function CustomControlBar() {
         </AnimatePresence>
       </div>
 
-      <div className="flex items-center gap-2 px-6 py-3 bg-black/60 backdrop-blur-3xl border border-white/10 rounded-3xl shadow-[0_0_50px_rgba(0,0,0,0.5)]">
-        <div className="flex items-center gap-1">
+      <div className="flex max-w-full items-center gap-1.5 rounded-3xl border border-white/10 bg-black/60 px-2.5 py-2.5 shadow-[0_0_50px_rgba(0,0,0,0.5)] backdrop-blur-3xl sm:gap-2 sm:px-6 sm:py-3">
+        <div className="flex items-center gap-0.5 sm:gap-1">
           <TrackToggle 
             source={Track.Source.Microphone} 
             showIcon={false}
@@ -1004,38 +1644,40 @@ function CustomControlBar() {
           <button
             onClick={handleScreenShare}
             className={`!p-3 !rounded-2xl !bg-white/5 hover:!bg-white/10 !border-none !transition-all ${isScreenShareEnabled ? 'text-primary' : ''}`}
-            title="Share Screen"
+            title="Share screen"
           >
             <MonitorUp size={20} />
           </button>
         </div>
         
-        <div className="w-px h-8 bg-white/10 mx-2" />
+        <div className="mx-1 h-8 w-px bg-white/10 sm:mx-2" />
 
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-0.5 sm:gap-1">
           <button
             onClick={toggleHand}
-            className={`p-3 rounded-2xl transition-all ${
+            disabled={!allowHands}
+            className={`p-3 rounded-2xl transition-all disabled:cursor-not-allowed disabled:opacity-35 ${
               isHandRaised ? 'bg-yellow-500 text-black shadow-[0_0_20px_rgba(234,179,8,0.3)]' : 'bg-white/5 hover:bg-white/10 text-white/70'
             }`}
-            title="Raise Hand"
+            title={allowHands ? 'Raise hand' : 'Hand raises are off'}
           >
             <Hand size={20} fill={isHandRaised ? 'currentColor' : 'none'} />
           </button>
 
           <div className="relative">
             <button
-              onClick={() => setShowReactions(!showReactions)}
-              className={`p-3 rounded-2xl transition-all ${
-                showReactions ? 'bg-primary text-white shadow-[0_0_20px_rgba(139,92,246,0.3)]' : 'bg-white/5 hover:bg-white/10 text-white/70'
+              onClick={() => { if (allowReactions) setShowReactions(!showReactions); else toast('The host has turned off reactions'); }}
+              disabled={!allowReactions}
+              className={`p-3 rounded-2xl transition-all disabled:cursor-not-allowed disabled:opacity-35 ${
+                showReactions ? 'bg-primary text-white shadow-[0_0_20px_rgba(255,107,74,0.3)]' : 'bg-white/5 hover:bg-white/10 text-white/70'
               }`}
-              title="Reactions"
+              title={allowReactions ? 'Reactions' : 'Reactions are off'}
             >
               <Smile size={20} />
             </button>
 
             <AnimatePresence>
-              {showReactions && (
+              {showReactions && allowReactions && (
                 <motion.div
                   initial={{ opacity: 0, y: 10, scale: 0.9 }}
                   animate={{ opacity: 1, y: -70, scale: 1 }}

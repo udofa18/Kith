@@ -481,7 +481,9 @@ service cloud.firestore {
              ));
     }
 
-    function isValidEvent(data) {
+    // `hostId` is passed in so creators can update their own events and co-hosts
+    // can update an event without being able to transfer ownership to themselves.
+    function isValidEvent(data, hostId) {
       let requiredFields = ['title', 'hostId', 'eventType', 'visibility', 'startDate', 'endDate', 'timezone', 'status', 'createdAt'];
       let optionalFields = ['category', 'description', 'banner', 'communityId', 'isPaid', 'price', 'isOffline', 'locationName', 'locationAddress', 'locationCoords', 'onlineType', 'externalPlatform', 'externalUrl', 'maxAttendees', 'attendeeCount', 'coHostIds', 'allowEarlyAccess', 'lastStartedAt', 'type', 'isInstant', 'expiresAt', 'promotion', 'city', 'theme'];
       let allFields = requiredFields.concat(optionalFields);
@@ -489,7 +491,7 @@ service cloud.firestore {
       return data.keys().hasAll(requiredFields) &&
              data.keys().size() <= allFields.size() &&
              data.title is string && data.title.size() > 0 && data.title.size() < 200 &&
-             data.hostId == request.auth.uid &&
+             data.hostId == hostId &&
              data.eventType in ['user', 'community'] &&
              data.visibility in ['public', 'community', 'unlisted', 'followers'] &&
              data.status in ['upcoming', 'live', 'ended'] &&
@@ -932,16 +934,16 @@ service cloud.firestore {
                       resource.data.get('coHostIds', []).hasAny([request.auth.uid]) ||
                       isRegisteredForEvent(eventId)
                     ));
-      allow create: if isAuthenticated() && isValidEvent(request.resource.data) && 
+      allow create: if isAuthenticated() && isValidEvent(request.resource.data, request.auth.uid) && 
                     !('promotion' in request.resource.data) &&
                     (request.resource.data.eventType == 'user' || 
                      (request.resource.data.eventType == 'community' && 'communityId' in request.resource.data && (isCommunityAdmin(request.resource.data.communityId) || hasPermission(request.resource.data.communityId, 'create_event'))));
       allow update: if isAuthenticated() && (
         isAdmin() ||
         // `promotion` is only ever written by the boost API (Admin SDK); hosts cannot touch it.
-        (resource.data.hostId == request.auth.uid && isValidEvent(request.resource.data) &&
+        (resource.data.hostId == request.auth.uid && isValidEvent(request.resource.data, request.auth.uid) &&
           request.resource.data.get('promotion', null) == resource.data.get('promotion', null)) ||
-        (resource.data.get('coHostIds', []).hasAny([request.auth.uid]) && isValidEvent(request.resource.data) &&
+        (resource.data.get('coHostIds', []).hasAny([request.auth.uid]) && isValidEvent(request.resource.data, resource.data.hostId) &&
           request.resource.data.get('promotion', null) == resource.data.get('promotion', null)) ||
         (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['attendeeCount', 'impressions']))
       );
@@ -982,7 +984,8 @@ service cloud.firestore {
     }
 
     match /eventSessions/{eventId} {
-      allow read: if isRegisteredForEvent(eventId) || isEventHost(eventId) || (exists(/databases/$(database)/documents/events/$(eventId)) && get(/databases/$(database)/documents/events/$(eventId)).data.visibility == 'unlisted' && (get(/databases/$(database)/documents/events/$(eventId)).data.hostId == request.auth.uid || !('expiresAt' in get(/databases/$(database)/documents/events/$(eventId)).data) || request.time < timestamp.value(get(/databases/$(database)/documents/events/$(eventId)).data.expiresAt)));
+      // Host-controlled flags are non-sensitive; public rooms expose them so guests honour muted chat/reactions.
+      allow read: if isRegisteredForEvent(eventId) || isEventHost(eventId) || (exists(/databases/$(database)/documents/events/$(eventId)) && get(/databases/$(database)/documents/events/$(eventId)).data.visibility == 'public') || (exists(/databases/$(database)/documents/events/$(eventId)) && get(/databases/$(database)/documents/events/$(eventId)).data.visibility == 'unlisted' && (get(/databases/$(database)/documents/events/$(eventId)).data.hostId == request.auth.uid || !('expiresAt' in get(/databases/$(database)/documents/events/$(eventId)).data) || request.time < timestamp.value(get(/databases/$(database)/documents/events/$(eventId)).data.expiresAt)));
       allow create: if isEventHost(eventId);
       allow update: if isEventHost(eventId) || (isAuthenticated() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['activePollId', 'spotlightParticipantId'])) || (exists(/databases/$(database)/documents/events/$(eventId)) && get(/databases/$(database)/documents/events/$(eventId)).data.visibility == 'unlisted' && (get(/databases/$(database)/documents/events/$(eventId)).data.hostId == request.auth.uid || !('expiresAt' in get(/databases/$(database)/documents/events/$(eventId)).data) || request.time < timestamp.value(get(/databases/$(database)/documents/events/$(eventId)).data.expiresAt)));
       

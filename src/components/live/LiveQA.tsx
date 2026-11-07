@@ -10,10 +10,12 @@ interface LiveQAProps {
   eventId?: string;
   path?: string;
   isHost: boolean;
+  /** When true, the audience can read but not ask new questions. */
+  locked?: boolean;
 }
 
 /** Ask questions, upvote the ones you want answered; the host can pin and remove them. */
-export default function LiveQA({ eventId, path, isHost }: LiveQAProps) {
+export default function LiveQA({ eventId, path, isHost, locked = false }: LiveQAProps) {
   const base = path ?? `eventSessions/${eventId}`;
   const [questions, setQuestions] = useState<any[]>([]);
   const [text, setText] = useState('');
@@ -86,9 +88,10 @@ export default function LiveQA({ eventId, path, isHost }: LiveQAProps) {
         )}
       </div>
       <form onSubmit={ask} className="shrink-0 p-3 border-t border-foreground/10 flex items-center gap-2">
-        <input value={text} maxLength={300} onChange={e => setText(e.target.value)} placeholder="Ask a question" className="flex-1 min-w-0 px-4 py-2.5 rounded-full bg-foreground/5 border border-transparent focus:border-primary outline-none text-sm" />
-        <button type="submit" disabled={!text.trim()} aria-label="Send" className="w-10 h-10 rounded-full bg-primary text-white flex items-center justify-center disabled:opacity-30"><Send size={16} /></button>
+        <input value={text} maxLength={300} onChange={e => setText(e.target.value)} disabled={locked} placeholder={locked ? 'Questions are paused' : 'Ask a question'} className="flex-1 min-w-0 px-4 py-2.5 rounded-full bg-foreground/5 border border-transparent focus:border-primary outline-none text-sm disabled:opacity-50" />
+        <button type="submit" disabled={!text.trim() || locked} aria-label="Send" className="w-10 h-10 rounded-full bg-primary text-white flex items-center justify-center disabled:opacity-30"><Send size={16} /></button>
       </form>
+      {locked && <p className="shrink-0 pb-3 text-center text-[10px] font-medium uppercase tracking-[0.12em] text-faint">Q&amp;A paused by the host</p>}
     </div>
   );
 }

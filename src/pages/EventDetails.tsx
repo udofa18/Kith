@@ -17,9 +17,8 @@ import {
   Globe,
   Info,
   Lock,
-  Map as MapIcon,
   MapPin,
-  MoreHorizontal,
+  Maximize2,
   Radio,
   Rocket,
   Settings2,
@@ -42,7 +41,7 @@ import { updateEventStatus } from '../lib/eventUtils';
 import ConfirmModal from '../components/ConfirmModal';
 import CoHostManagementModal from '../components/CoHostManagementModal';
 import BoostEventModal from '../components/events/BoostEventModal';
-import EventCover from '../components/events/EventCover';
+import EventCover, { hasEventBanner } from '../components/events/EventCover';
 import Avatar from '../components/ui/Avatar';
 import { startCheckout, getOrderStatus, formatEventPrice } from '../lib/payments';
 
@@ -283,7 +282,7 @@ export default function EventDetails() {
 
   const startDate = new Date(event.startDate);
   const fiveMinsBefore = new Date(startDate.getTime() - 5 * 60 * 1000);
-  const canJoinNow = live || now >= fiveMinsBefore;
+  const canJoinNow = live || now >= fiveMinsBefore.getTime();
   const isInstantExpired = event.type === 'instant' && event.expiresAt && new Date(event.expiresAt).getTime() < now;
 
   const handleStartSession = async (allowEarly = true) => {
@@ -411,12 +410,14 @@ export default function EventDetails() {
             )}
           </div>
 
-          <button
-            onClick={() => setPreviewImage(event.banner || null)}
-            className="absolute bottom-4 right-4 hidden items-center gap-1.5 rounded-full bg-white/15 px-3 py-1.5 text-[10px] font-semibold text-white backdrop-blur-md transition-colors hover:bg-white/25 sm:inline-flex"
-          >
-            <MapIcon size={12} /> View cover
-          </button>
+          {hasEventBanner(event) && (
+            <button
+              onClick={() => setPreviewImage(event.banner)}
+              className="absolute bottom-4 right-4 hidden items-center gap-1.5 rounded-full bg-white/15 px-3 py-1.5 text-[10px] font-semibold text-white backdrop-blur-md transition-colors hover:bg-white/25 sm:inline-flex"
+            >
+              <Maximize2 size={12} /> View cover
+            </button>
+          )}
 
           <div className="absolute inset-x-0 bottom-0 p-5 sm:p-8">
             <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-white/60">
@@ -839,7 +840,7 @@ export default function EventDetails() {
               className="relative flex h-full w-full max-w-7xl items-center justify-center px-4"
               onClick={e => e.stopPropagation()}
             >
-              <img src={previewImage} className="h-full w-full rounded-2xl object-contain shadow-2xl" alt="Event cover" referrerPolicy="no-referrer" />
+              <img src={previewImage ?? undefined} className="h-full w-full rounded-2xl object-contain shadow-2xl" alt="Event cover" referrerPolicy="no-referrer" />
               <button
                 onClick={() => setPreviewImage(null)}
                 aria-label="Close preview"

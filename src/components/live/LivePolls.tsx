@@ -10,6 +10,8 @@ interface LivePollsProps {
   eventId?: string;
   path?: string;
   isHost: boolean;
+  /** When true, the audience can watch results but not cast a new vote. */
+  locked?: boolean;
 }
 
 /** Votes live in `votes: { uid: optionIndex }`, so simultaneous votes never overwrite each other. */
@@ -19,7 +21,7 @@ function tally(poll: any) {
   return counts;
 }
 
-export default function LivePolls({ eventId, path, isHost }: LivePollsProps) {
+export default function LivePolls({ eventId, path, isHost, locked = false }: LivePollsProps) {
   const base = path ?? `eventSessions/${eventId}`;
   const [polls, setPolls] = useState<any[]>([]);
   const [creating, setCreating] = useState(false);
@@ -51,7 +53,7 @@ export default function LivePolls({ eventId, path, isHost }: LivePollsProps) {
   };
 
   const vote = async (poll: any, i: number) => {
-    if (!me) return;
+    if (!me || (locked && !isHost)) return;
     try {
       await updateDoc(doc(db, `${base}/polls`, poll.id), { [`votes.${me}`]: i });
       if (eventId && poll.votes?.[me] === undefined) gainXP(me, 'vote_poll', eventId).catch(() => undefined);
@@ -88,6 +90,11 @@ export default function LivePolls({ eventId, path, isHost }: LivePollsProps) {
       )}
 
       <div className="flex-1 overflow-y-auto p-3 space-y-3">
+        {locked && !isHost && (
+          <p className="flex items-center gap-2 rounded-xl bg-foreground/[0.04] px-3.5 py-2.5 text-[11px] text-muted-foreground">
+            <span className="h-1.5 w-1.5 rounded-full bg-warning" /> Voting is paused by the host.
+          </p>
+        )}
         {polls.map(poll => {
           const counts = tally(poll);
           const total = counts.reduce((a, b) => a + b, 0);
@@ -102,7 +109,7 @@ export default function LivePolls({ eventId, path, isHost }: LivePollsProps) {
                   const pct = total ? Math.round((counts[i] / total) * 100) : 0;
                   const chosen = myChoice === i;
                   return (
-                    <button key={i} onClick={() => vote(poll, i)} disabled={votedLegacy} className={`relative w-full h-10 rounded-xl overflow-hidden border text-left ${chosen ? 'border-primary' : 'border-foreground/15 hover:border-primary/50'}`}>
+                    <button key={i} onClick={() => vote(poll, i)} disabled={votedLegacy || (locked && !isHost)} className={`relative w-full h-10 rounded-xl overflow-hidden border text-left ${chosen ? 'border-primary' : 'border-foreground/15 hover:border-primary/50'} disabled:opacity-60`}>
                       <span className={`absolute inset-y-0 left-0 transition-all duration-500 ${chosen ? 'bg-primary/20' : 'bg-foreground/[0.06]'}`} style={{ width: voted ? `${pct}%` : 0 }} />
                       <span className="relative flex items-center justify-between px-3 text-sm">
                         <span className={`flex items-center gap-1.5 ${chosen ? 'text-primary font-medium' : ''}`}>{opt.text}{chosen && <Check size={13} />}</span>

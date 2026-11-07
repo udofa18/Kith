@@ -20,7 +20,7 @@ export default function PageHeader({ title, subtitle, fallback = '/feed', childr
   };
 
   return (
-    <header className="sticky top-0 z-30 flex min-h-[53px] items-center gap-2 border-b border-border bg-background/85 px-3 py-2 backdrop-blur-md">
+    <header className="sticky top-0 z-30 flex min-h-[53px] items-center gap-2 border-b border-border bg-background px-3 py-2">
       <Button
         variant="ghost"
         size="icon-sm"

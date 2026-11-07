@@ -116,11 +116,11 @@ export default function SocialFeed() {
   const showSidebars = !fullBleed && view !== 'notifications';
 
   return (
-    <div className={`w-full mx-auto text-black dark:text-white relative ${fullBleed ? 'max-w-full h-full overflow-hidden' : 'max-w-[1200px] px-4 pb-8'}`}>
+    <div className={`w-full mx-auto text-black dark:text-white relative ${fullBleed ? 'max-w-full h-full overflow-hidden' : 'max-w-[1200px] px-2 pb-8 sm:px-4'}`}>
       <div className={`flex flex-col lg:flex-row justify-center ${fullBleed ? 'h-full items-stretch overflow-hidden' : 'gap-4 items-start'}`}>
         {showSidebars && <SocialLeftSidebar />}
 
-        <main className={`w-full order-2 flex-1 ${fullBleed ? 'h-full overflow-hidden' : 'pt-4'} ${showSidebars ? 'max-w-[640px]' : 'max-w-full'}`}>
+        <main className={`w-full order-2 flex-1 ${fullBleed ? 'h-full overflow-hidden' : 'pt-2 sm:pt-4'} ${showSidebars ? 'max-w-[640px]' : 'max-w-full'}`}>
           {view === 'messages' ? (
             <div className="w-full h-full"><MessagesPage /></div>
           ) : view === 'notifications' ? (

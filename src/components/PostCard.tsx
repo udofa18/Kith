@@ -648,7 +648,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           className={`border-b border-black/10 dark:border-white/10 hover:bg-black/[0.02] dark:hover:bg-white/[0.02] transition-colors relative group
-            ${compact ? 'px-4 py-3' : 'px-5 py-4'} ${showComments ? 'z-20' : 'z-10'}
+            ${compact ? 'px-3 py-2.5 sm:px-4 sm:py-3' : 'px-3.5 py-3.5 sm:px-5 sm:py-4'} z-10
             ${isHighlighted ? 'bg-primary/5 border-l-2 border-l-primary' : ''}`}
         >
       {/* Image Modal - Rendered via Portal to escape stacking context */}
@@ -861,7 +861,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
               </div>
             </div>
           ) : (
-            <div className={`mt-1 ${compact ? 'text-sm' : 'text-[15px]'} leading-relaxed text-black/90 dark:text-white/90 whitespace-pre-wrap break-words`}>
+            <div className={`mt-1 ${compact ? 'text-sm' : 'text-[15px]'} leading-[1.5] text-black/90 dark:text-white/90 whitespace-pre-wrap break-words`}>
               {isDetailView ? (
                 renderContent(content)
               ) : (
@@ -1006,14 +1006,14 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
               ))}
             </div>
           )}
-          <div className="flex items-center justify-between max-w-md mt-2 -ml-2">
+          <div className="flex items-center justify-between max-w-md mt-1.5 -ml-1.5 sm:mt-2 sm:-ml-2">
             <button 
               onClick={handleLike}
               aria-label={liked ? 'Unlike' : 'Like'}
               aria-pressed={liked}
               className={`group/act flex items-center gap-1.5 text-[13px] tabular-nums transition-colors ${liked ? 'text-rose-500' : 'text-black/50 dark:text-white/50 hover:text-rose-500'}`}
             >
-              <span className="p-2 rounded-full group-hover/act:bg-rose-500/10 transition-colors"><Heart size={18} fill={liked ? 'currentColor' : 'none'} /></span>
+              <span className="p-1.5 sm:p-2 rounded-full group-hover/act:bg-rose-500/10 transition-colors"><Heart size={18} fill={liked ? 'currentColor' : 'none'} /></span>
               <span>{formatCount(livePost.likesCount || 0)}</span>
             </button>
             <button 
@@ -1022,7 +1022,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
               aria-expanded={showComments}
               className={`group/act flex items-center gap-1.5 text-[13px] tabular-nums transition-colors ${showComments ? 'text-primary' : 'text-black/50 dark:text-white/50 hover:text-primary'}`}
             >
-              <span className="p-2 rounded-full group-hover/act:bg-primary/10 transition-colors"><MessageSquare size={18} /></span>
+              <span className="p-1.5 sm:p-2 rounded-full group-hover/act:bg-primary/10 transition-colors"><MessageSquare size={18} /></span>
               <span>{formatCount(livePost.commentsCount || 0)}</span>
             </button>
             <div className="relative" ref={repostMenuRef}>
@@ -1031,7 +1031,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
                 aria-label="Repost"
                 className={`group/act flex items-center gap-1.5 text-[13px] tabular-nums transition-colors ${reposted ? 'text-emerald-500' : 'text-black/50 dark:text-white/50 hover:text-emerald-500'}`}
               >
-                <span className="p-2 rounded-full group-hover/act:bg-emerald-500/10 transition-colors"><Repeat size={18} className={reposting ? 'animate-spin' : ''} /></span>
+                <span className="p-1.5 sm:p-2 rounded-full group-hover/act:bg-emerald-500/10 transition-colors"><Repeat size={18} className={reposting ? 'animate-spin' : ''} /></span>
                 <span>{formatCount(repostsCount)}</span>
               </button>
               <AnimatePresence>
@@ -1065,14 +1065,14 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
               aria-pressed={bookmarked}
               className={`group/act flex items-center gap-1.5 text-[13px] tabular-nums transition-colors ${bookmarked ? 'text-primary' : 'text-black/50 dark:text-white/50 hover:text-primary'}`}
             >
-              <span className="p-2 rounded-full group-hover/act:bg-primary/10 transition-colors"><Bookmark size={18} fill={bookmarked ? 'currentColor' : 'none'} /></span>
+              <span className="p-1.5 sm:p-2 rounded-full group-hover/act:bg-primary/10 transition-colors"><Bookmark size={18} fill={bookmarked ? 'currentColor' : 'none'} /></span>
             </button>
-            <div className="hidden sm:flex items-center gap-1.5 text-[13px] tabular-nums text-black/50 dark:text-white/50" title="Views">
-              <span className="p-2"><Eye size={18} /></span>
+            <div className="flex items-center gap-1.5 text-[13px] tabular-nums text-black/50 dark:text-white/50" title="Views">
+              <span className="p-1.5 sm:p-2"><Eye size={18} /></span>
               <span>{formatCount(livePost.impressions || 0)}</span>
             </div>
             <button onClick={handleShare} aria-label="Share" className="group/act flex items-center gap-1.5 text-[13px] tabular-nums transition-colors text-black/50 dark:text-white/50 hover:text-primary">
-              <span className="p-2 rounded-full group-hover/act:bg-primary/10 transition-colors"><Share2 size={18} /></span>
+              <span className="p-1.5 sm:p-2 rounded-full group-hover/act:bg-primary/10 transition-colors"><Share2 size={18} /></span>
             </button>
             <button 
               onClick={() => {
@@ -1086,7 +1086,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
               title="Gift XP"
               className="group/act hidden sm:flex items-center gap-1.5 text-[13px] tabular-nums transition-colors text-black/50 dark:text-white/50 hover:text-amber-500"
             >
-              <span className="p-2 rounded-full group-hover/act:bg-amber-500/10 transition-colors"><Gift size={18} /></span>
+              <span className="p-1.5 sm:p-2 rounded-full group-hover/act:bg-amber-500/10 transition-colors"><Gift size={18} /></span>
             </button>
           </div>
         </div>
