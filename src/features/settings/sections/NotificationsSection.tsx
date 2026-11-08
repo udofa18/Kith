@@ -1,5 +1,6 @@
-import { BellRing, ShieldCheck } from 'lucide-react';
+import { BellRing, ShieldCheck, Volume2 } from 'lucide-react';
 import { Select } from '../../../components/ui/Input';
+import { playNotificationSound } from '../../../lib/sounds';
 import {
   SettingRow,
   SettingsSection,
@@ -167,11 +168,20 @@ export default function NotificationsSection({ settings, update }: SectionProps)
       <SettingsSection title="Presentation" description="How notifications feel when they arrive.">
         <Subheading>Sound and grouping</Subheading>
         <SettingRow title="Notification sound" description="A soft chime for messages, mentions and live invites.">
-          <Switch
-            checked={notifications.sound}
-            onChange={(value) => setNotifications({ sound: value })}
-            label="Notification sound"
-          />
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => playNotificationSound(true)}
+              className="inline-flex items-center gap-1.5 rounded-full border border-border px-3 py-1.5 text-[11px] font-semibold text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <Volume2 size={13} /> Preview
+            </button>
+            <Switch
+              checked={notifications.sound}
+              onChange={(value) => setNotifications({ sound: value })}
+              label="Notification sound"
+            />
+          </div>
         </SettingRow>
         <SettingRow
           title="Smart bundling"

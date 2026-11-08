@@ -9,6 +9,7 @@ import {
   where,
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
+import { isDirectMessageType } from '../lib/notificationTaxonomy';
 
 /**
  * Live counters and circles shown in both the desktop sidebar and mobile nav.
@@ -59,15 +60,17 @@ export function useKithNavData(user: any) {
     const unsubscribeNotifs = onSnapshot(
       qNotifs,
       (notifSnap) => {
-        setUnreadNotifications(notifSnap.size);
-
+        // DMs have their own badge; the bell only counts everything else.
+        let bellCount = 0;
         const unreads: Record<string, number> = {};
         notifSnap.docs.forEach((d) => {
           const data = d.data();
+          if (!isDirectMessageType(data.type)) bellCount += 1;
           if (data.type === 'message' && data.relatedId) {
             unreads[data.relatedId] = (unreads[data.relatedId] || 0) + 1;
           }
         });
+        setUnreadNotifications(bellCount);
         setCommunityUnreads(unreads);
       },
       (error) => {

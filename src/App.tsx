@@ -11,6 +11,7 @@ import PersistentVoiceOverlay from './components/PersistentVoiceOverlay';
 import CallInterface from './components/call/CallInterface';
 import { LiveKitRoom } from '@livekit/components-react';
 import { unlockAudio } from './lib/sounds';
+import { applyNotificationPreferences, clearNotificationPreferences } from './lib/notificationPreferences';
 import { prefetchFeedExperienceData } from './lib/queryClient';
 import { applyAppearance, normalizeSettings } from './features/settings/preferences';
 
@@ -255,8 +256,10 @@ export default function App() {
           }
           // Merge auth user with firestore data for universal XP
           setUser(userData ? { ...user, ...userData } : user);
-          
-          applyAppearance(normalizeSettings(userData).appearance);
+
+          const settings = normalizeSettings(userData);
+          applyAppearance(settings.appearance);
+          applyNotificationPreferences(settings.notifications);
           
           setLoading(false);
         }, (error) => {
@@ -266,6 +269,7 @@ export default function App() {
       } else {
         reminderService.stop();
         if (unsubscribeSnapshot) unsubscribeSnapshot();
+        clearNotificationPreferences();
         setUser(null);
         setOnboardingRequired(false);
         

@@ -1,5 +1,6 @@
 import { db } from '../firebase';
 import { collection, addDoc, doc, getDoc, serverTimestamp } from 'firebase/firestore';
+import { appCategoryForType, settingsCategoryForType } from './notificationTaxonomy';
 
 export type NotificationType = 
   | 'like' | 'comment' | 'mention' | 'message' | 'message_request' | 'xp_gift' | 'challenge' | 'channel_mention' 
@@ -39,43 +40,27 @@ export async function createNotification({
 }: CreateNotificationParams) {
   if (!recipientId) return;
 
-  // Auto-determine category if not provided
-  let finalCategory: NotificationCategory = category || 'system';
-  if (!category) {
-    if (['like', 'comment', 'mention', 'repost', 'quote', 'new_post'].includes(type)) finalCategory = 'social';
-    else if (['message', 'message_request', 'channel_mention', 'challenge'].includes(type)) finalCategory = 'community';
-    else if (['purchase'].includes(type)) finalCategory = 'marketplace';
-    else if (['payout', 'xp_gift', 'wallet'].includes(type)) finalCategory = 'earnings';
-    else if (['event_invite', 'event_reminder'].includes(type)) finalCategory = 'events';
-  }
+  // Never notify someone about their own action. This also stops accidental
+  // self-targeted XP, like and follow events from inflating the bell.
+  if (senderId && senderId === recipientId) return;
+
+  const finalCategory: NotificationCategory = category || appCategoryForType(type);
+  const settingsCategory = settingsCategoryForType(type);
 
   // Respect the recipient's notification matrix before writing anything. This is
   // best-effort in the client; the rules remain the security boundary.
+  // System notices are account-critical and always land in-app.
   try {
-    const settingsCategory =
-      type === 'message' || type === 'message_request'
-        ? 'messages'
-        : type === 'challenge'
-          ? 'challenges'
-          : type === 'xp_gift'
-            ? 'rewards'
-            : type === 'channel_mention'
-              ? 'communities'
-              : ['event_invite', 'event_reminder'].includes(type)
-                ? 'events'
-                : ['purchase', 'payout', 'wallet'].includes(type)
-                  ? 'marketplace'
-                  : ['like', 'comment', 'mention', 'repost', 'quote', 'new_post'].includes(type)
-                    ? 'social'
-                    : 'platform';
-    const recipient = await getDoc(doc(db, 'users', recipientId)).catch(() => null);
-    const matrix = recipient?.data()?.settings?.notifications?.matrix;
-    if (matrix?.[settingsCategory]?.inApp === false) return;
+    if (type !== 'system') {
+      const recipient = await getDoc(doc(db, 'users', recipientId)).catch(() => null);
+      const matrix = recipient?.data()?.settings?.notifications?.matrix;
+      if (matrix?.[settingsCategory]?.inApp === false) return;
+    }
   } catch {
     /* never block the action that produced the notification */
   }
 
-    try {
+  try {
     await addDoc(collection(db, 'notifications'), {
       recipientId,
       senderId: senderId || 'system',

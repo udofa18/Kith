@@ -9,6 +9,7 @@ import {
   deleteDoc,
   writeBatch,
   getDoc,
+  limit,
   Unsubscribe,
 } from 'firebase/firestore';
 import { db } from '../../firebase';
@@ -17,6 +18,9 @@ import { dualWrite, dualRead } from './utils';
 import { supabaseNotificationToApp, firestoreNotificationToRow } from '../../lib/db-mappers';
 import { shouldReadCollectionFromSupabase } from '../../lib/database-config';
 import type { RealtimeChannel } from '@supabase/supabase-js';
+
+/** The centre and the badge only need the recent page; older rows load on demand. */
+const NOTIFICATIONS_PAGE_SIZE = 100;
 
 export interface NotificationRecord {
   id: string;
@@ -44,7 +48,8 @@ export class NotificationsRepository {
         const q = query(
           collection(db, 'notifications'),
           where('recipientId', '==', userId),
-          orderBy('createdAt', 'desc')
+          orderBy('createdAt', 'desc'),
+          limit(NOTIFICATIONS_PAGE_SIZE)
         );
         const snap = await getDocs(q);
         return snap.docs.map((d) => ({ id: d.id, ...d.data() } as NotificationRecord));
@@ -54,7 +59,8 @@ export class NotificationsRepository {
           .from('notifications')
           .select('*')
           .eq('recipient_id', userId)
-          .order('created_at', { ascending: false });
+          .order('created_at', { ascending: false })
+          .limit(NOTIFICATIONS_PAGE_SIZE);
         if (error) throw error;
         return (data || []).map((row) => supabaseNotificationToApp(row as Record<string, unknown>) as NotificationRecord);
       },
@@ -76,7 +82,8 @@ export class NotificationsRepository {
     const q = query(
       collection(db, 'notifications'),
       where('recipientId', '==', userId),
-      orderBy('createdAt', 'desc')
+      orderBy('createdAt', 'desc'),
+      limit(NOTIFICATIONS_PAGE_SIZE)
     );
 
     const unsubscribe: Unsubscribe = onSnapshot(
@@ -160,6 +167,45 @@ export class NotificationsRepository {
         if (error) throw error;
       },
       'markAllNotificationsRead'
+    );
+  }
+
+  /**
+   * Opening a conversation clears the matching message notifications, so the
+   * bell does not keep pointing at a DM that has already been read.
+   */
+  async markConversationRead(userId: string, conversationId: string): Promise<void> {
+    await dualWrite(
+      async () => {
+        const { getDocs } = await import('firebase/firestore');
+        const snap = await getDocs(
+          query(
+            collection(db, 'notifications'),
+            where('recipientId', '==', userId),
+            where('relatedId', '==', conversationId),
+            where('read', '==', false)
+          )
+        );
+        const messageDocs = snap.docs.filter((d) =>
+          ['message', 'message_request'].includes(String(d.data().type))
+        );
+        if (messageDocs.length === 0) return;
+
+        const batch = writeBatch(db);
+        messageDocs.forEach((d) => batch.update(d.ref, { read: true }));
+        await batch.commit();
+      },
+      async () => {
+        const { error } = await getSupabase()
+          .from('notifications')
+          .update({ read: true })
+          .eq('recipient_id', userId)
+          .eq('related_id', conversationId)
+          .eq('read', false)
+          .in('type', ['message', 'message_request']);
+        if (error) throw error;
+      },
+      'markConversationNotificationsRead'
     );
   }
 

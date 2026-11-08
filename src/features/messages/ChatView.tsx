@@ -8,6 +8,7 @@ import { db } from '../../firebase';
 import { useCall } from '../../contexts/CallContext';
 import { useCurrentUser } from '../../contexts/CurrentUserContext';
 import { playNotificationSound } from '../../lib/sounds';
+import { notificationsRepository } from '../../services/db/notificationsRepository';
 import {
   getConversationStatus, isConversationAccepted, isFavourited, isIncomingRequest, isOutgoingRequest, unreadFor,
   type ConversationData,
@@ -105,14 +106,22 @@ export default function ChatView({ me, conv, exists, onBack, onClosed, showDetai
     if (!exists || incoming || !loaded) return;
     const lastFromOther = [...messages].reverse().find(m => m.senderId !== me.uid);
     if (!lastFromOther && !unreadFor(conv, me.uid)) return;
-    if (document.visibilityState === 'visible') markRead(conv.id, me.uid, readReceipts);
-  }, [messages.length, exists, incoming, loaded, conv.id, readReceipts]);
+    if (document.visibilityState === 'visible') {
+      markRead(conv.id, me.uid, readReceipts);
+      notificationsRepository.markConversationRead(me.uid, conv.id).catch(() => undefined);
+    }
+  }, [messages.length, exists, incoming, loaded, conv.id, me.uid, readReceipts]);
 
   useEffect(() => {
-    const onVisible = () => { if (document.visibilityState === 'visible' && exists && !incoming) markRead(conv.id, me.uid, readReceipts); };
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && exists && !incoming) {
+        markRead(conv.id, me.uid, readReceipts);
+        notificationsRepository.markConversationRead(me.uid, conv.id).catch(() => undefined);
+      }
+    };
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
-  }, [conv.id, exists, incoming, readReceipts]);
+  }, [conv.id, exists, incoming, me.uid, readReceipts]);
 
   // Stop the typing signal when leaving the chat.
   useEffect(() => () => stopTyping(conv.id, me.uid), [conv.id]);

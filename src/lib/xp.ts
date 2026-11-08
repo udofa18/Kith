@@ -1,4 +1,4 @@
-import { doc, updateDoc, increment, addDoc, collection, serverTimestamp } from 'firebase/firestore';
+import { doc, updateDoc, increment } from 'firebase/firestore';
 import { db } from '../firebase';
 
 export type XPGainType = 'session_attendance' | 'ask_question' | 'vote_poll' | 'post_create' | 'challenge_complete';
@@ -15,21 +15,10 @@ export const gainXP = async (userId: string, type: XPGainType, relatedId?: strin
   const amount = XP_VALUES[type];
   
   try {
-    // Update user XP
+    // Update user XP. Routine XP gains are deliberately silent: the bell is for
+    // activity from other people, not a log of your own actions.
     await updateDoc(doc(db, 'users', userId), {
       xp: increment(amount)
-    });
-
-    // Create notification
-    await addDoc(collection(db, 'notifications'), {
-      recipientId: userId,
-      type: 'xp_gift',
-      category: 'earnings',
-      priority: 'normal',
-      content: `You gained ${amount} XP for ${type.replace('_', ' ')}!`,
-      relatedId: relatedId || '',
-      read: false,
-      createdAt: serverTimestamp()
     });
 
     return amount;

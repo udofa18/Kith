@@ -97,7 +97,7 @@ export const DEFAULT_SETTINGS: Settings = {
       marketplace: channels(true, true, true),
       challenges: channels(true, false, false),
       rewards: channels(true, false, false),
-      platform: channels(false, false, true),
+      platform: channels(true, false, true),
     },
     quietHours: {
       enabled: false,
