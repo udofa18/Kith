@@ -44,8 +44,13 @@ function isWithinQuietHours(settings: NotificationSettings, now: Date): boolean 
 }
 
 function isPaused(settings: NotificationSettings, now: Date): boolean {
-  if (!settings.pauseUntil) return false;
-  const until = Date.parse(settings.pauseUntil);
+  return isPauseActive(settings.pauseUntil, now);
+}
+
+/** Pause windows are stored as an absolute ISO timestamp. */
+export function isPauseActive(pauseUntil?: string | null, now = new Date()): boolean {
+  if (!pauseUntil) return false;
+  const until = Date.parse(pauseUntil);
   return Number.isFinite(until) && until > now.getTime();
 }
 

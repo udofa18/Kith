@@ -1,6 +1,7 @@
 import { db } from '../firebase';
 import { collection, addDoc, doc, getDoc, serverTimestamp } from 'firebase/firestore';
 import { appCategoryForType, settingsCategoryForType } from './notificationTaxonomy';
+import { isPauseActive } from './notificationPreferences';
 
 export type NotificationType = 
   | 'like' | 'comment' | 'mention' | 'message' | 'message_request' | 'xp_gift' | 'challenge' | 'channel_mention' 
@@ -53,8 +54,10 @@ export async function createNotification({
   try {
     if (type !== 'system') {
       const recipient = await getDoc(doc(db, 'users', recipientId)).catch(() => null);
-      const matrix = recipient?.data()?.settings?.notifications?.matrix;
-      if (matrix?.[settingsCategory]?.inApp === false) return;
+      const preferences = recipient?.data()?.settings?.notifications;
+      if (preferences?.matrix?.[settingsCategory]?.inApp === false) return;
+      // "Pause everything" is a temporary break from non-security activity.
+      if (isPauseActive(preferences?.pauseUntil)) return;
     }
   } catch {
     /* never block the action that produced the notification */

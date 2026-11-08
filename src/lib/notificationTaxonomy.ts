@@ -147,12 +147,18 @@ export function isSettingsNotificationCategory(value: unknown): value is Setting
 }
 
 /** DMs are surfaced by the Messages badge, not the bell. */
-export function isDirectMessageType(type?: string | null): boolean {
-  return type === 'message' || type === 'message_request';
+export function isDirectMessageType(type?: string | null, content?: string | null): boolean {
+  if (type !== 'message' && type !== 'message_request') return false;
+  // Live-session invites are stored as message-type notifications but route to
+  // the event room, so they belong in the bell like any other invite.
+  if (type === 'message' && /live session|instant session/i.test(content || '')) return false;
+  return true;
 }
 
 export function unreadBellCount(
-  notifications: Array<{ type?: string; read?: boolean }>,
+  notifications: Array<{ type?: string; read?: boolean; content?: string }>,
 ): number {
-  return notifications.filter((notification) => !notification.read && !isDirectMessageType(notification.type)).length;
+  return notifications.filter((notification) =>
+    !notification.read && !isDirectMessageType(notification.type, notification.content)
+  ).length;
 }

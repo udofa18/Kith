@@ -18,6 +18,7 @@ import {
   unreadBellCount,
   type AppNotificationCategory,
 } from '../lib/notificationTaxonomy';
+import { notificationTarget } from '../lib/notificationRouting';
 
 interface Actor {
   id: string;
@@ -309,55 +310,10 @@ export default function NotificationsView() {
   const handleNotificationClick = (notification: Notification) => {
     markAsRead(notification.id);
 
-    const isCommunity = isCommunityNotif(notification);
-
-    switch (notification.type) {
-      case 'like':
-      case 'comment':
-      case 'mention':
-      case 'repost':
-      case 'quote':
-      case 'new_post':
-        if (notification.relatedId) navigate(`/post/${notification.relatedId}`);
-        break;
-      case 'channel_mention':
-      case 'message':
-      case 'message_request':
-        // Live-session invites were written as messages; route them to the room.
-        if (notification.relatedId && /live session|instant session/i.test(notification.content)) {
-          navigate(`/events/${notification.relatedId}`);
-        } else if (isCommunity) {
-          if (notification.channelId && notification.relatedId) {
-            navigate(`/feed?view=community&id=${notification.relatedId}&channelId=${notification.channelId}`);
-          } else if (notification.relatedId) {
-            navigate(`/feed?view=community&id=${notification.relatedId}`);
-          }
-        } else if (notification.senderId) {
-          navigate(`/feed?view=messages&userId=${notification.senderId}`);
-        }
-        break;
-      case 'community':
-        if (notification.relatedId) {
-          navigate(`/feed?view=community&id=${notification.relatedId}&settings=members`);
-        }
-        break;
-      case 'challenge':
-        navigate(notification.relatedId ? `/challenges/${notification.relatedId}` : '/challenges');
-        break;
-      case 'xp_gift':
-        navigate('/dashboard');
-        break;
-      case 'purchase':
-      case 'payout':
-        navigate('/marketplace');
-        break;
-      case 'event_invite':
-      case 'event_reminder':
-        navigate(notification.relatedId ? `/events/${notification.relatedId}` : '/events');
-        break;
-      default:
-        break;
-    }
+    const target = notificationTarget(notification, {
+      isCommunity: isCommunityNotif(notification),
+    });
+    if (target) navigate(target);
   };
 
   if (loading) {

@@ -1,6 +1,7 @@
 import { BellRing, ShieldCheck, Volume2 } from 'lucide-react';
 import { Select } from '../../../components/ui/Input';
 import { playNotificationSound } from '../../../lib/sounds';
+import { isPauseActive } from '../../../lib/notificationPreferences';
 import {
   SettingRow,
   SettingsSection,
@@ -35,6 +36,33 @@ export default function NotificationsSection({ settings, update }: SectionProps)
 
   const setNotifications = (patch: Partial<typeof notifications>) =>
     update((current) => ({ ...current, notifications: { ...current.notifications, ...patch } }));
+
+  const pauseActive = isPauseActive(notifications.pauseUntil);
+  const pauseLabel = pauseActive
+    ? new Date(notifications.pauseUntil).toLocaleString(undefined, {
+        weekday: 'short',
+        hour: 'numeric',
+        minute: '2-digit',
+      })
+    : '';
+
+  const handlePause = (value: string) => {
+    if (!value) {
+      setNotifications({ pauseUntil: '' });
+      return;
+    }
+
+    const end = new Date();
+    if (value === 'monday') {
+      // "Until Monday" means the next Monday morning, even if today is Monday.
+      const daysUntilMonday = (8 - end.getDay()) % 7 || 7;
+      end.setDate(end.getDate() + daysUntilMonday);
+      end.setHours(9, 0, 0, 0);
+    } else {
+      end.setHours(end.getHours() + Number.parseInt(value, 10));
+    }
+    setNotifications({ pauseUntil: end.toISOString() });
+  };
 
   return (
     <div className="space-y-5">
@@ -151,17 +179,33 @@ export default function NotificationsSection({ settings, update }: SectionProps)
           description="A temporary break from all non-security notifications."
           stacked
         >
-          <Select
-            aria-label="Pause notifications"
-            value={notifications.pauseUntil}
-            onChange={(event) => setNotifications({ pauseUntil: event.target.value })}
-          >
-            <option value="">Not paused</option>
-            <option value="1h">For 1 hour</option>
-            <option value="8h">For 8 hours</option>
-            <option value="24h">For 24 hours</option>
-            <option value="monday">Until Monday</option>
-          </Select>
+          <div className="w-full space-y-2">
+            <Select
+              aria-label="Pause notifications"
+              value=""
+              onChange={(event) => handlePause(event.target.value)}
+            >
+              <option value="">Not paused</option>
+              <option value="1">For 1 hour</option>
+              <option value="8">For 8 hours</option>
+              <option value="24">For 24 hours</option>
+              <option value="monday">Until Monday</option>
+            </Select>
+            {pauseActive && (
+              <div className="flex items-center justify-between gap-3 rounded-control border border-primary/20 bg-primary/5 px-3 py-2 text-xs">
+                <span className="text-muted-foreground">
+                  Paused until <span className="font-semibold text-foreground">{pauseLabel}</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setNotifications({ pauseUntil: '' })}
+                  className="font-bold text-primary hover:underline"
+                >
+                  Resume
+                </button>
+              </div>
+            )}
+          </div>
         </SettingRow>
       </SettingsSection>
 

@@ -54,6 +54,7 @@ import FloatingLiveSession from './components/live/FloatingLiveSession';
 
 import LiveSessionWrapper from './LiveSessionWrapper';
 import { usePresence } from './features/messages/usePresence';
+import { useNotificationStream } from './hooks/useNotificationStream';
 
 function CommunityRedirect() {
   const { communityId } = useParams();
@@ -163,6 +164,7 @@ function AppContent({ user, onboardingRequired }: { user: any, onboardingRequire
   const navigate = useNavigate();
   const { activeSession, leaveVoice } = useVoice();
   const isDesktop = useMediaQuery('(min-width: 768px)');
+  useNotificationStream(user);
   
   const isLandingPage = location.pathname === '/';
   const isLoginPage = location.pathname === '/login';
