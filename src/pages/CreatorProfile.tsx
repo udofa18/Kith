@@ -101,7 +101,7 @@ export default function CreatorProfile() {
 
   if (!profile || !id) {
     return (
-      <div className="max-w-[640px] mx-auto min-h-screen text-black dark:text-white border-x border-black/10 dark:border-white/10">
+      <div className="max-w-[640px] mx-auto min-h-screen text-black dark:text-white lg:border-x border-black/10 dark:border-white/10">
         <PageHeader title="Profile" />
         <FeedEmpty icon={UserX} title="This account doesn't exist" body="The link may be broken, or the account may have been removed." action={
           <Link to="/feed" className="px-4 py-2 rounded-full bg-primary text-white text-sm font-semibold hover:bg-primary/90">Back to feed</Link>
@@ -123,7 +123,7 @@ export default function CreatorProfile() {
     if (relationshipLoading && visibility !== 'hidden') return <ProfileSkeleton />;
 
     return (
-      <div className="max-w-[640px] mx-auto min-h-screen text-black dark:text-white border-x border-black/10 dark:border-white/10">
+      <div className="max-w-[640px] mx-auto min-h-screen text-black dark:text-white lg:border-x border-black/10 dark:border-white/10">
         <PageHeader title={name} />
         <div className="flex flex-col items-center px-6 py-16 text-center">
           <div className="h-20 w-20 overflow-hidden rounded-full border border-black/10 bg-black/5 dark:border-white/10 dark:bg-white/5">
@@ -150,11 +150,11 @@ export default function CreatorProfile() {
   }
 
   return (
-    <div className="max-w-[640px] mx-auto min-h-screen text-black dark:text-white pb-24 border-x border-black/10 dark:border-white/10">
+    <div className="max-w-[640px] mx-auto min-h-screen text-black dark:text-white pb-24 lg:border-x border-black/10 dark:border-white/10">
       <PageHeader title={name} subtitle={postCount === undefined ? undefined : `${postCount} ${postCount === 1 ? 'post' : 'posts'}`} />
       <ProfileHeader profile={profile} relationship={relationship} me={me} myFollowing={myFollowing} />
 
-      <nav aria-label="Profile sections" className="sticky top-[53px] z-20 mt-4 bg-background/85 backdrop-blur-md border-b border-black/10 dark:border-white/10">
+      <nav aria-label="Profile sections" className="sticky top-[53px] z-30 mt-4 bg-background border-b border-black/10 dark:border-white/10">
         <div className="flex overflow-x-auto no-scrollbar">
           {tabs.map(t => (
             <button
@@ -365,7 +365,7 @@ function ListSkeleton({ rows = 3 }: { rows?: number }) {
 
 function ProfileSkeleton() {
   return (
-    <div className="max-w-[640px] mx-auto min-h-screen text-black dark:text-white border-x border-black/10 dark:border-white/10">
+    <div className="max-w-[640px] mx-auto min-h-screen text-black dark:text-white lg:border-x border-black/10 dark:border-white/10">
       <PageHeader title="Profile" />
       <div className="animate-pulse">
         <div className="aspect-[3/1] max-h-[240px] bg-black/5 dark:bg-white/5" />

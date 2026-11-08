@@ -39,6 +39,7 @@ import { auth, db } from '../firebase';
 import { ARTICLE_CATEGORIES, type ArticleDifficulty } from '../types/articles';
 import { cn } from '../lib/cn';
 import { Badge } from '../components/ui/Badge';
+import PageHero from '../components/ui/PageHero';
 import { Button } from '../components/ui/Button';
 import { EmptyState } from '../components/ui/EmptyState';
 import { Input } from '../components/ui/Input';
@@ -379,110 +380,98 @@ export default function ArticlesPage() {
         <script type="application/ld+json">{JSON.stringify(listSchema)}</script>
       </Helmet>
 
-      <div className="mx-auto max-w-[1200px] px-4 pb-16 pt-5 sm:px-6 sm:pt-8">
-        {/* Hero ------------------------------------------------------------- */}
-        <section className="relative overflow-hidden rounded-panel border border-border bg-surface shadow-soft">
-          <div
-            className="pointer-events-none absolute inset-0 opacity-70"
-            style={{
-              backgroundImage:
-                'radial-gradient(circle at 8% 0%, color-mix(in oklab, var(--ds-brand-coral) 20%, transparent), transparent 42%), radial-gradient(circle at 92% 18%, color-mix(in oklab, var(--ds-brand-lilac) 18%, transparent), transparent 40%)',
-            }}
-            aria-hidden
-          />
-          <div className="pointer-events-none absolute inset-0 [background-image:linear-gradient(to_right,var(--ds-border)_1px,transparent_1px),linear-gradient(to_bottom,var(--ds-border)_1px,transparent_1px)] [background-size:64px_64px] opacity-40 [mask-image:radial-gradient(ellipse_at_50%_20%,#000,transparent_72%)]" aria-hidden />
-
-          <div className="relative grid items-center gap-10 px-5 py-9 sm:px-8 sm:py-11 lg:grid-cols-[1.12fr_0.88fr] lg:px-10 lg:py-14">
-            <div>
-              <Badge variant="primary" dot className="whitespace-nowrap">
-                The Kith Journal
-              </Badge>
-
-              <h1 className="mt-4 max-w-[15ch] font-display text-[clamp(2.35rem,5.4vw,4.15rem)] font-semibold leading-[0.94] tracking-[-0.065em] text-foreground">
-                Stories for people who{' '}
-                <span className="font-serif font-normal italic tracking-[-0.03em] text-primary">make things</span>.
-              </h1>
-
-              <p className="mt-4 max-w-[52ch] text-sm leading-relaxed text-muted-foreground sm:text-base">
-                Field notes, deep-dives and honest lessons from the people building in public. Read
-                one with coffee, or write the one only you can tell.
-              </p>
-
-              <div className="mt-6 flex flex-wrap items-center gap-2.5">
-                <Button size="lg" leftIcon={<PenTool size={17} />} onClick={startWriting}>
-                  Start writing
-                </Button>
-                <Button
-                  size="lg"
-                  variant="outline"
-                  rightIcon={<ArrowRight size={16} />}
-                  onClick={scrollToFeed}
-                >
-                  Explore stories
-                </Button>
+      <PageHero
+        containerClassName="max-w-[1200px]"
+        eyebrow={
+          <Badge variant="primary" dot className="whitespace-nowrap">
+            The Kith Journal
+          </Badge>
+        }
+        title={
+          <>
+            Stories for people who{' '}
+            <span className="font-serif font-normal italic tracking-[-0.03em] text-primary">make things</span>.
+          </>
+        }
+        titleClassName="max-w-[15ch] text-[clamp(2.35rem,5.4vw,4.15rem)] font-semibold leading-[0.94] tracking-[-0.065em] md:text-[clamp(2.35rem,5.4vw,4.15rem)]"
+        description="Field notes, deep-dives and honest lessons from the people building in public. Read one with coffee, or write the one only you can tell."
+        actions={
+          <>
+            <Button size="lg" leftIcon={<PenTool size={17} />} onClick={startWriting}>
+              Start writing
+            </Button>
+            <Button
+              size="lg"
+              variant="outline"
+              rightIcon={<ArrowRight size={16} />}
+              onClick={scrollToFeed}
+              className="border-[var(--ds-brand-cream)]/25 text-[var(--ds-brand-cream)] hover:border-[var(--ds-brand-cream)]/40 hover:bg-[var(--ds-brand-cream)]/10 hover:text-[var(--ds-brand-cream)]"
+            >
+              Explore stories
+            </Button>
+          </>
+        }
+        visual={
+          <div className="relative hidden h-[330px] w-full max-w-[460px] lg:block">
+            <div className="landing-float absolute left-0 top-12 w-[230px] -rotate-6 overflow-hidden rounded-2xl border border-border bg-surface-raised shadow-float">
+              <ArticleCover categoryId="tech" hideWordmark className="aspect-[16/11]" />
+              <div className="p-3">
+                <p className="text-[9px] font-bold uppercase tracking-[0.16em] text-info">Technology</p>
+                <p className="mt-1 font-display text-sm font-semibold leading-snug tracking-[-0.03em]">
+                  The quiet craft of shipping small
+                </p>
               </div>
-
-              <dl className="mt-8 flex flex-wrap items-center gap-x-6 gap-y-3">
-                {[
-                  { label: 'stories', value: `${stats.stories}${hasMore ? '+' : ''}` },
-                  { label: 'voices', value: stats.voices || '—' },
-                  { label: 'topics', value: stats.topics || '—' },
-                ].map((stat) => (
-                  <div key={stat.label} className="flex items-baseline gap-2">
-                    <dt className="sr-only">{stat.label}</dt>
-                    <dd className="font-display text-xl font-semibold tracking-[-0.04em] text-foreground">
-                      {stat.value}
-                    </dd>
-                    <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-faint">
-                      {stat.label}
-                    </span>
-                  </div>
-                ))}
-              </dl>
             </div>
 
-            {/* Editorial illustration: a small stack of stories. */}
-            <div className="relative hidden h-[330px] w-full justify-self-end lg:block" aria-hidden>
-              <div className="landing-float absolute left-0 top-12 w-[230px] -rotate-6 overflow-hidden rounded-2xl border border-border bg-surface-raised shadow-float">
-                <ArticleCover categoryId="tech" hideWordmark className="aspect-[16/11]" />
-                <div className="p-3">
-                  <p className="text-[9px] font-bold uppercase tracking-[0.16em] text-info">Technology</p>
-                  <p className="mt-1 font-display text-sm font-semibold leading-snug tracking-[-0.03em]">
-                    The quiet craft of shipping small
-                  </p>
-                </div>
+            <div className="landing-float-slow absolute right-0 top-0 z-20 w-[250px] rotate-3 overflow-hidden rounded-2xl border border-border bg-surface-raised shadow-float">
+              <ArticleCover categoryId="design" hideWordmark className="aspect-[16/11]" showStamp />
+              <div className="p-3">
+                <p className="text-[9px] font-bold uppercase tracking-[0.16em] text-primary">Design</p>
+                <p className="mt-1 font-display text-sm font-semibold leading-snug tracking-[-0.03em]">
+                  Designing for trust, not for applause
+                </p>
               </div>
-
-              <div className="landing-float-slow absolute right-0 top-0 z-20 w-[250px] rotate-3 overflow-hidden rounded-2xl border border-border bg-surface-raised shadow-float">
-                <ArticleCover categoryId="design" hideWordmark className="aspect-[16/11]" showStamp />
-                <div className="p-3">
-                  <p className="text-[9px] font-bold uppercase tracking-[0.16em] text-primary">Design</p>
-                  <p className="mt-1 font-display text-sm font-semibold leading-snug tracking-[-0.03em]">
-                    Designing for trust, not for applause
-                  </p>
-                </div>
-              </div>
-
-              <div className="landing-float absolute bottom-2 right-8 z-10 w-[205px] rotate-[-3deg] overflow-hidden rounded-2xl border border-border bg-surface-raised shadow-lift [animation-delay:-2.6s]">
-                <ArticleCover categoryId="business" hideWordmark className="aspect-[16/11]" />
-                <div className="p-3">
-                  <p className="text-[9px] font-bold uppercase tracking-[0.16em] text-warning">Business</p>
-                  <p className="mt-1 font-display text-sm font-semibold leading-snug tracking-[-0.03em]">
-                    A calmer way to grow a team
-                  </p>
-                </div>
-              </div>
-
-              <span className="absolute bottom-16 left-6 z-30 inline-flex items-center gap-1.5 rounded-full border border-border bg-background/85 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.16em] shadow-soft backdrop-blur-md">
-                <Sparkles size={12} className="text-primary" />
-                Fresh this week
-              </span>
-
-              <KithStamp color="currentColor" className="absolute -right-2 bottom-0 h-16 w-16 opacity-80" />
             </div>
+
+            <div className="landing-float absolute bottom-2 right-8 z-10 w-[205px] rotate-[-3deg] overflow-hidden rounded-2xl border border-border bg-surface-raised shadow-lift [animation-delay:-2.6s]">
+              <ArticleCover categoryId="business" hideWordmark className="aspect-[16/11]" />
+              <div className="p-3">
+                <p className="text-[9px] font-bold uppercase tracking-[0.16em] text-warning">Business</p>
+                <p className="mt-1 font-display text-sm font-semibold leading-snug tracking-[-0.03em]">
+                  A calmer way to grow a team
+                </p>
+              </div>
+            </div>
+
+            <span className="absolute bottom-16 left-6 z-30 inline-flex items-center gap-1.5 rounded-full border border-[var(--ds-brand-cream)]/15 bg-[var(--ds-brand-ink)]/80 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.16em] text-[var(--ds-brand-cream)]/80 shadow-soft backdrop-blur-md">
+              <Sparkles size={12} className="text-primary" />
+              Fresh this week
+            </span>
+
+            <KithStamp color="currentColor" className="absolute -right-2 bottom-0 h-16 w-16 text-[var(--ds-brand-cream)] opacity-70" />
           </div>
-        </section>
+        }
+      >
+        <dl className="flex flex-wrap items-center gap-x-6 gap-y-3">
+          {[
+            { label: 'stories', value: `${stats.stories}${hasMore ? '+' : ''}` },
+            { label: 'voices', value: stats.voices || '—' },
+            { label: 'topics', value: stats.topics || '—' },
+          ].map((stat) => (
+            <div key={stat.label} className="flex items-baseline gap-2">
+              <dt className="sr-only">{stat.label}</dt>
+              <dd className="font-display text-xl font-semibold tracking-[-0.04em] text-[var(--ds-brand-cream)]">
+                {stat.value}
+              </dd>
+              <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--ds-brand-cream)]/50">
+                {stat.label}
+              </span>
+            </div>
+          ))}
+        </dl>
+      </PageHero>
 
+      <div className="mx-auto max-w-[1200px] px-4 pb-16 sm:px-6">
         {/* Category rail --------------------------------------------------- */}
         <section className="mt-8" aria-labelledby="browse-heading">
           <div className="mb-3 flex items-end justify-between gap-4">

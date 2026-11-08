@@ -24,6 +24,7 @@ import CityPicker, { type CityValue } from '../components/events/CityPicker';
 import DateStrip, { dayKey } from '../components/events/DateStrip';
 import CreateEventModal from '../components/CreateEventModal';
 import CreateInstantSessionModal from '../components/CreateInstantSessionModal';
+import PageHero from '../components/ui/PageHero';
 
 type Sort = 'foryou' | 'soon' | 'popular';
 
@@ -137,58 +138,87 @@ export default function EventsPage() {
 
   return (
     <div className="h-full w-full overflow-y-auto text-foreground">
-      <div className="mx-auto w-full max-w-[1140px] px-5 pb-28 pt-7 sm:px-8 sm:pt-12">
-        {/* Masthead */}
-        <header>
-          <div className="flex items-start justify-between gap-6">
-            <div className="min-w-0">
-              <p className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.24em] text-faint">
-                <span className="h-px w-6 bg-primary" />
-                {upcoming.length > 0 ? `${upcoming.length} coming up` : 'The calendar is open'}
-                {liveNow.length > 0 && (
-                  <span className="inline-flex items-center gap-1.5 text-red-500">
-                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-500" /> {liveNow.length} live
+      <PageHero
+        containerClassName="max-w-[1140px]"
+        visual={
+          <div className="relative hidden h-[320px] w-full max-w-[440px] lg:block">
+            {upcoming[0] && (
+              <div className="landing-float absolute right-0 top-0 w-[270px] rotate-2 overflow-hidden rounded-2xl border border-white/15 bg-[var(--ds-brand-ink-raised)] shadow-float">
+                <EventCover event={upcoming[0]} className="aspect-[16/10]">
+                  <span className="absolute left-3 top-3 inline-flex items-center gap-1.5 rounded-full bg-black/55 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.16em] text-white backdrop-blur">
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-400" /> Live soon
                   </span>
-                )}
-              </p>
-              <h1 className="mt-4 max-w-2xl font-serif text-[38px] leading-[0.98] tracking-[-0.02em] sm:text-[58px]">
-                Find your next <em className="italic text-primary">room</em>.
-              </h1>
-              <p className="mt-4 max-w-lg text-[14px] leading-relaxed text-muted-foreground">
-                Small gatherings, big ideas, rooms that stay open late. See what’s happening near you — or open a door of your own.
-              </p>
+                </EventCover>
+                <div className="space-y-1 p-3.5">
+                  <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-primary">
+                    {formatDate(upcoming[0].startDate, 'EEE · MMM d')}
+                  </p>
+                  <p className="line-clamp-2 font-display text-sm font-semibold leading-snug text-[var(--ds-brand-cream)]">
+                    {upcoming[0].title}
+                  </p>
+                  <p className="text-[11px] text-[var(--ds-brand-cream)]/55">
+                    {upcoming[0].attendeeCount || 0} going
+                  </p>
+                </div>
+              </div>
+            )}
+            <div className="landing-float-slow absolute bottom-2 left-0 rounded-2xl border border-white/15 bg-[var(--ds-brand-ink-raised)]/85 px-4 py-3 shadow-float backdrop-blur">
+              <div className="flex items-center gap-2">
+                <CalendarDays size={16} className="text-[var(--ds-brand-lilac)]" />
+                <div>
+                  <p className="font-display text-sm font-semibold text-[var(--ds-brand-cream)]">
+                    {upcoming.length || 'Open'} rooms
+                  </p>
+                  <p className="text-[10px] uppercase tracking-[0.16em] text-[var(--ds-brand-cream)]/50">
+                    on the calendar
+                  </p>
+                </div>
+              </div>
             </div>
-
-            <div className="hidden shrink-0 flex-col items-end gap-2 pt-1 sm:flex">
-              <button
-                onClick={goLive}
-                className="group inline-flex items-center gap-2 rounded-full bg-primary px-5 py-3 text-[13px] font-bold text-primary-foreground shadow-glow-primary transition-all hover:brightness-105 active:scale-[0.98]"
-              >
-                <Radio size={16} />
-                Go live
-                <ArrowUpRight size={15} className="transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
-              </button>
-              <button
-                onClick={() => requireUser(() => setShowCreate(true), 'Sign in to create events')}
-                className="inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-[12px] font-semibold text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
-              >
-                <Plus size={14} /> Create an event
-              </button>
-            </div>
+            <span className="absolute bottom-6 right-6 h-3 w-3 rounded-full bg-primary shadow-[0_0_28px_rgba(255,107,74,0.85)]" />
           </div>
-
-          <div className="mt-6 flex gap-2 sm:hidden">
-            <button onClick={goLive} className="inline-flex flex-1 items-center justify-center gap-2 rounded-full bg-primary px-4 py-2.5 text-[12px] font-bold text-primary-foreground">
-              <Radio size={14} /> Go live
+        }
+        eyebrow={
+          <p className="flex flex-wrap items-center gap-2 text-[10px] font-bold uppercase tracking-[0.24em] text-[var(--ds-brand-cream)]/55">
+            <span className="h-px w-6 bg-primary" />
+            {upcoming.length > 0 ? `${upcoming.length} coming up` : 'The calendar is open'}
+            {liveNow.length > 0 && (
+              <span className="inline-flex items-center gap-1.5 text-red-400">
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-400" /> {liveNow.length} live
+              </span>
+            )}
+          </p>
+        }
+        title={
+          <>
+            Find your next <em className="italic text-primary">room</em>.
+          </>
+        }
+        titleClassName="max-w-2xl font-serif text-[38px] font-normal leading-[0.98] tracking-[-0.02em] sm:text-[58px]"
+        description="Small gatherings, big ideas, rooms that stay open late. See what’s happening near you — or open a door of your own."
+        actions={
+          <>
+            <button
+              onClick={goLive}
+              className="group inline-flex items-center gap-2 rounded-full bg-primary px-5 py-3 text-[13px] font-bold text-primary-foreground shadow-glow-primary transition-all hover:brightness-105 active:scale-[0.98]"
+            >
+              <Radio size={16} />
+              Go live
+              <ArrowUpRight size={15} className="transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
             </button>
-            <button onClick={() => requireUser(() => setShowCreate(true), 'Sign in to create events')} className="inline-flex flex-1 items-center justify-center gap-2 rounded-full border border-border px-4 py-2.5 text-[12px] font-semibold">
-              <Plus size={14} /> Create event
+            <button
+              onClick={() => requireUser(() => setShowCreate(true), 'Sign in to create events')}
+              className="inline-flex items-center gap-1.5 rounded-full border border-[var(--ds-brand-cream)]/20 px-4 py-2.5 text-[12px] font-semibold text-[var(--ds-brand-cream)]/80 transition-colors hover:bg-[var(--ds-brand-cream)]/10 hover:text-[var(--ds-brand-cream)]"
+            >
+              <Plus size={14} /> Create an event
             </button>
-          </div>
-        </header>
+          </>
+        }
+      />
 
+      <div className="mx-auto w-full max-w-[1140px] px-5 pb-28 pt-7 sm:px-8 sm:pt-9">
         {/* Search + day filter */}
-        <div className="mt-8 border-y border-border">
+        <div className="border-y border-border">
           <div className="flex items-center gap-2 py-2">
             <CityPicker value={city} onChange={setCity} cities={cities} onlineCount={onlineCount} locate={p => nearestCity(p, upcoming)} />
             <span className="h-5 w-px bg-border" />

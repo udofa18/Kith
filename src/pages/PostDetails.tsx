@@ -51,11 +51,11 @@ export default function PostDetails() {
   }, [id, post]);
 
   return (
-    <div className="max-w-[1200px] mx-auto px-4 pb-8 text-black dark:text-white relative">
+    <div className="max-w-[1200px] mx-auto px-2 sm:px-4 pb-8 text-black dark:text-white relative">
       <div className="flex flex-col lg:flex-row gap-4 items-start justify-center">
         <SocialLeftSidebar />
 
-        <main className="w-full order-2 flex-1 max-w-[640px] min-h-screen border-x border-black/10 dark:border-white/10">
+        <main className="w-full order-2 flex-1 max-w-[640px] min-h-screen lg:border-x border-black/10 dark:border-white/10">
           <PageHeader title="Post" subtitle={post?.authorName ? `by ${post.authorName}` : undefined} />
           {loading ? (
             <div className="flex justify-center py-20">

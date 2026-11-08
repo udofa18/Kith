@@ -69,10 +69,13 @@
   }
 
   /* Stay inside the visible viewport on iOS, above Safari's bottom bar.
-     100vh is the large viewport and hides the bottom nav behind browser chrome. */
+     100vh is the large viewport and hides the bottom nav behind browser chrome.
+     viewport-fit=cover (index.html) opts into the safe areas, so reserve the
+     notch/status-bar space at the top in standalone/PWA mode. */
   .app-shell {
     height: 100vh;
     height: 100dvh;
+    padding-top: env(safe-area-inset-top, 0px);
   }
   
   html {

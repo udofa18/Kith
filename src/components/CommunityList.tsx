@@ -12,6 +12,8 @@ import { feeOf } from '../lib/communityPricing';
 import CommunityCard, { CommunityIcon } from './CommunityCard';
 import CreateCommunityModal from './CreateCommunityModal';
 import CommunityDetailsModal from './CommunityDetailsModal';
+import { Badge } from './ui/Badge';
+import PageHero from './ui/PageHero';
 
 type Sort = 'foryou' | 'popular' | 'new';
 type Price = 'any' | 'free' | 'paid';
@@ -107,22 +109,62 @@ export default function CommunityList() {
 
   return (
     <div className="w-full h-full overflow-y-auto text-black dark:text-white">
-      <div className="max-w-[1100px] mx-auto px-4 sm:px-6 py-6 sm:py-8 pb-24">
-        {/* Header */}
-        <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
-          <div>
-            <h1 className="text-2xl sm:text-3xl font-bold">Communities</h1>
-            <p className="mt-1 text-black/55 dark:text-white/55">Find your people. Groups for the things you care about.</p>
-          </div>
-          {uid && (
-            <button onClick={() => setShowCreate(true)} className="self-start sm:self-auto flex items-center gap-1.5 px-4 py-2.5 rounded-full bg-primary text-white text-sm font-semibold hover:bg-primary/90 transition-colors">
-              <Plus size={17} /> Create community
+      <PageHero
+        containerClassName="max-w-[1100px]"
+        eyebrow={<Badge variant="primary">Groups &amp; circles</Badge>}
+        title={
+          <>
+            Communities<span className="text-primary">.</span>
+          </>
+        }
+        titleClassName="max-w-xl"
+        description="Find your people. Groups for the things you care about, from late-night build sessions to the niche corners only you know about."
+        actions={
+          uid && (
+            <button
+              onClick={() => setShowCreate(true)}
+              className="inline-flex items-center gap-2 rounded-full bg-primary px-5 py-3 text-[13px] font-bold text-primary-foreground shadow-glow-primary transition-all hover:brightness-105 active:scale-[0.98]"
+            >
+              <Plus size={16} /> Create community
             </button>
-          )}
-        </div>
+          )
+        }
+        visual={
+          <div className="relative hidden h-[300px] w-full max-w-[420px] lg:block">
+            <div className="landing-float absolute left-1/2 top-6 w-[250px] -translate-x-1/2 rounded-[1.75rem] border border-white/15 bg-[var(--ds-brand-ink-raised)]/85 p-5 shadow-[0_30px_90px_-20px_rgba(255,107,74,0.45)] backdrop-blur">
+              <div className="flex -space-x-3">
+                {(visible.length ? visible.slice(0, 4) : [null, null, null, null]).map((c: any, i: number) =>
+                  c ? (
+                    <CommunityIcon
+                      key={c.id}
+                      community={c}
+                      size={54}
+                      className="ring-2 ring-[var(--ds-brand-ink-raised)]"
+                    />
+                  ) : (
+                    <span
+                      key={i}
+                      className="h-[54px] w-[54px] rounded-xl ring-2 ring-[var(--ds-brand-ink-raised)]"
+                      style={{ background: ['#ff6b4a', '#b69cff', '#82e6c8', '#ffb65c'][i] }}
+                    />
+                  ),
+                )}
+              </div>
+              <p className="mt-3 font-display text-base font-semibold text-[var(--ds-brand-cream)]">Find your circle</p>
+              <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--ds-brand-cream)]/50">People who get it</p>
+            </div>
+            <div className="landing-float-slow absolute bottom-4 left-2 rounded-2xl border border-white/15 bg-[var(--ds-brand-ink-raised)]/85 px-4 py-3 shadow-float backdrop-blur">
+              <p className="font-display text-lg font-semibold text-[var(--ds-brand-cream)]">{communities.length}</p>
+              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--ds-brand-cream)]/50">communities</p>
+            </div>
+            <span className="absolute bottom-10 right-4 h-3 w-3 rounded-full bg-[var(--ds-brand-lilac)] shadow-[0_0_24px_rgba(182,156,255,0.85)]" />
+          </div>
+        }
+      />
 
+      <div className="max-w-[1100px] mx-auto px-4 sm:px-6 py-6 sm:py-8 pb-24">
         {/* Search + sort */}
-        <div className="mt-6 flex flex-col sm:flex-row gap-3">
+        <div className="flex flex-col sm:flex-row gap-3">
           <div className="relative flex-1">
             <Search size={17} className="absolute left-4 top-1/2 -translate-y-1/2 text-black/40 dark:text-white/40 pointer-events-none" />
             <input
