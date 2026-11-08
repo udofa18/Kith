@@ -77,7 +77,7 @@ export function useNotificationStream(user: any) {
           return;
         }
 
-        const incoming = fresh.filter((item) => !isDirectMessageType(item.type, item.content));
+        const incoming = fresh.filter((item) => !isDirectMessageType(item.type, item.content, item.channelId));
         if (incoming.length === 0) return;
 
         // An open channel already plays its own chime for mentions.

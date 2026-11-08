@@ -65,7 +65,7 @@ export function useKithNavData(user: any) {
         const unreads: Record<string, number> = {};
         notifSnap.docs.forEach((d) => {
           const data = d.data();
-          if (!isDirectMessageType(data.type, data.content)) bellCount += 1;
+          if (!isDirectMessageType(data.type, data.content, data.channelId)) bellCount += 1;
           if (data.type === 'message' && data.relatedId) {
             unreads[data.relatedId] = (unreads[data.relatedId] || 0) + 1;
           }
