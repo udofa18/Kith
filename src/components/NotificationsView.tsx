@@ -3,19 +3,19 @@ import { auth, handleFirestoreError, OperationType } from '../firebase';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { notificationsRepository } from '../services/db/notificationsRepository';
-import { usersRepository } from '../services/db/usersRepository';
+import { useCurrentUser } from '../contexts/CurrentUserContext';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Bell, Heart, MessageSquare, AtSign, Zap, Trophy, Trash2,
   Check, Settings, ShoppingBag, Calendar, CreditCard, Info,
-  Star, Users, CheckCircle,
+  Star, Users,
+  type LucideIcon,
 } from 'lucide-react';
 import { formatDistanceToNow, isToday, isYesterday, isThisWeek } from 'date-fns';
 import { useNavigate } from 'react-router-dom';
 import {
   appCategoryForType,
   normalizeAppCategory,
-  unreadBellCount,
   type AppNotificationCategory,
 } from '../lib/notificationTaxonomy';
 import { notificationTarget } from '../lib/notificationRouting';
@@ -55,6 +55,16 @@ const CATEGORY_LABELS: Record<AppNotificationCategory, string> = {
   system: 'System',
 };
 
+const TABS: Array<{ id: TabCategory; icon: LucideIcon }> = [
+  { id: 'All', icon: Bell },
+  { id: 'Social', icon: Heart },
+  { id: 'Community', icon: Users },
+  { id: 'Marketplace', icon: ShoppingBag },
+  { id: 'Events', icon: Calendar },
+  { id: 'Earnings', icon: CreditCard },
+  { id: 'System', icon: Info },
+];
+
 const timeOf = (value: any): Date => {
   if (!value) return new Date(0);
   if (value.toDate) return value.toDate();
@@ -66,16 +76,12 @@ export default function NotificationsView() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabCategory>('All');
-  const [userProfile, setUserProfile] = useState<any>(null);
   const [communityImages, setCommunityImages] = useState<Record<string, string>>({});
   const navigate = useNavigate();
+  const viewer = useCurrentUser();
 
   useEffect(() => {
     if (!auth.currentUser) return;
-
-    usersRepository.getById(auth.currentUser.uid).then((profile) => {
-      if (profile) setUserProfile(profile);
-    });
 
     const unsubscribe = notificationsRepository.subscribe(
       auth.currentUser.uid,
@@ -127,7 +133,7 @@ export default function NotificationsView() {
     fetchImages();
   }, [notifications, communityImages]);
 
-  const bundling = userProfile?.settings?.notifications?.bundling !== false;
+  const bundling = viewer?.settings?.notifications?.bundling !== false;
   const hasUnread = notifications.some((notification) => !notification.read);
 
   // Merge likes/comments/messages that share a context and day.
@@ -233,7 +239,7 @@ export default function NotificationsView() {
     return false;
   };
 
-  const filteredNotifications = useMemo(() => {
+  const categorizedNotifications = useMemo(() => {
     const getCategory = (notif: Notification): AppNotificationCategory => {
       // Direct messages are social even when a legacy writer stored them under
       // community; channel mentions stay in the community bucket.
@@ -244,10 +250,47 @@ export default function NotificationsView() {
       return appCategoryForType(notif.type);
     };
 
-    const mapped = mergedNotifications.map(n => ({ ...n, category: getCategory(n) }));
-    if (activeTab === 'All') return mapped;
-    return mapped.filter(n => normalizeAppCategory(n.category) === normalizeAppCategory(activeTab));
-  }, [mergedNotifications, activeTab, communityImages]);
+    return mergedNotifications.map(n => ({ ...n, category: getCategory(n) }));
+  }, [mergedNotifications, communityImages]);
+
+  const categoryCounts = useMemo(() => {
+    const counts: Record<TabCategory, number> = {
+      All: 0,
+      Social: 0,
+      Community: 0,
+      Marketplace: 0,
+      Events: 0,
+      Earnings: 0,
+      System: 0,
+    };
+
+    categorizedNotifications.forEach((notification) => {
+      if (notification.read) return;
+      counts.All += 1;
+      const label = CATEGORY_LABELS[normalizeAppCategory(notification.category)] as TabCategory;
+      if (label in counts) counts[label] += 1;
+    });
+
+    return counts;
+  }, [categorizedNotifications]);
+
+  const unreadCount = categoryCounts.All;
+
+  const todayStats = useMemo(() => {
+    const today = notifications.filter((notification) => isToday(timeOf(notification.createdAt)));
+    return {
+      likes: today.filter((notification) => notification.type === 'like').length,
+      replies: today.filter((notification) => notification.type === 'comment').length,
+      mentions: today.filter((notification) => notification.type === 'mention' || notification.type === 'channel_mention').length,
+    };
+  }, [notifications]);
+
+  const filteredNotifications = useMemo(() => {
+    if (activeTab === 'All') return categorizedNotifications;
+    return categorizedNotifications.filter(
+      (notification) => normalizeAppCategory(notification.category) === normalizeAppCategory(activeTab),
+    );
+  }, [categorizedNotifications, activeTab]);
 
   const timeGroups = useMemo(() => {
     const groups: Record<string, Notification[]> = {
@@ -339,57 +382,103 @@ export default function NotificationsView() {
   }
 
   return (
-    <div className="w-full space-y-8 pb-20 p-2 md:p-6 lg:p-8 text-foreground">
+    <div className="w-full space-y-6 pb-20 p-2 text-foreground md:p-6 lg:p-8">
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 w-full">
-        <div>
-          <h1 className="flex items-center gap-3 text-3xl font-bold tracking-tight">
+      <header className="flex w-full flex-col gap-4 md:flex-row md:items-start md:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-3">
             <span className="flex h-12 w-12 items-center justify-center rounded-2xl border border-primary/20 bg-primary/10 text-primary">
               <Bell size={26} />
             </span>
-            Notifications
-          </h1>
+            <h1 className="text-3xl font-bold tracking-tight">Notifications</h1>
+            {unreadCount > 0 && (
+              <span className="rounded-full border border-primary/20 bg-primary/10 px-2.5 py-1 text-[11px] font-bold text-primary">
+                {unreadCount} unread
+              </span>
+            )}
+          </div>
           <p className="mt-1 text-sm text-muted-foreground md:ml-[60px]">
             Everything that needs your attention, in one place.
           </p>
+          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[11px] text-muted-foreground md:ml-[60px]">
+            <span className="inline-flex items-center gap-1.5">
+              <Heart size={12} className="text-rose-500" />
+              <b className="font-bold text-foreground">{todayStats.likes}</b> likes today
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <MessageSquare size={12} className="text-sky-500" />
+              <b className="font-bold text-foreground">{todayStats.replies}</b> replies today
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <AtSign size={12} className="text-violet-500" />
+              <b className="font-bold text-foreground">{todayStats.mentions}</b> mentions today
+            </span>
+          </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2.5 md:ml-0">
-          <button
-            onClick={markAllAsRead}
-            disabled={!hasUnread}
-            className="flex items-center gap-2 rounded-xl border border-border bg-surface px-4 py-2 text-sm font-medium transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <Check size={16} /> Mark all read
-          </button>
+
+        <div className="flex shrink-0 items-center gap-2 md:pt-1">
+          {hasUnread && (
+            <button
+              onClick={markAllAsRead}
+              className="inline-flex items-center gap-1.5 rounded-full px-3 py-2 text-xs font-semibold text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <Check size={15} /> Mark all read
+            </button>
+          )}
           <button
             onClick={() => navigate('/settings?tab=notifications')}
-            className="flex items-center gap-2 rounded-xl border border-border bg-surface px-4 py-2 text-sm font-medium transition-colors hover:bg-muted"
+            aria-label="Notification settings"
+            title="Notification settings"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-border bg-surface text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           >
-            <Settings size={16} /> Settings
+            <Settings size={17} />
           </button>
         </div>
-      </div>
+      </header>
 
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-8 w-full">
-        <div className="lg:col-span-3 space-y-6">
-          {/* Tabs */}
-          <div className="flex items-center gap-2 overflow-x-auto pb-2 no-scrollbar">
-            {(['All', 'Social', 'Community', 'Marketplace', 'Events', 'Earnings', 'System'] as TabCategory[]).map((tab) => (
-              <button
-                key={tab}
-                onClick={() => setActiveTab(tab)}
-                aria-pressed={activeTab === tab}
-                className={`shrink-0 rounded-full border px-4 py-2 text-xs font-bold transition-colors ${
-                  activeTab === tab
-                    ? 'border-primary bg-primary text-primary-foreground'
-                    : 'border-border bg-surface text-muted-foreground hover:bg-muted hover:text-foreground'
-                }`}
-              >
-                {tab}
-              </button>
-            ))}
-          </div>
+      <div className="grid w-full grid-cols-1 gap-6 lg:grid-cols-[210px_minmax(0,1fr)]">
+        {/* Category rail */}
+        <aside className="lg:sticky lg:top-6 lg:self-start">
+          <nav
+            aria-label="Notification categories"
+            className="flex gap-2 overflow-x-auto pb-1 no-scrollbar lg:flex-col lg:gap-1 lg:overflow-visible lg:pb-0"
+          >
+            {TABS.map(({ id, icon: Icon }) => {
+              const active = activeTab === id;
+              const count = categoryCounts[id];
+              return (
+                <button
+                  key={id}
+                  onClick={() => setActiveTab(id)}
+                  aria-pressed={active}
+                  className={`flex shrink-0 items-center gap-2 rounded-full border px-3 py-2 text-xs font-semibold transition-colors lg:w-full lg:justify-between lg:rounded-xl lg:border-transparent lg:px-3 lg:py-2.5 lg:text-sm ${
+                    active
+                      ? 'border-primary bg-primary text-primary-foreground lg:border-transparent lg:bg-primary/10 lg:text-primary'
+                      : 'border-border bg-surface text-muted-foreground hover:bg-muted hover:text-foreground'
+                  }`}
+                >
+                  <span className="inline-flex items-center gap-2">
+                    <Icon size={14} />
+                    {id}
+                  </span>
+                  {count > 0 && (
+                    <span
+                      className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums ${
+                        active
+                          ? 'bg-primary-foreground/20 text-primary-foreground lg:bg-primary lg:text-primary-foreground'
+                          : 'bg-muted text-muted-foreground'
+                      }`}
+                    >
+                      {count}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </nav>
+        </aside>
 
+        <div className="min-w-0 space-y-6">
           {/* Notification list */}
           <div className="space-y-8">
             {Object.entries(timeGroups).map(([groupName, groupNotifs]) => (
@@ -471,15 +560,21 @@ export default function NotificationsView() {
                               <div className="min-w-0 flex-1 pt-0.5">
                                 <div className="flex items-start justify-between gap-2">
                                   <div className="min-w-0">
-                                    <p className="text-[15px] leading-snug text-foreground/90">
-                                      {hasActorStack ? (
-                                        <span>{notification.content}</span>
-                                      ) : (
-                                        <>
-                                          <span className="font-bold tracking-tight text-foreground">{notification.senderName}</span>{' '}
-                                          {notification.content}
-                                        </>
-                                      )}
+                                    <p className="flex items-start gap-2 text-[15px] leading-snug text-foreground/90">
+                                      <span
+                                        aria-hidden
+                                        className={`mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full ${theme.dot} ${notification.read ? 'opacity-0' : ''}`}
+                                      />
+                                      <span className="min-w-0">
+                                        {hasActorStack ? (
+                                          <span>{notification.content}</span>
+                                        ) : (
+                                          <>
+                                            <span className="font-bold tracking-tight text-foreground">{notification.senderName}</span>{' '}
+                                            {notification.content}
+                                          </>
+                                        )}
+                                      </span>
                                     </p>
                                     <div className="mt-1.5 flex flex-wrap items-center gap-2">
                                       <span className={`text-[10px] font-bold uppercase tracking-wider ${theme.text}`}>
@@ -498,19 +593,6 @@ export default function NotificationsView() {
                                   </div>
 
                                   <div className="flex items-center gap-0.5">
-                                    {!notification.read && (
-                                      <button
-                                        onClick={(event) => {
-                                          event.stopPropagation();
-                                          markAsRead(notification.id);
-                                        }}
-                                        aria-label="Mark as read"
-                                        title="Mark as read"
-                                        className="rounded-lg p-1.5 text-faint transition-colors hover:bg-muted hover:text-primary"
-                                      >
-                                        <Check size={16} />
-                                      </button>
-                                    )}
                                     <button
                                       onClick={(event) => {
                                         event.stopPropagation();
@@ -526,10 +608,6 @@ export default function NotificationsView() {
                                 </div>
                               </div>
                             </div>
-
-                            {!notification.read && (
-                              <div className={`absolute left-2 top-1/2 h-1.5 w-1.5 -translate-y-1/2 rounded-full ${theme.dot} shadow-sm`} />
-                            )}
                           </motion.div>
                         );
                       })}
@@ -552,105 +630,8 @@ export default function NotificationsView() {
             )}
           </div>
         </div>
-
-        {/* Sidebar */}
-        <div className="space-y-6">
-          <DailySummaryCard userProfile={userProfile} notifications={notifications} />
-
-          <div className="rounded-3xl border border-border bg-surface p-5 space-y-3">
-            <h3 className="flex items-center gap-2 text-sm font-bold">
-              <CheckCircle className="text-primary" size={18} /> Quick actions
-            </h3>
-            <div className="grid grid-cols-1 gap-2">
-              <button
-                onClick={markAllAsRead}
-                disabled={!hasUnread}
-                className="flex w-full items-center justify-between rounded-2xl bg-muted p-3 text-left text-xs font-bold transition-colors hover:bg-muted/70 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Mark all as read
-                <Check size={14} className="opacity-60" />
-              </button>
-              <button
-                onClick={() => navigate('/settings?tab=notifications')}
-                className="flex w-full items-center justify-between rounded-2xl bg-muted p-3 text-left text-xs font-bold transition-colors hover:bg-muted/70"
-              >
-                Notification settings
-                <Settings size={14} className="opacity-60" />
-              </button>
-            </div>
-          </div>
-        </div>
       </div>
     </div>
   );
 }
 
-function DailySummaryCard({ userProfile, notifications }: { userProfile: any; notifications: Notification[] }) {
-  const navigate = useNavigate();
-  const stats = useMemo(() => {
-    const today = notifications.filter(n => isToday(timeOf(n.createdAt)));
-
-    return {
-      likes: today.filter(n => n.type === 'like').length,
-      replies: today.filter(n => n.type === 'comment').length,
-      mentions: today.filter(n => n.type === 'mention' || n.type === 'channel_mention').length,
-      unread: unreadBellCount(notifications),
-    };
-  }, [notifications]);
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, scale: 0.98 }}
-      animate={{ opacity: 1, scale: 1 }}
-      className="relative overflow-hidden rounded-3xl border border-border bg-surface p-5"
-    >
-      <div className="absolute right-0 top-0 h-32 w-32 rounded-full bg-primary/10 blur-3xl" aria-hidden />
-
-      <div className="relative mb-5 flex items-center gap-3">
-        <div className="h-10 w-10 overflow-hidden rounded-full border-2 border-primary/20 bg-primary/5">
-          <img
-            src={
-              userProfile?.profileImage?.trim()
-                ? userProfile.profileImage
-                : (auth.currentUser?.photoURL?.trim()
-                  ? auth.currentUser.photoURL
-                  : `https://api.dicebear.com/7.x/avataaars/svg?seed=${auth.currentUser?.uid}`)
-            }
-            className="h-full w-full object-cover"
-            alt=""
-          />
-        </div>
-        <div>
-          <h3 className="text-sm font-bold">Today at a glance</h3>
-          <p className="text-[10px] text-muted-foreground">
-            {stats.unread > 0 ? `${stats.unread} unread` : 'All caught up'}
-          </p>
-        </div>
-      </div>
-
-      <div className="relative grid grid-cols-2 gap-3">
-        {[
-          { label: 'Likes', value: stats.likes, icon: Heart, tone: 'text-rose-500' },
-          { label: 'Replies', value: stats.replies, icon: MessageSquare, tone: 'text-sky-500' },
-          { label: 'Mentions', value: stats.mentions, icon: AtSign, tone: 'text-violet-500' },
-          { label: 'Unread', value: stats.unread, icon: Bell, tone: 'text-primary' },
-        ].map(({ label, value, icon: Icon, tone }) => (
-          <div key={label} className="rounded-2xl border border-border bg-background/60 p-3">
-            <div className="mb-1 flex items-center gap-2">
-              <Icon size={12} className={tone} />
-              <span className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">{label}</span>
-            </div>
-            <p className="text-xl font-bold tabular-nums">{value}</p>
-          </div>
-        ))}
-      </div>
-
-      <button
-        onClick={() => navigate('/settings?tab=notifications')}
-        className="relative mt-5 flex w-full items-center justify-center gap-2 rounded-2xl border border-border px-4 py-2.5 text-xs font-semibold text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-      >
-        Choose what reaches you
-      </button>
-    </motion.div>
-  );
-}
