@@ -321,6 +321,7 @@ export default function App() {
           </CallProvider>
           <Toaster 
           position="bottom-right"
+          containerStyle={{ bottom: 'calc(5.25rem + env(safe-area-inset-bottom))' }}
           toastOptions={{
             style: {
               background: '#0B0F19',

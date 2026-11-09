@@ -127,10 +127,19 @@ export default function NotificationsView() {
     fetchImages();
   }, [notifications, communityImages]);
 
+  const bundling = userProfile?.settings?.notifications?.bundling !== false;
+  const hasUnread = notifications.some((notification) => !notification.read);
+
   // Merge likes/comments/messages that share a context and day.
   const mergedNotifications = useMemo(() => {
     const merged: Notification[] = [];
     const groups: Record<string, Notification[]> = {};
+
+    if (!bundling) {
+      return [...notifications].sort(
+        (a, b) => timeOf(b.createdAt).getTime() - timeOf(a.createdAt).getTime(),
+      );
+    }
 
     notifications.forEach(notif => {
       const dateKey = timeOf(notif.createdAt).toDateString();
@@ -202,7 +211,7 @@ export default function NotificationsView() {
     });
 
     return merged.sort((a, b) => timeOf(b.createdAt).getTime() - timeOf(a.createdAt).getTime());
-  }, [notifications]);
+  }, [notifications, bundling]);
 
   const getCategoryTheme = (category: string) => {
     const themes: Record<string, { text: string; bg: string; dot: string }> = {
@@ -347,7 +356,8 @@ export default function NotificationsView() {
         <div className="flex flex-wrap items-center gap-2.5 md:ml-0">
           <button
             onClick={markAllAsRead}
-            className="flex items-center gap-2 rounded-xl border border-border bg-surface px-4 py-2 text-sm font-medium transition-colors hover:bg-muted"
+            disabled={!hasUnread}
+            className="flex items-center gap-2 rounded-xl border border-border bg-surface px-4 py-2 text-sm font-medium transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Check size={16} /> Mark all read
           </button>
@@ -554,7 +564,8 @@ export default function NotificationsView() {
             <div className="grid grid-cols-1 gap-2">
               <button
                 onClick={markAllAsRead}
-                className="flex w-full items-center justify-between rounded-2xl bg-muted p-3 text-left text-xs font-bold transition-colors hover:bg-muted/70"
+                disabled={!hasUnread}
+                className="flex w-full items-center justify-between rounded-2xl bg-muted p-3 text-left text-xs font-bold transition-colors hover:bg-muted/70 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Mark all as read
                 <Check size={14} className="opacity-60" />
