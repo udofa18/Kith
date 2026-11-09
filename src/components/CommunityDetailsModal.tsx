@@ -246,7 +246,7 @@ export default function CommunityDetailsModal({ isOpen, onClose, communityId, on
                     senderName: auth.currentUser.displayName || 'A user',
                     senderPhoto: auth.currentUser.photoURL || '',
                     type: 'community',
-                    category: 'reward',
+                    category: 'community',
                     priority: 'low',
                     content: `${auth.currentUser.displayName || 'Someone'} joined ${community.name} using your invite! +${inviteData.rewardXp} XP bonus.`,
                     relatedId: communityId,

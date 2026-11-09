@@ -91,6 +91,7 @@ export function appCategoryForType(type?: string | null): AppNotificationCategor
       return 'social';
     case 'channel_mention':
     case 'community':
+    case 'community_post':
     case 'challenge':
       return 'community';
     case 'purchase':
@@ -124,6 +125,7 @@ export function settingsCategoryForType(type?: string | null): SettingsNotificat
       return 'messages';
     case 'channel_mention':
     case 'community':
+    case 'community_post':
       return 'communities';
     case 'challenge':
       return 'challenges';

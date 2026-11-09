@@ -6,7 +6,7 @@ import { isPauseActive } from './notificationPreferences';
 export type NotificationType = 
   | 'like' | 'comment' | 'mention' | 'message' | 'message_request' | 'xp_gift' | 'challenge' | 'channel_mention' 
   | 'purchase' | 'payout' | 'event_invite' | 'event_reminder' | 'system' | 'wallet'
-  | 'repost' | 'quote' | 'new_post';
+  | 'repost' | 'quote' | 'new_post' | 'community' | 'community_post';
 
 export type NotificationCategory = 'social' | 'community' | 'marketplace' | 'events' | 'earnings' | 'system';
 

@@ -297,7 +297,7 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
                 senderId: senderId,
                 senderName: auth.currentUser?.displayName || 'Anonymous',
                 senderPhoto: auth.currentUser?.photoURL,
-                type: 'message',
+                type: 'community_post',
                 content: `posted in community feed`,
                 relatedId: communityId,
                 channelId: channelId,

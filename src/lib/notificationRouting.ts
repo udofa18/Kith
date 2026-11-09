@@ -54,6 +54,12 @@ export function notificationTarget(
     case 'community':
       return relatedId ? `/feed?view=community&id=${relatedId}&settings=members` : null;
 
+    case 'community_post':
+      if (!relatedId) return null;
+      return channelId
+        ? `/feed?view=community&id=${relatedId}&channelId=${channelId}`
+        : `/feed?view=community&id=${relatedId}`;
+
     case 'challenge':
       return relatedId ? `/challenges/${relatedId}` : '/challenges';
 

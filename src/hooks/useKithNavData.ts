@@ -66,8 +66,14 @@ export function useKithNavData(user: any) {
         notifSnap.docs.forEach((d) => {
           const data = d.data();
           if (!isDirectMessageType(data.type, data.content, data.channelId)) bellCount += 1;
-          if (data.type === 'message' && data.relatedId) {
-            unreads[data.relatedId] = (unreads[data.relatedId] || 0) + 1;
+
+          const communityId = data.communityId
+            || (data.relatedId && (
+              data.channelId
+              || ['channel_mention', 'community', 'community_post'].includes(data.type)
+            ) ? data.relatedId : null);
+          if (communityId) {
+            unreads[communityId] = (unreads[communityId] || 0) + 1;
           }
         });
         setUnreadNotifications(bellCount);

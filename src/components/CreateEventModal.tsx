@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
-import { addDoc, collection, doc, getDoc, getDocs, query, updateDoc, where } from 'firebase/firestore';
+import { addDoc, collection, doc, getDoc, getDocs, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
 import { getDownloadURL, ref, uploadBytes } from '../lib/storage';
 import { ArrowLeft, Camera, Check, Globe, Lock, MapPin, Users, Video, X } from 'lucide-react';
 import { importLibrary, setOptions } from '@googlemaps/js-api-loader';
@@ -208,9 +208,16 @@ export default function CreateEventModal({ isOpen, onClose, communityId, eventId
           const regs = await getDocs(collection(db, 'events', eventId, 'registrations'));
           const what = [moved && 'location', retimed && 'date/time'].filter(Boolean).join(' and ');
           await Promise.all(regs.docs.map(d => addDoc(collection(db, 'notifications'), {
-            recipientId: d.id, type: 'system', category: 'events', relatedId: eventId, read: false,
+            recipientId: d.id,
+            senderId: auth.currentUser?.uid,
+            senderName: auth.currentUser?.displayName || 'Kith',
+            senderPhoto: auth.currentUser?.photoURL || '',
+            type: 'event_reminder',
+            category: 'events',
+            relatedId: eventId,
+            read: false,
             content: `Event "${update.title}" has been updated. Please check the new ${what}.`,
-            createdAt: new Date().toISOString(),
+            createdAt: serverTimestamp(),
           })));
         }
         toast.success('Event updated');

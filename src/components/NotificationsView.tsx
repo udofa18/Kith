@@ -32,7 +32,7 @@ interface Notification {
   senderId: string;
   senderName: string;
   senderPhoto: string;
-  type: 'like' | 'comment' | 'mention' | 'repost' | 'quote' | 'new_post' | 'message' | 'message_request' | 'xp_gift' | 'challenge' | 'channel_mention' | 'purchase' | 'payout' | 'event_invite' | 'event_reminder' | 'system' | 'wallet' | 'community';
+  type: 'like' | 'comment' | 'mention' | 'repost' | 'quote' | 'new_post' | 'message' | 'message_request' | 'xp_gift' | 'challenge' | 'channel_mention' | 'purchase' | 'payout' | 'event_invite' | 'event_reminder' | 'system' | 'wallet' | 'community' | 'community_post';
   category: 'social' | 'community' | 'marketplace' | 'events' | 'earnings' | 'system';
   priority: 'low' | 'normal' | 'high';
   content: string;
@@ -218,7 +218,7 @@ export default function NotificationsView() {
 
   const isCommunityNotif = (notif: Notification) => {
     if (notif.channelId) return true;
-    if (notif.type === 'channel_mention') return true;
+    if (notif.type === 'channel_mention' || notif.type === 'community_post') return true;
     if (notif.type === 'message' && (notif.content.includes('in #') || notif.content.toLowerCase().includes('community'))) return true;
     if (notif.relatedId && communityImages[notif.relatedId]) return true;
     return false;
@@ -303,6 +303,7 @@ export default function NotificationsView() {
       case 'wallet': return <CreditCard className="text-indigo-500" size={size} />;
       case 'system': return <Info className="text-muted-foreground" size={size} />;
       case 'community': return <Users className="text-sky-500" size={size} />;
+      case 'community_post': return <Users className="text-sky-500" size={size} />;
       default: return <Bell className="text-primary" size={size} />;
     }
   };

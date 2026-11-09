@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Search, UserPlus, UserMinus, Shield, ShieldCheck, Users, Info } from 'lucide-react';
 import { db, auth, handleFirestoreError, OperationType } from '../firebase';
-import { collection, query, where, getDocs, doc, updateDoc, arrayUnion, arrayRemove, getDoc, onSnapshot, limit, addDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, doc, updateDoc, arrayUnion, arrayRemove, getDoc, onSnapshot, limit, addDoc, serverTimestamp } from 'firebase/firestore';
 import { toast } from 'react-hot-toast';
 
 interface CoHostManagementModalProps {
@@ -118,8 +118,10 @@ export default function CoHostManagementModal({ isOpen, onClose, eventId, hostId
           content: `You have been added as a co-host for an event.`,
           relatedId: eventId,
           senderId: auth.currentUser?.uid,
+          senderName: auth.currentUser?.displayName || 'Kith',
+          senderPhoto: auth.currentUser?.photoURL || '',
           read: false,
-          createdAt: new Date().toISOString()
+          createdAt: serverTimestamp()
         });
       }
     } catch (error) {
