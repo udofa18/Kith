@@ -453,7 +453,7 @@ export default function NotificationsView() {
                   aria-pressed={active}
                   className={`flex shrink-0 items-center gap-2 rounded-full border px-3 py-2 text-xs font-semibold transition-colors lg:w-full lg:justify-between lg:rounded-xl lg:border-transparent lg:px-3 lg:py-2.5 lg:text-sm ${
                     active
-                      ? 'border-primary bg-primary text-primary-foreground lg:border-transparent lg:bg-primary/10 lg:text-primary'
+                      ? 'border-primary bg-primary text-primary-foreground lg:border-primary lg:bg-primary lg:text-primary-foreground'
                       : 'border-border bg-surface text-muted-foreground hover:bg-muted hover:text-foreground'
                   }`}
                 >
@@ -465,7 +465,7 @@ export default function NotificationsView() {
                     <span
                       className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums ${
                         active
-                          ? 'bg-primary-foreground/20 text-primary-foreground lg:bg-primary lg:text-primary-foreground'
+                          ? 'bg-primary-foreground/20 text-primary-foreground'
                           : 'bg-muted text-muted-foreground'
                       }`}
                     >
