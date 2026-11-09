@@ -575,6 +575,7 @@ export default function NotificationsView() {
 }
 
 function DailySummaryCard({ userProfile, notifications }: { userProfile: any; notifications: Notification[] }) {
+  const navigate = useNavigate();
   const stats = useMemo(() => {
     const today = notifications.filter(n => isToday(timeOf(n.createdAt)));
 
@@ -634,7 +635,7 @@ function DailySummaryCard({ userProfile, notifications }: { userProfile: any; no
       </div>
 
       <button
-        onClick={() => window.location.assign('/settings?tab=notifications')}
+        onClick={() => navigate('/settings?tab=notifications')}
         className="relative mt-5 flex w-full items-center justify-center gap-2 rounded-2xl border border-border px-4 py-2.5 text-xs font-semibold text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
       >
         Choose what reaches you
