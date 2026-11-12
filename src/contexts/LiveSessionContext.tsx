@@ -41,81 +41,92 @@ interface LiveSessionContextType {
 const LiveSessionContext = createContext<LiveSessionContextType | undefined>(undefined);
 
 const SESSION_STORAGE_KEY = 'ais_active_live_session';
+/** Older builds persisted the active room in localStorage, which every tab shared. */
+const LEGACY_SESSION_KEY = SESSION_STORAGE_KEY;
+const LIVE_CHANNEL = 'kith-live-session';
+/** Unique per page load, so two tabs can tell each other apart. */
+const INSTANCE_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+
+const defaultPipSettings = (): LiveSessionState['pipSettings'] => ({
+  autoEnterEnabled: true,
+  alwaysAsk: false,
+  disabled: false,
+});
+
+const emptySession = (
+  pipSettings: LiveSessionState['pipSettings'] = defaultPipSettings(),
+): LiveSessionState => ({
+  eventId: null,
+  isMinimized: false,
+  isOverlayHidden: false,
+  isActive: false,
+  token: null,
+  eventData: null,
+  ownerUid: null,
+  pipWindow: null,
+  pipSettings,
+});
+
+/**
+ * The active room belongs to one tab.
+ *
+ * sessionStorage survives a reload in the same tab but is empty in every other
+ * tab. Keeping the token there means opening the app again cannot silently
+ * reconnect with the same LiveKit identity and kick the first connection.
+ */
+function restoreSession(): LiveSessionState {
+  try {
+    const stored = sessionStorage.getItem(SESSION_STORAGE_KEY);
+    if (!stored) return emptySession();
+    const parsed = JSON.parse(stored) as Partial<LiveSessionState>;
+    return {
+      ...emptySession(parsed.pipSettings ?? defaultPipSettings()),
+      ...parsed,
+      pipWindow: null,
+    };
+  } catch {
+    return emptySession();
+  }
+}
 
 export function LiveSessionProvider({ children }: { children: React.ReactNode }) {
-  const [session, setSessionState] = useState<LiveSessionState>(() => {
-    const defaultPipSettings = {
-      autoEnterEnabled: true,
-      alwaysAsk: false,
-      disabled: false
-    };
+  const [session, setSessionState] = useState<LiveSessionState>(restoreSession);
+  const channelRef = useRef<BroadcastChannel | null>(null);
 
-    try {
-      const stored = localStorage.getItem(SESSION_STORAGE_KEY);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        return {
-          ...parsed,
-          pipWindow: null,
-          pipSettings: parsed.pipSettings || defaultPipSettings
-        };
-      }
-      return {
-        eventId: null,
-        isMinimized: false,
-        isOverlayHidden: false,
-        isActive: false,
-        token: null,
-        eventData: null,
-        pipWindow: null,
-        pipSettings: defaultPipSettings
-      };
-    } catch (e) {
-      return {
-        eventId: null,
-        isMinimized: false,
-        isOverlayHidden: false,
-        isActive: false,
-        token: null,
-        eventData: null,
-        pipWindow: null,
-        pipSettings: defaultPipSettings
-      };
-    }
-  });
+  // Created on demand so a join that happens before the provider's effects run
+  // can still ask other tabs first. The channel is intentionally not closed in
+  // an effect cleanup: StrictMode remounts effects and would leave a dead one.
+  const getChannel = (): BroadcastChannel | null => {
+    if (typeof BroadcastChannel === 'undefined') return null;
+    if (!channelRef.current) channelRef.current = new BroadcastChannel(LIVE_CHANNEL);
+    return channelRef.current;
+  };
 
   const setSession = (newState: LiveSessionState | ((prev: LiveSessionState) => LiveSessionState)) => {
     setSessionState(prev => {
       const next = typeof newState === 'function' ? newState(prev) : newState;
-      // Don't store pipWindow in localStorage
-      const { pipWindow, ...storedData } = next;
-      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(storedData));
+      try {
+        // Don't store pipWindow; it is a live browser handle.
+        const { pipWindow, ...storedData } = next;
+        if (storedData.isActive && storedData.token) {
+          sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(storedData));
+        } else {
+          sessionStorage.removeItem(SESSION_STORAGE_KEY);
+        }
+      } catch {
+        // Storage can be unavailable (private mode); the in-memory room still works.
+      }
       return next;
     });
   };
 
+  // Drop rooms persisted by older builds in the shared localStorage.
   useEffect(() => {
-    const handleStorage = (e: StorageEvent) => {
-      if (e.key === SESSION_STORAGE_KEY) {
-        if (e.newValue) {
-          const parsed = JSON.parse(e.newValue);
-          setSessionState(prev => ({ ...prev, ...parsed }));
-        } else {
-          // Session cleared in another tab
-          setSessionState(prev => ({
-            ...prev,
-            eventId: null,
-            isActive: false,
-            token: null,
-            eventData: null,
-            isMinimized: false,
-            pipWindow: null, // piPWindow can't be cleared across tabs like this, but we close it if possible
-          }));
-        }
-      }
-    };
-    window.addEventListener('storage', handleStorage);
-    return () => window.removeEventListener('storage', handleStorage);
+    try {
+      localStorage.removeItem(LEGACY_SESSION_KEY);
+    } catch {
+      // Ignore unavailable storage.
+    }
   }, []);
 
   // A stored room token belongs to the account that fetched it. If another
@@ -126,19 +137,8 @@ export function LiveSessionProvider({ children }: { children: React.ReactNode })
     setSessionState(prev => {
       const owner = prev.ownerUid;
       if (!prev.isActive || !owner || String(owner).startsWith('guest_') || owner === nextUid) return prev;
-      localStorage.removeItem(SESSION_STORAGE_KEY);
-      return {
-        eventId: null,
-        isMinimized: false,
-        isOverlayHidden: false,
-        isActive: false,
-        token: null,
-        eventData: null,
-        eventTitle: undefined,
-        ownerUid: null,
-        pipWindow: null,
-        pipSettings: prev.pipSettings,
-      };
+      try { sessionStorage.removeItem(SESSION_STORAGE_KEY); } catch { /* ignore */ }
+      return emptySession(prev.pipSettings);
     });
   }), []);
 
@@ -146,6 +146,40 @@ export function LiveSessionProvider({ children }: { children: React.ReactNode })
   // really over, not the values captured when the effect first ran.
   const sessionRef = useRef(session);
   sessionRef.current = session;
+
+  // One tab owns the room. This channel lets a second tab ask before opening the
+  // same event, so it can refuse instead of kicking this connection, and lets
+  // tabs mirror an end even though tokens are now tab-scoped.
+  useEffect(() => {
+    const channel = getChannel();
+    if (!channel) return;
+
+    const onMessage = (event: MessageEvent) => {
+      const data = event.data;
+      if (!data || typeof data !== 'object' || data.instanceId === INSTANCE_ID) return;
+      const current = sessionRef.current;
+
+      if (
+        data.type === 'probe-live' &&
+        current.isActive &&
+        current.token &&
+        current.eventId === data.eventId
+      ) {
+        channel.postMessage({ type: 'live-claimed', probeId: data.probeId, instanceId: INSTANCE_ID });
+        return;
+      }
+
+      if (data.type === 'live-ended' && current.eventId === data.eventId) {
+        try { sessionStorage.removeItem(SESSION_STORAGE_KEY); } catch { /* ignore */ }
+        setSessionState(prev => (prev.eventId === data.eventId ? emptySession(prev.pipSettings) : prev));
+      }
+    };
+
+    channel.addEventListener('message', onMessage);
+    return () => {
+      channel.removeEventListener('message', onMessage);
+    };
+  }, []);
 
   // While a host or co-host is on air, publish a small heartbeat document.
   // Avatars subscribe to these docs, and attendees use the heartbeat to notice
@@ -253,9 +287,40 @@ export function LiveSessionProvider({ children }: { children: React.ReactNode })
     }
   };
 
+  /**
+   * Refuse to open a room another tab is already connected to. LiveKit allows
+   * one connection per identity, so joining here would otherwise kick the other
+   * tab and start a reconnect fight between the two.
+   */
+  const claimRoom = async (eventId: string): Promise<boolean> => {
+    const channel = getChannel();
+    if (!channel) return true;
+
+    const probeId = `${INSTANCE_ID}-${Math.random().toString(36).slice(2, 8)}`;
+    let alreadyOpen = false;
+    const onMessage = (event: MessageEvent) => {
+      const data = event.data;
+      if (data?.type === 'live-claimed' && data.probeId === probeId) alreadyOpen = true;
+    };
+
+    channel.addEventListener('message', onMessage);
+    channel.postMessage({ type: 'probe-live', eventId, probeId, instanceId: INSTANCE_ID });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 180));
+    } finally {
+      channel.removeEventListener('message', onMessage);
+    }
+    return !alreadyOpen;
+  };
+
   /** Join a room. Rejects with the server's reason when access is denied. */
   const startSession = async (eventId: string) => {
     if (session.eventId === eventId && session.token) return;
+    if (!(await claimRoom(eventId))) {
+      throw new Error(
+        'This live session is already open in another tab. Use that tab, or leave it there first.',
+      );
+    }
     await fetchSessionData(eventId);
   };
 
@@ -331,20 +396,14 @@ export function LiveSessionProvider({ children }: { children: React.ReactNode })
     if (session.pipWindow) {
       session.pipWindow.close();
     }
-    const cleared = { 
-      eventId: null, 
-      isMinimized: false, 
-      isOverlayHidden: false,
-      isActive: false, 
-      token: null, 
-      eventData: null,
-      eventTitle: undefined,
-      ownerUid: null,
-      pipWindow: null,
-      pipSettings: session.pipSettings
-    };
-    localStorage.removeItem(SESSION_STORAGE_KEY);
-    setSessionState(cleared);
+    // Let any other tab mirror the end; they hold no token of their own.
+    getChannel()?.postMessage({
+      type: 'live-ended',
+      eventId: session.eventId,
+      instanceId: INSTANCE_ID,
+    });
+    try { sessionStorage.removeItem(SESSION_STORAGE_KEY); } catch { /* ignore */ }
+    setSessionState(emptySession(session.pipSettings));
   };
 
   /**
