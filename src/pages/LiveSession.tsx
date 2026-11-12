@@ -1886,7 +1886,8 @@ function ShareModal({ isOpen, onClose, eventId, eventTitle }: { isOpen: boolean,
         senderPhoto: auth.currentUser.photoURL || '',
         type: 'message',
         content: 'invited you to a live session',
-        relatedId: eventId
+        relatedId: eventId,
+        liveInvite: true,
       });
 
       toast.success('Invitation sent!');

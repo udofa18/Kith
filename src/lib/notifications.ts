@@ -23,6 +23,8 @@ interface CreateNotificationParams {
   relatedId?: string;
   communityId?: string;
   channelId?: string;
+  /** Marks a live-session invite so it opens the in-app room modal. */
+  liveInvite?: boolean;
 }
 
 export async function createNotification({
@@ -37,7 +39,8 @@ export async function createNotification({
   content,
   relatedId,
   communityId,
-  channelId
+  channelId,
+  liveInvite
 }: CreateNotificationParams) {
   if (!recipientId) return;
 
@@ -77,6 +80,7 @@ export async function createNotification({
       relatedId: relatedId || '',
       communityId: communityId || '',
       channelId: channelId || '',
+      ...(liveInvite ? { liveInvite: true } : {}),
       read: false,
       createdAt: serverTimestamp()
     });

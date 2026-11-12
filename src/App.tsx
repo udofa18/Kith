@@ -52,6 +52,7 @@ import { LiveSessionProvider, useLiveSession } from './contexts/LiveSessionConte
 import { CurrentUserProvider } from './contexts/CurrentUserContext';
 import { LiveStatusProvider } from './contexts/LiveStatusContext';
 import FloatingLiveSession from './components/live/FloatingLiveSession';
+import LiveSessionModalHost from './components/live/LiveSessionModalHost';
 
 import LiveSessionWrapper from './LiveSessionWrapper';
 import { usePresence } from './features/messages/usePresence';
@@ -211,6 +212,7 @@ function AppContent({ user, onboardingRequired }: { user: any, onboardingRequire
 
   return (
     <LiveSessionWrapper>
+      <LiveSessionModalHost />
       {/* A live session owns the root room, even while minimized on another
           page; never nest a voice room inside it. */}
       {user && activeSession && !isLivePage && !liveSession.isActive ? (

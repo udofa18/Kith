@@ -14,6 +14,7 @@ import { db } from '../firebase';
 import { playNotificationSound } from '../lib/sounds';
 import { isDirectMessageType } from '../lib/notificationTaxonomy';
 import { notificationTarget } from '../lib/notificationRouting';
+import { isLiveInviteNotification, openLiveSessionModal } from '../lib/liveSessionModal';
 
 interface StreamNotification {
   id: string;
@@ -24,9 +25,35 @@ interface StreamNotification {
   content?: string;
   relatedId?: string;
   channelId?: string;
+  liveInvite?: boolean;
+  createdAt?: unknown;
 }
 
 const STREAM_LIMIT = 25;
+const RECENT_INVITE_MS = 30 * 60_000;
+
+function timestampMs(value: unknown): number | null {
+  if (!value) return null;
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+  if (value instanceof Date) return value.getTime();
+  const candidate = value as { toMillis?: () => number; seconds?: number };
+  if (typeof candidate.toMillis === 'function') return candidate.toMillis();
+  if (typeof candidate.seconds === 'number') return candidate.seconds * 1000;
+  return null;
+}
+
+/**
+ * Invites are only worth interrupting someone for while the room is still
+ * likely open. A missing timestamp is treated as fresh: better to show an
+ * unread invite than silently swallow it on a cold start.
+ */
+function liveInviteIsRecent(item: StreamNotification): boolean {
+  const created = timestampMs(item.createdAt);
+  return created === null || Date.now() - created < RECENT_INVITE_MS;
+}
 
 /**
  * Watches the signed-in user's unread notifications and surfaces new arrivals as
@@ -38,6 +65,8 @@ export function useNotificationStream(user: any) {
   const location = useLocation();
   const seen = useRef<Set<string>>(new Set());
   const hydrated = useRef(false);
+  const pathnameRef = useRef(location.pathname);
+  pathnameRef.current = location.pathname;
 
   const onNotificationsPage = location.pathname === '/feed'
     && new URLSearchParams(location.search).get('view') === 'notifications';
@@ -71,21 +100,49 @@ export function useNotificationStream(user: any) {
         const fresh = items.filter((item) => !seen.current.has(item.id));
         items.forEach((item) => seen.current.add(item.id));
 
-        // The first snapshot is the existing backlog, not a new event.
+        const dispatchInvite = (item: StreamNotification) => {
+          if (!item.relatedId || !isLiveInviteNotification(item)) return;
+          // No need to interrupt someone who is already in that room.
+          if (pathnameRef.current === `/live/${item.relatedId}`) return;
+          openLiveSessionModal({
+            eventId: item.relatedId,
+            notificationId: item.id,
+            source: 'notification',
+          });
+        };
+
+        // The first snapshot is the existing backlog, not a new event. Still
+        // surface one recent unread invite so an invite that landed while the
+        // tab was closed is not lost.
         if (!hydrated.current) {
           hydrated.current = true;
+          const recentInvite = fresh.find(
+            (item) => isLiveInviteNotification(item) && liveInviteIsRecent(item),
+          );
+          if (recentInvite) dispatchInvite(recentInvite);
           return;
         }
 
-        const incoming = fresh.filter((item) => !isDirectMessageType(item.type, item.content, item.channelId));
-        if (incoming.length === 0) return;
+        const liveInvites = fresh.filter(isLiveInviteNotification);
+        const incoming = fresh.filter(
+          (item) =>
+            !isLiveInviteNotification(item)
+            && !isDirectMessageType(item.type, item.content, item.channelId),
+        );
+        if (liveInvites.length === 0 && incoming.length === 0) return;
+
+        liveInvites.forEach(dispatchInvite);
 
         // An open channel already plays its own chime for mentions.
-        if (incoming.some((item) => item.type !== 'channel_mention')) {
+        if (
+          liveInvites.length > 0
+          || incoming.some((item) => item.type !== 'channel_mention')
+        ) {
           playNotificationSound();
         }
 
         if (onNotificationsPageRef.current) return;
+        if (incoming.length === 0) return;
 
         const newest = incoming[0];
         const grouped = incoming.length > 1;

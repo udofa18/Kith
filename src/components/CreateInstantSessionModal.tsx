@@ -128,7 +128,8 @@ export default function CreateInstantSessionModal({ isOpen, onClose }: CreateIns
             senderPhoto: auth.currentUser.photoURL || '',
             type: 'message',
             content: 'invited you to an instant session',
-            relatedId: eventId
+            relatedId: eventId,
+            liveInvite: true
           });
         }
         toast.success('Invitations sent!', { id: 'invites' });
@@ -149,6 +150,7 @@ export default function CreateInstantSessionModal({ isOpen, onClose }: CreateIns
               type: 'event_invite',
               content: `is live now: ${title.trim()}`,
               relatedId: eventId,
+              liveInvite: true,
             }),
           ),
         ).catch(() => undefined);
