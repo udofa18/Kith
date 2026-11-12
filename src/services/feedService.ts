@@ -1,4 +1,4 @@
-import { collection, query, getDocs, orderBy, limit, Firestore } from 'firebase/firestore';
+import { collection, query, getDocs, getDoc, doc, orderBy, limit, Firestore } from 'firebase/firestore';
 import { db } from '../firebase';
 import { getSupabase } from '../supabase';
 import { contentRepository } from './db/postsRepository';
@@ -60,6 +60,57 @@ export class FeedService {
       live: withTimes.filter(e => e.startMs <= now && e.endMs > now).slice(0, count),
       upcoming: withTimes.filter(e => e.startMs > now).sort((a, b) => a.startMs - b.startMs).slice(0, count),
     };
+  }
+
+  /**
+   * Every discoverable room that is inside its live window.
+   *
+   * Public rooms come from the usual list query. Followers-only rooms are read
+   * one by one from the on-air ids, because Firestore rules only allow the host
+   * and their followers to read those documents; a broad followers query would
+   * be rejected for everyone else. Unlisted rooms stay link-only.
+   */
+  async getLiveNowEvents(extraIds: string[] = []): Promise<any[]> {
+    const publicEvents = await contentRepository.queryCollection('events', 'events', {
+      filters: [{ field: 'visibility', op: 'eq', value: 'public' }],
+      orderBy: { field: 'createdAt', desc: true },
+      limit: 40,
+    });
+
+    const byId = new Map<string, any>();
+    publicEvents.forEach((event) => {
+      const id = event?.id;
+      if (typeof id === 'string' && id) byId.set(id, event);
+    });
+
+    // Presence tells us exactly which rooms are on air, including rooms that
+    // were created after the public list was cached.
+    const missing = [...new Set(extraIds)].filter(
+      (id) => typeof id === 'string' && id && !byId.has(id),
+    );
+    await Promise.all(
+      missing.map(async (id) => {
+        try {
+          const snapshot = await getDoc(doc(this.firestore, 'events', id));
+          if (snapshot.exists()) {
+            byId.set(id, { id: snapshot.id, ...snapshot.data() });
+          }
+        } catch {
+          // A followers-only room the viewer cannot read stays private.
+        }
+      }),
+    );
+
+    const now = Date.now();
+    return [...byId.values()]
+      .filter((event) => event.visibility === 'public' || event.visibility === 'followers')
+      .map((event) => ({
+        ...event,
+        startMs: toMillis(event.startDate ?? event.start_date),
+        endMs: toMillis(event.endDate ?? event.end_date),
+      }))
+      .filter((event) => event.startMs <= now && event.endMs > now)
+      .sort((a, b) => b.startMs - a.startMs);
   }
 
   async getFeaturedArticles(count: number = 5): Promise<any[]> {

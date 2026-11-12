@@ -77,14 +77,17 @@ export default function CreateInstantSessionModal({ isOpen, onClose }: CreateIns
       const userData = userSnap.exists() ? userSnap.data() : null;
       const activitySettings = normalizeSettings(userData).activity;
       const instant = activitySettings.instantSessions;
-      const visibility =
-        instant.visibleTo === 'nobody' || instant.visibleTo === 'me'
-          ? 'unlisted'
-          : instant.visibleTo === 'everyone' && instant.appearInHappeningNow
-            ? 'public'
-            : instant.visibleTo === 'followers'
-              ? 'followers'
-              : 'unlisted';
+      const discoverable =
+        instant.appearInHappeningNow
+        && instant.visibleTo !== 'nobody'
+        && instant.visibleTo !== 'me';
+      const visibility = !discoverable
+        ? 'unlisted'
+        : instant.visibleTo === 'everyone'
+          ? 'public'
+          : instant.visibleTo === 'followers'
+            ? 'followers'
+            : 'unlisted';
 
       const eventData = {
         title: title.trim(),
@@ -137,7 +140,7 @@ export default function CreateInstantSessionModal({ isOpen, onClose }: CreateIns
 
       const senderName = userData?.displayName || auth.currentUser.displayName || 'Someone';
 
-      if (instant.notifyFollowers && visibility === 'followers') {
+      if (instant.notifyFollowers && instant.visibleTo === 'followers') {
         const followersSnap = await getDocs(collection(db, 'users', auth.currentUser.uid, 'followers')).catch(() => null);
         const followers = followersSnap?.docs.slice(0, 100) ?? [];
         await Promise.all(

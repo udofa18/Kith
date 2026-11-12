@@ -1,27 +1,69 @@
+import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowUpRight, Radio, Sparkles } from 'lucide-react';
 import { feedService } from '../../../services/feedService';
-import { queryKeys, STALE } from '../../../lib/queryClient';
+import { queryKeys } from '../../../lib/queryClient';
 import { eventHref } from '../../../lib/eventLinks';
 import { useLiveStatus } from '../../../contexts/LiveStatusContext';
+import { useCurrentUser } from '../../../contexts/CurrentUserContext';
+import { fetchViewerContext } from '../api/viewer';
 
 /**
  * The feed's live doorway: rooms that are on air right now, plus a one-tap
  * path for anyone who wants to open their own room.
  */
 export default function LiveNowRow({ onGoLive }: { onGoLive?: () => void }) {
-  const { data } = useQuery({
-    queryKey: queryKeys.upcomingEvents(),
-    queryFn: () => feedService.getUpcomingEvents(4),
-    staleTime: STALE.sidebar,
+  const user = useCurrentUser();
+  const uid = user?.uid ?? null;
+
+  // Followers-only rooms are discoverable for the host and their followers.
+  // The viewer query is shared with the feed, so this costs no extra request.
+  const { data: viewer } = useQuery({
+    queryKey: queryKeys.feedViewer(uid),
+    queryFn: () => fetchViewerContext(uid),
+    staleTime: 1000 * 60 * 5,
+    enabled: !!uid,
   });
-  // Presence is the source of truth for "on air". An instant room whose host
-  // closed the tab keeps a future endDate, so the date window alone would leave
-  // an abandoned room in the rail.
+
+  // Presence is the source of truth for "on air". It also tells us which
+  // followers-only rooms are worth reading, since those documents are not
+  // readable through a broad query.
   const { liveByUser, ready } = useLiveStatus();
-  const onAir = new Set([...liveByUser.values()].map(event => event.id));
-  const live = (data?.live ?? []).filter(event => !ready || onAir.has(event.id));
+  const onAirIds = useMemo(
+    () =>
+      [...new Set([...liveByUser.values()].map((event) => event.id).filter(Boolean))].sort(),
+    [liveByUser],
+  );
+  const onAirKey = onAirIds.join('|');
+
+  // A room can start after the feed's scheduled-events list was cached, so the
+  // rail fetches its own data and refreshes while it is on screen.
+  const { data } = useQuery({
+    queryKey: [...queryKeys.liveNowEvents(), onAirKey],
+    queryFn: () => feedService.getLiveNowEvents(onAirIds),
+    staleTime: 0,
+    refetchInterval: 20_000,
+    refetchOnWindowFocus: true,
+  });
+
+  const followingIds = viewer?.followingIds;
+
+  const live = useMemo(() => {
+    const onAir = new Set(onAirIds);
+    return (data ?? [])
+      .filter((event: any) => {
+        if (ready && !onAir.has(event.id)) return false;
+        if (event.visibility !== 'followers') return true;
+        if (!uid) return false;
+        const managers = [
+          event.hostId,
+          ...(Array.isArray(event.coHostIds) ? event.coHostIds : []),
+        ];
+        return managers.includes(uid) || (followingIds?.has(event.hostId) ?? false);
+      })
+      .slice(0, 4);
+  }, [data, onAirIds, ready, uid, followingIds]);
 
   return (
     <section aria-label="Live now" className="px-4 pt-3 pb-4 sm:px-5">
