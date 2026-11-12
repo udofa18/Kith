@@ -747,9 +747,14 @@ service cloud.firestore {
     // event visibility rules, so followers and public viewers can join without
     // opening the host-only event-details page. It is deterministic per eventId,
     // which keeps list queries (chat history) valid.
+    //
+    // Instant sessions are link-first: the shared link is the invite, so anyone
+    // holding it may read the room's chat/settings even when the session was
+    // discovered only by followers. `visibility` still controls discovery.
     function canReadLiveRoom(eventId) {
       let event = get(/databases/$(database)/documents/events/$(eventId)).data;
       return isAdmin() || isEventHost(eventId) || isRegisteredForEvent(eventId) ||
+             event.get('type', '') == 'instant' || event.get('isInstant', false) == true ||
              event.visibility in ['public', 'unlisted'] ||
              (event.visibility == 'community' && 'communityId' in event && isCommunityMember(event.communityId)) ||
              (event.visibility == 'followers' && isAuthenticated() &&

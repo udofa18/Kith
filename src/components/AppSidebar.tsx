@@ -360,7 +360,7 @@ function ProfilePopup({
 
               {myLiveEvent && (
                 <Link
-                  to={`/live/${myLiveEvent.id}`}
+                  to={`/live/${myLiveEvent.id}?join=1`}
                   onClick={onClose}
                   className="group mt-2 flex items-center justify-between rounded-2xl bg-[#ff6b4a] px-4 py-2.5 text-[#1a1210] transition-all hover:bg-[#ff7d61]"
                 >

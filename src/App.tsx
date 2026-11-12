@@ -34,6 +34,7 @@ import CreateChallenge from './pages/CreateChallenge';
 import EventsPage from './pages/EventsPage';
 import EventDetails from './pages/EventDetails';
 import LiveSession from './pages/LiveSession';
+import LiveConsole from './pages/LiveConsole';
 import SettingsPage from './pages/SettingsPage';
 import AuthPage from './pages/AuthPage';
 import ArticleWrite from './pages/ArticleWrite';
@@ -132,6 +133,7 @@ function AppRoutes({ user, onboardingRequired }: { user: any, onboardingRequired
       <Route path="/events" element={<EventsPage />} />
       <Route path="/events/:eventId" element={<EventDetails />} />
       <Route path="/live/:eventId" element={<LiveSession />} />
+      <Route path="/live/:eventId/console" element={<LiveConsole />} />
       <Route path="/articles" element={<ArticlesPage />} />
       <Route path="/article/:articleId" element={<ArticleView />} />
       <Route path="/community/:communityId" element={<CommunityRedirect />} />

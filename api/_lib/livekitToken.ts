@@ -11,6 +11,7 @@
 import admin from 'firebase-admin';
 import { AccessToken, TrackSource } from 'livekit-server-sdk';
 import { firestoreAdmin } from './firebaseApp';
+import { publicEventInfo, toMillis } from './liveEventInfo';
 
 const PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'gen-lang-client-0475896362';
 const DATABASE_ID = process.env.FIRESTORE_DATABASE_ID || 'ai-studio-a6c9e366-2e98-4fcd-bf9b-04eac80f64b4';
@@ -44,35 +45,11 @@ const isCommunityMember = async (communityId: string, uid: string, idToken: stri
  * from the event document, not from anything the client sends:
  * - hosts/co-hosts always may join while the room is live
  * - public and unlisted rooms are link-accessible (guests included)
+ * - instant rooms are link-accessible too: the shared invite is the key, while
+ *   `visibility` only controls where the room can be discovered
  * - community rooms require membership, follower rooms require following
  * - paid events require a registration
  */
-const toMillis = (value: any): number => {
-  if (typeof value === 'string') return Date.parse(value);
-  if (value && typeof value.toMillis === 'function') return value.toMillis();
-  if (value && typeof value.seconds === 'number') return value.seconds * 1000;
-  return NaN;
-};
-
-/**
- * The small, non-sensitive slice of an event the room UI needs to route and
- * render. Guests cannot read unlisted event documents, so the token response
- * carries this instead of relying on Firestore rules.
- */
-const roomInfo = (eventId: string, event: Record<string, any>) => ({
-  id: eventId,
-  title: typeof event.title === 'string' ? event.title : '',
-  type: event.type,
-  isInstant: event.isInstant === true,
-  visibility: event.visibility,
-  hostId: event.hostId,
-  coHostIds: Array.isArray(event.coHostIds) ? event.coHostIds : [],
-  startDate: event.startDate,
-  endDate: event.endDate,
-  expiresAt: event.expiresAt,
-  status: event.status,
-});
-
 interface EventJoinCheck {
   error: string | null;
   event?: Record<string, any>;
@@ -89,6 +66,20 @@ export async function eventJoinError(eventId: string, identity: string, signedIn
   if (event.status === 'ended') return { ...checked, error: 'This session has ended' };
   const coHosts: string[] = Array.isArray(event.coHostIds) ? event.coHostIds : [];
   const isManager = signedIn && (event.hostId === identity || coHosts.includes(identity));
+  const isInstant = event.type === 'instant' || event.isInstant === true;
+
+  // An instant room has a hard expiry even if its status has not been flipped
+  // to `ended` yet (for example after a crashed host tab).
+  if (isInstant) {
+    const expires = toMillis(event.expiresAt);
+    const end = toMillis(event.endDate);
+    if (
+      (Number.isFinite(expires) && Date.now() > expires) ||
+      (Number.isFinite(end) && Date.now() > end)
+    ) {
+      return { ...checked, error: 'This session has ended' };
+    }
+  }
 
   // A host may not have pressed "Start" yet even though the scheduled window is
   // open. Allow the room during that window; block it before and after.
@@ -103,7 +94,14 @@ export async function eventJoinError(eventId: string, identity: string, signedIn
   if (isManager) return { ...checked, error: null };
 
   const visibility = event.visibility;
-  if (visibility === 'public' || visibility === 'unlisted') {
+  // For instant sessions the link is the invite. `visibility` controls where the
+  // room is discovered (feed, profile, search), not who may use a link the host
+  // shared. This is what makes "anyone with the link can drop in" true for
+  // followers-only / mutuals-only sessions. Scheduled events keep the stricter
+  // audience rules below.
+  if (isInstant) {
+    // Still enforce tickets for paid rooms.
+  } else if (visibility === 'public' || visibility === 'unlisted') {
     // Still enforce tickets for paid rooms.
   } else if (visibility === 'community') {
     if (!signedIn || typeof event.communityId !== 'string') {
@@ -183,11 +181,13 @@ export async function issueLivekitToken(body: any, authorization?: string): Prom
   }
 
   // Everything that is not a community voice/stage room or a 1:1 call is a live event room.
-  let eventInfo: ReturnType<typeof roomInfo> | undefined;
+  let eventInfo: ReturnType<typeof publicEventInfo> | undefined;
   if (!community && !room.startsWith('call_')) {
     const check = await eventJoinError(room, identity, !!idToken);
     if (check.error) return fail(idToken ? 403 : 401, check.error);
-    if (check.event) eventInfo = roomInfo(room, check.event);
+    // Guests cannot read unlisted event documents, so the token carries the
+    // routing fields and display basics instead.
+    if (check.event) eventInfo = publicEventInfo(room, check.event, { includeContent: true });
   }
 
   const at = new AccessToken(apiKey, apiSecret, {

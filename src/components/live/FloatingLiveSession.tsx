@@ -52,7 +52,7 @@ export default function FloatingLiveSession() {
   const handleExpand = () => {
     expandSession();
     if (session.eventId) {
-      navigate(liveRoomPath({ id: session.eventId }));
+      navigate(`${liveRoomPath({ id: session.eventId })}?join=1`);
     }
   };
 

@@ -314,7 +314,7 @@ export default function EventDetails() {
       }, { merge: true });
 
       setShowEarlyAccessConfirm(false);
-      navigate(liveRoomPath(event));
+      navigate(`${liveRoomPath(event)}?join=1`);
     } catch (error) {
       console.error('Error starting session:', error);
       toast.error('Failed to start session');
@@ -665,9 +665,18 @@ export default function EventDetails() {
                   )
                 )}
 
+                {canManage && eventId && (
+                  <Link
+                    to={`/live/${eventId}/console`}
+                    className="flex w-full items-center justify-center gap-2 rounded-full border border-border bg-transparent py-3 text-[12px] font-bold text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
+                  >
+                    <Settings2 size={15} /> Host console
+                  </Link>
+                )}
+
                 {!canManage && isRegistered && !event.isOffline && canJoinNow && !ended && (
                   <button
-                    onClick={() => navigate(liveRoomPath(event))}
+                    onClick={() => navigate(`${liveRoomPath(event)}?join=1`)}
                     className="group flex w-full items-center justify-center gap-2 rounded-full bg-primary py-3.5 text-[13px] font-bold text-primary-foreground shadow-glow-primary transition-all hover:brightness-105 active:scale-[0.99]"
                   >
                     <Radio size={16} /> Join the live room

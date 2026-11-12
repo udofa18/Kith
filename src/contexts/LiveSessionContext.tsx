@@ -32,6 +32,8 @@ interface LiveSessionContextType {
   endSession: () => void;
   /** Ask the server to end the room for everyone, then clear local state. */
   endSessionForEveryone: (eventId?: string) => Promise<boolean>;
+  /** The display name a guest chose in the lobby. Empty for signed-in members. */
+  guestName: string;
   setGuestName: (name: string) => void;
   updatePipSettings: (settings: Partial<LiveSessionState['pipSettings']>) => void;
 }
@@ -394,7 +396,7 @@ export function LiveSessionProvider({ children }: { children: React.ReactNode })
   };
 
   return (
-    <LiveSessionContext.Provider value={{ session, startSession, minimizeSession, expandSession, hideOverlay, endSession, endSessionForEveryone, setGuestName, updatePipSettings }}>
+    <LiveSessionContext.Provider value={{ session, startSession, minimizeSession, expandSession, hideOverlay, endSession, endSessionForEveryone, guestName, setGuestName, updatePipSettings }}>
       {children}
     </LiveSessionContext.Provider>
   );

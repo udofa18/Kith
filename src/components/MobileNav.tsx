@@ -424,7 +424,7 @@ export default function MobileNav({ user }: { user: any }) {
 
                       {myLiveEvent && (
                         <Link
-                          to={`/live/${myLiveEvent.id}`}
+                          to={`/live/${myLiveEvent.id}?join=1`}
                           onClick={closeMore}
                           className="relative mt-2 flex items-center justify-between rounded-2xl bg-[#ff6b4a] px-3.5 py-2.5 text-[#1a1210]"
                         >

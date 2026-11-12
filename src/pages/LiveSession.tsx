@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { doc, getDoc, onSnapshot, setDoc, updateDoc, deleteDoc, collection, query, where, getDocs, addDoc, serverTimestamp, writeBatch, increment } from 'firebase/firestore';
 import { db, auth, handleFirestoreError, OperationType } from '../firebase';
 import { 
@@ -71,6 +71,7 @@ import {
 import LiveChat from '../components/live/LiveChat';
 import LivePolls from '../components/live/LivePolls';
 import LiveQA from '../components/live/LiveQA';
+import LiveLobby from '../components/live/LiveLobby';
 import Avatar from '../components/ui/Avatar';
 import axios from 'axios';
 import { createNotification } from '../lib/notifications';
@@ -86,7 +87,17 @@ import { LIVE_HEARTBEAT_STALE_MS } from '../lib/livePresence';
 export default function LiveSession() {
   const { eventId } = useParams();
   const navigate = useNavigate();
-  const { session, minimizeSession, expandSession, endSession, endSessionForEveryone, startSession, setGuestName: setGlobalGuestName } = useLiveSession();
+  const [searchParams] = useSearchParams();
+  const {
+    session,
+    guestName,
+    minimizeSession,
+    expandSession,
+    endSession,
+    endSessionForEveryone,
+    startSession,
+    setGuestName: setGlobalGuestName,
+  } = useLiveSession();
   const [loading, setLoading] = useState(!session.isActive);
   const [error, setError] = useState<string | null>(null);
   const [audioNeedsActivation, setAudioNeedsActivation] = useState(false);
@@ -102,8 +113,6 @@ export default function LiveSession() {
   const [manualPinnedTrack, setManualPinnedTrack] = useState<{ identity: string; source: Track.Source } | null>(null);
   const [notifications, setNotifications] = useState<{ id: number; message: string; type: 'info' | 'hand' }[]>([]);
   const [timeRemaining, setTimeRemaining] = useState<number | null>(null);
-  const [guestName, setGuestName] = useState<string>('');
-  const [showGuestPrompt, setShowGuestPrompt] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const [liveEvent, setLiveEvent] = useState<any>(null);
   const [settings, setSettings] = useState<LiveSessionSettings>(DEFAULT_LIVE_SETTINGS);
@@ -113,9 +122,17 @@ export default function LiveSession() {
   const [isDesktop, setIsDesktop] = useState(() =>
     typeof window === 'undefined' ? true : window.matchMedia('(min-width: 1024px)').matches,
   );
+  // Direct links (`?join=1`) and the lobby's join button mount the room; plain
+  // `/live/:id` links stay in the lobby until the viewer chooses to join.
+  const [joinRequested, setJoinRequested] = useState(false);
 
   const event = liveEvent || session.eventData;
   const exitHref = liveExitHref(event || (eventId ? { id: eventId } : null));
+  const storedSession = session.isActive && session.eventId === eventId && !!session.token;
+  const explicitJoin = searchParams.get('join') === '1';
+  const needsGuestName = !auth.currentUser && !guestName.trim() && !storedSession;
+  const wantsRoom = joinRequested || explicitJoin || storedSession;
+  const showLobby = !!eventId && (!wantsRoom || needsGuestName);
   const startedForRef = useRef<string | null>(null);
   // True once this page has actually been connected to its room. Clearing the
   // session afterwards (disconnect, host end) should navigate away; a failed
@@ -198,6 +215,13 @@ export default function LiveSession() {
   useEffect(() => {
     if (!eventId) return;
 
+    // The lobby (or the guest-name step) is still on screen; do not mint a
+    // token until the viewer explicitly chooses to join.
+    if (showLobby) {
+      setLoading(false);
+      return;
+    }
+
     // Already connected to this room.
     if (session.isActive && session.eventId === eventId) {
       joinedRef.current = true;
@@ -212,14 +236,6 @@ export default function LiveSession() {
       return;
     }
 
-    // Guests pick a display name before we ask the server for a token, so a
-    // denied join can explain itself instead of bouncing them silently.
-    if (!auth.currentUser && !guestName) {
-      setShowGuestPrompt(true);
-      setLoading(false);
-      return;
-    }
-
     startedForRef.current = eventId;
     joinedRef.current = false;
     setLoading(true);
@@ -227,7 +243,14 @@ export default function LiveSession() {
       .then(() => setError(null))
       .catch((err: any) => setError(err?.message || 'We could not open this room'))
       .finally(() => setLoading(false));
-  }, [eventId, session.isActive, session.eventId, guestName, loading, error, navigate, exitHref, startSession]);
+  }, [eventId, showLobby, session.isActive, session.eventId, guestName, loading, error, navigate, exitHref, startSession]);
+
+  const handleLobbyJoin = (name?: string) => {
+    if (!eventId) return;
+    if (name) setGlobalGuestName(name);
+    setJoinRequested(true);
+    navigate(`/live/${eventId}?join=1`, { replace: true });
+  };
 
   // Opening the room page brings a minimized call back into the tab, so the
   // full room and the floating mini-player never render at the same time.
@@ -402,6 +425,17 @@ export default function LiveSession() {
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, [session.isActive, session.isMinimized, minimizeSession]);
 
+  // Kept below every hook so joining the room never changes the hook order.
+  if (showLobby && eventId) {
+    return (
+      <LiveLobby
+        eventId={eventId}
+        initialGuestName={guestName}
+        onJoin={handleLobbyJoin}
+      />
+    );
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen bg-[#050505] flex items-center justify-center">
@@ -409,50 +443,6 @@ export default function LiveSession() {
           <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin" />
           <p className="font-mono text-primary animate-pulse">ESTABLISHING_SECURE_CONNECTION...</p>
         </div>
-      </div>
-    );
-  }
-
-  if (showGuestPrompt) {
-    return (
-      <div className="min-h-screen bg-[#050505] flex items-center justify-center p-4">
-        <motion.div 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="w-full max-w-md bg-white/[0.03] backdrop-blur-2xl border border-white/10 rounded-[32px] p-8 shadow-2xl"
-        >
-          <div className="flex justify-center mb-6">
-            <div className="w-16 h-16 rounded-2xl bg-primary/20 flex items-center justify-center text-primary shadow-[0_0_30px_rgba(var(--primary),0.2)]">
-              <User size={32} />
-            </div>
-          </div>
-          <h2 className="text-2xl font-bold text-center mb-2">Welcome!</h2>
-          <p className="text-white/40 text-center mb-8">What should we call you during this session?</p>
-          
-          <div className="space-y-4">
-            <input 
-              type="text"
-              autoFocus
-              placeholder="Enter your name"
-              value={guestName}
-              onChange={(e) => setGuestName(e.target.value)}
-              className="w-full bg-white/5 border border-white/10 rounded-2xl px-6 py-4 outline-none focus:border-primary transition-all text-lg font-bold text-center"
-              onKeyDown={(e) => e.key === 'Enter' && guestName.trim() && setShowGuestPrompt(false)}
-            />
-            <button
-              disabled={!guestName.trim()}
-              onClick={() => {
-                setGlobalGuestName(guestName.trim());
-                setShowGuestPrompt(false);
-                setLoading(true);
-              }}
-              className="w-full bg-primary text-white py-4 rounded-2xl font-bold hover:bg-primary/90 transition-all disabled:opacity-50 shadow-[0_0_30px_rgba(var(--primary),0.3)]"
-            >
-              Join Session
-            </button>
-            <p className="text-[10px] text-white/20 text-center uppercase tracking-widest font-bold">You are joining as a guest</p>
-          </div>
-        </motion.div>
       </div>
     );
   }
@@ -717,6 +707,7 @@ export default function LiveSession() {
             onExtend={() => extendSession(15)}
             extending={extending}
             onOpenPeople={() => { setShowStudio(false); setShowSidebar(true); setActiveTab('participants'); }}
+            onOpenConsole={() => { setShowStudio(false); navigate(`/live/${eventId}/console`); }}
           />
         </div>
 
@@ -1192,6 +1183,7 @@ function HostStudio({
   onExtend,
   extending,
   onOpenPeople,
+  onOpenConsole,
 }: {
   open: boolean;
   onClose: () => void;
@@ -1202,6 +1194,7 @@ function HostStudio({
   onExtend: () => void;
   extending: boolean;
   onOpenPeople: () => void;
+  onOpenConsole: () => void;
 }) {
   const controls: { key: keyof LiveSessionSettings; label: string; description: string; icon: ReactNode }[] = [
     { key: 'chat', label: 'Live chat', description: 'Let the audience talk between themselves.', icon: <MessageSquare size={16} /> },
@@ -1291,6 +1284,12 @@ function HostStudio({
                     className="flex items-center justify-center gap-2 rounded-2xl border border-white/[0.07] bg-white/[0.02] px-3 py-3 text-[11px] font-semibold text-white/65 transition-colors hover:bg-white/[0.05] hover:text-white"
                   >
                     <Users size={15} /> Manage people <ChevronRight size={13} className="text-white/25" />
+                  </button>
+                  <button
+                    onClick={onOpenConsole}
+                    className="col-span-2 flex items-center justify-center gap-2 rounded-2xl border border-primary/25 bg-primary/10 px-3 py-3 text-[11px] font-bold text-primary transition-colors hover:bg-primary/20"
+                  >
+                    <Settings2 size={15} /> Open host console <ChevronRight size={13} className="text-primary/50" />
                   </button>
                 </div>
               </section>

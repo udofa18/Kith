@@ -8,6 +8,7 @@ import {
 import { toast } from 'react-hot-toast';
 import { db } from '../../firebase';
 import Avatar from '../../components/ui/Avatar';
+import LivePeek from '../../components/live/LivePeek';
 import { useLiveStatus } from '../../contexts/LiveStatusContext';
 import VerifiedBadge from '../../components/VerifiedBadge';
 import { activeStreak } from '../shiplog/streak';
@@ -224,13 +225,14 @@ export default function ProfileHeader({ profile, relationship, me, myFollowing }
               <span className="px-1.5 py-0.5 rounded bg-black/5 dark:bg-white/10 text-xs font-medium text-black/60 dark:text-white/60">Follows you</span>
             )}
             {liveEvent && (
-              <Link
-                to={`/live/${liveEvent.id}`}
-                className="inline-flex items-center gap-1.5 rounded-full bg-red-500 px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-[0.12em] text-white shadow-sm"
+              <LivePeek
+                eventId={liveEvent.id}
+                ariaLabel={`View live session${liveEvent.title ? `: ${liveEvent.title}` : ''}`}
+                className="inline-flex cursor-pointer items-center gap-1.5 rounded-full bg-red-500 px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-[0.12em] text-white shadow-sm"
               >
                 <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white" />
                 Live now
-              </Link>
+              </LivePeek>
             )}
             {u.accountType === 'brand' && <span className="px-2 py-0.5 rounded-full bg-primary/10 text-primary text-xs font-medium">Brand</span>}
             {u.userType === 'creator' && <span className="px-2 py-0.5 rounded-full bg-primary/10 text-primary text-xs font-medium">Creator</span>}

@@ -136,6 +136,28 @@ describe('live room token gating', () => {
     await expect(eventJoinError('e1', 'user-2', true)).resolves.toMatchObject({ error: null });
   });
 
+  it('treats the link as the invite for an instant session, even followers-only', async () => {
+    seedEvent({ type: 'instant', isInstant: true, visibility: 'followers' });
+
+    // A signed-in member who does not follow the host, and a guest.
+    await expect(eventJoinError('e1', 'user-2', true)).resolves.toMatchObject({ error: null });
+    await expect(eventJoinError('e1', 'guest_abc', false)).resolves.toMatchObject({ error: null });
+  });
+
+  it('closes an instant session at its expiry even if the status is still live', async () => {
+    seedEvent({
+      type: 'instant',
+      isInstant: true,
+      visibility: 'followers',
+      status: 'live',
+      endDate: new Date(now - 60_000).toISOString(),
+      expiresAt: new Date(now - 60_000).toISOString(),
+    });
+    await expect(eventJoinError('e1', 'user-2', true)).resolves.toMatchObject({
+      error: 'This session has ended',
+    });
+  });
+
   it('requires membership for a community room', async () => {
     seedEvent({ visibility: 'community', communityId: 'c1' });
     await expect(eventJoinError('e1', 'user-2', true)).resolves.toMatchObject({

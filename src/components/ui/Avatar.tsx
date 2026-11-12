@@ -1,5 +1,6 @@
 import { cn } from '../../lib/cn';
 import { useLiveStatus } from '../../contexts/LiveStatusContext';
+import LivePeek from '../live/LivePeek';
 
 const statusTone = {
   online: 'bg-success',
@@ -66,12 +67,21 @@ export default function Avatar({
         className={cn(
           'relative z-[1] h-full w-full bg-muted object-cover',
           square ? 'rounded-xl' : 'rounded-full',
-          live && 'ring-2 ring-red-500 ring-offset-2 ring-offset-background',
           !live && ring && 'ring-2 ring-background',
         )}
       />
       {live ? (
         <>
+          {/* The ring itself is the clickable trigger, so tapping a live avatar
+              opens the session peek instead of only navigating to the profile. */}
+          <LivePeek
+            eventId={live.id}
+            ariaLabel={`View live session${live.title ? `: ${live.title}` : ''}`}
+            className={cn(
+              'absolute inset-0 z-[3] cursor-pointer ring-2 ring-red-500 ring-offset-2 ring-offset-background transition-shadow focus:outline-none focus-visible:ring-primary',
+              square ? 'rounded-xl' : 'rounded-full',
+            )}
+          />
           <span
             className={cn(
               'absolute z-[2] rounded-full border-2 border-background bg-red-500',

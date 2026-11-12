@@ -10,6 +10,8 @@ import multer from 'multer';
 import { fetchMetadata, validateUrl } from './api/_lib/unfurl';
 import { issueLivekitToken } from './api/_lib/livekitToken';
 import { endLiveSession } from './api/_lib/liveSession';
+import { getLiveSessionInfo } from './api/_lib/liveSessionInfo';
+import { handleLivekitWebhook } from './api/_lib/livekitWebhook';
 import {
   listBanks,
   createPayoutAccount,
@@ -60,6 +62,16 @@ async function startServer() {
   app.post('/api/payments/stripe-webhook', express.raw({ type: 'application/json' }), async (req, res) => {
     const signature = req.headers['stripe-signature'];
     const { status, body } = await handleStripeWebhook(req.body as Buffer, typeof signature === 'string' ? signature : undefined);
+    res.status(status).json(body);
+  });
+
+  // LiveKit signs the exact raw bytes, so register before express.json().
+  app.post('/api/livekit/webhook', express.raw({ type: '*/*' }), async (req, res) => {
+    const authorization = req.headers.authorization;
+    const { status, body } = await handleLivekitWebhook(
+      req.body as Buffer,
+      Array.isArray(authorization) ? authorization[0] : authorization,
+    );
     res.status(status).json(body);
   });
 
@@ -157,6 +169,18 @@ async function startServer() {
     }
   });
 
+
+  // Public lobby information (mirrors api/live-session/info.ts)
+  app.get('/api/live-session/info', async (req, res) => {
+    const eventId = typeof req.query.eventId === 'string' ? req.query.eventId : '';
+    try {
+      const { status, body } = await getLiveSessionInfo(eventId, req.headers.authorization);
+      res.status(status).json(body);
+    } catch (error) {
+      console.error('Error reading live session info:', error);
+      res.status(500).json({ error: 'Failed to read the live session' });
+    }
+  });
 
   // Server-authoritative live-session ending (mirrors api/live-session/end.ts)
   app.post('/api/live-session/end', async (req, res) => {

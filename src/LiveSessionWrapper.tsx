@@ -2,6 +2,7 @@ import React from 'react';
 import { useLiveSession } from './contexts/LiveSessionContext';
 import { LiveKitRoom, RoomAudioRenderer } from '@livekit/components-react';
 import FloatingLiveSession from './components/live/FloatingLiveSession';
+import RoomParticipantPresence from './components/live/RoomParticipantPresence';
 
 /**
  * One root LiveKit room for live sessions.
@@ -27,6 +28,7 @@ export default function LiveSessionWrapper({ children }: { children: React.React
       className="flex flex-col h-full"
     >
       {children}
+      <RoomParticipantPresence />
       <FloatingLiveSession />
       <RoomAudioRenderer />
     </LiveKitRoom>

@@ -171,7 +171,7 @@ export default function CreateInstantSessionModal({ isOpen, onClose }: CreateIns
 
       toast.success('Session started!');
       setStep(0); setTitle(''); setSelectedFriends([]);
-      navigate(`/live/${eventId}`);
+      navigate(`/live/${eventId}?join=1`);
       onClose();
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'events');

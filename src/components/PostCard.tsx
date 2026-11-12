@@ -19,6 +19,7 @@ import { updateDailyStats } from '../lib/stats';
 import VerifiedBadge from './VerifiedBadge';
 import { useCurrentUser } from '../contexts/CurrentUserContext';
 import { useLiveStatus } from '../contexts/LiveStatusContext';
+import LivePeek from './live/LivePeek';
 import PostMedia from './post/PostMedia';
 import LinkPreview, { firstUrl } from './post/LinkPreview';
 import { buildSearchTokens, extractHashtags, mergeTags, normalizeTag } from '../features/search/tokens';
@@ -741,14 +742,14 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
                 <span className="text-black/50 dark:text-white/50 truncate">@{authorProfile.username}</span>
               )}
               {liveEvent && (
-                <Link
-                  to={`/live/${liveEvent.id}`}
-                  onClick={(event) => event.stopPropagation()}
-                  className="inline-flex items-center gap-1 rounded-full bg-red-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.12em] text-red-500 transition-colors hover:bg-red-500/15"
+                <LivePeek
+                  eventId={liveEvent.id}
+                  ariaLabel={`View live session${liveEvent.title ? `: ${liveEvent.title}` : ''}`}
+                  className="inline-flex cursor-pointer items-center gap-1 rounded-full bg-red-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.12em] text-red-500 transition-colors hover:bg-red-500/15"
                 >
                   <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-500" />
                   Live
-                </Link>
+                </LivePeek>
               )}
               <span className="text-black/30 dark:text-white/30" aria-hidden>·</span>
               <span className="text-black/50 dark:text-white/50 whitespace-nowrap">{formatPostDate(post.createdAt)}</span>

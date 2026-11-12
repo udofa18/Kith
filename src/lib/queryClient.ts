@@ -22,6 +22,7 @@ export const queryKeys = {
   trendingTags: () => ['trending-tags'] as const,
   topCreators: () => ['top-creators'] as const,
   upcomingEvents: () => ['upcoming-events'] as const,
+  liveSessionInfo: (eventId: string) => ['live-session-info', eventId] as const,
   featuredArticles: () => ['featured-articles'] as const,
   featuredChallenges: () => ['featured-challenges'] as const,
 };
