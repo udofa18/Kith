@@ -18,6 +18,7 @@ import { EVENT_CATEGORIES } from '../lib/eventCategories';
 import { cityOf, nearestCity } from '../lib/eventCities';
 import { byScore, interleavePromoted, isEnded, isLive, isPromoted, startsInLabel } from '../lib/eventRanking';
 import { formatDate } from '../lib/utils';
+import { eventHref, isInstantLiveSession } from '../lib/eventLinks';
 import EventCover from '../components/events/EventCover';
 import EventRow from '../components/events/EventRow';
 import CityPicker, { type CityValue } from '../components/events/CityPicker';
@@ -25,12 +26,14 @@ import DateStrip, { dayKey } from '../components/events/DateStrip';
 import CreateEventModal from '../components/CreateEventModal';
 import CreateInstantSessionModal from '../components/CreateInstantSessionModal';
 import PageHero from '../components/ui/PageHero';
+import { useLiveStatus } from '../contexts/LiveStatusContext';
 
 type Sort = 'foryou' | 'soon' | 'popular';
 
 export default function EventsPage() {
   const uid = auth.currentUser?.uid ?? null;
   const navigate = useNavigate();
+  const { liveByUser, ready: liveReady } = useLiveStatus();
   const [events, setEvents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [registered, setRegistered] = useState<any[]>([]);
@@ -61,7 +64,12 @@ export default function EventsPage() {
   }, [uid]);
 
   const now = Date.now();
-  const upcoming = useMemo(() => events.filter(e => !isEnded(e, now)), [events, now]);
+  // Instant rooms live in the live rail and on the host's console, never in the
+  // scheduled-events list.
+  const upcoming = useMemo(
+    () => events.filter(e => !isEnded(e, now) && !isInstantLiveSession(e)),
+    [events, now],
+  );
   const registeredIds = useMemo(() => new Set(registered.map(e => e.id)), [registered]);
 
   const cities = useMemo(() => {
@@ -82,14 +90,21 @@ export default function EventsPage() {
   }, [upcoming]);
 
   const mine = useMemo(() => {
-    const hosting = upcoming.filter(e => e.hostId === uid);
+    // A host should be able to jump back into their own instant room from here,
+    // even though instant rooms are kept out of the scheduled list.
+    const hosting = events.filter(e => e.hostId === uid && !isEnded(e, now));
     const going = registered.filter(e => !isEnded(e, now) && e.hostId !== uid);
     return [...hosting, ...going].sort((a, b) => +new Date(a.startDate) - +new Date(b.startDate));
-  }, [upcoming, registered, uid, now]);
-  const liveNow = useMemo(
-    () => upcoming.filter(e => isLive(e, now)).sort((a, b) => (b.attendeeCount || 0) - (a.attendeeCount || 0)),
-    [upcoming, now],
-  );
+  }, [events, registered, uid, now]);
+
+  // "Live now" means a host is actually on air, not merely inside the event's
+  // date window, so an abandoned instant room drops out of the hero.
+  const liveNow = useMemo(() => {
+    const onAir = new Set([...liveByUser.values()].map(event => event.id));
+    return events
+      .filter(e => isLive(e, now) && (!liveReady || onAir.has(e.id)))
+      .sort((a, b) => (b.attendeeCount || 0) - (a.attendeeCount || 0));
+  }, [events, now, liveByUser, liveReady]);
 
   const q = search.trim().toLowerCase();
   const weekEnd = dayKey(new Date(now + 6 * 86_400_000));
@@ -318,7 +333,7 @@ export default function EventsPage() {
               {mine.map(e => (
                 <Link
                   key={e.id}
-                  to={`/events/${e.id}`}
+                  to={eventHref(e)}
                   className="group flex w-[260px] shrink-0 items-center gap-3 py-3 pr-2 transition-colors hover:bg-foreground/[0.025]"
                 >
                   <EventCover event={e} className="h-12 w-12 shrink-0 rounded-[14px]" />
@@ -425,7 +440,7 @@ export default function EventsPage() {
           <div className="flex gap-2">
             {boostable && (
               <Link
-                to={`/events/${boostable.id}`}
+                to={eventHref(boostable)}
                 className="inline-flex items-center gap-1.5 rounded-full border border-amber-400/30 px-4 py-2 text-[12px] font-semibold text-amber-500 transition-colors hover:bg-amber-400/10"
               >
                 <Sparkles size={13} /> Promote
@@ -453,7 +468,7 @@ function LiveFeature({ event }: { event: any }) {
   const going = event.attendeeCount || 0;
   return (
     <Link
-      to={`/events/${event.id}`}
+      to={eventHref(event)}
       className="group relative flex min-h-[300px] flex-col justify-end overflow-hidden rounded-[28px] p-5 text-white sm:min-h-[340px] sm:p-7"
     >
       <EventCover
@@ -497,7 +512,7 @@ function LiveFeature({ event }: { event: any }) {
 
 function LiveLine({ event }: { event: any }) {
   return (
-    <Link to={`/events/${event.id}`} className="group flex items-center gap-3 px-3 py-3 transition-colors hover:bg-foreground/[0.03] sm:px-4">
+    <Link to={eventHref(event)} className="group flex items-center gap-3 px-3 py-3 transition-colors hover:bg-foreground/[0.03] sm:px-4">
       <span className="relative grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-full bg-muted ring-2 ring-red-500/50">
         {event.banner ? (
           <img src={event.banner} alt="" className="h-full w-full object-cover" referrerPolicy="no-referrer" />

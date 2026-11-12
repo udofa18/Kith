@@ -47,7 +47,7 @@ import AppSidebar from './components/AppSidebar';
 import MobileNav from './components/MobileNav';
 import ComposeFab from './components/ComposeDialog';
 
-import { LiveSessionProvider } from './contexts/LiveSessionContext';
+import { LiveSessionProvider, useLiveSession } from './contexts/LiveSessionContext';
 import { CurrentUserProvider } from './contexts/CurrentUserContext';
 import { LiveStatusProvider } from './contexts/LiveStatusContext';
 import FloatingLiveSession from './components/live/FloatingLiveSession';
@@ -163,6 +163,7 @@ function AppContent({ user, onboardingRequired }: { user: any, onboardingRequire
   const location = useLocation();
   const navigate = useNavigate();
   const { activeSession, leaveVoice } = useVoice();
+  const { session: liveSession } = useLiveSession();
   const isDesktop = useMediaQuery('(min-width: 768px)');
   useNotificationStream(user);
   
@@ -208,7 +209,9 @@ function AppContent({ user, onboardingRequired }: { user: any, onboardingRequire
 
   return (
     <LiveSessionWrapper>
-      {user && activeSession ? (
+      {/* A live session owns the root room, even while minimized on another
+          page; never nest a voice room inside it. */}
+      {user && activeSession && !isLivePage && !liveSession.isActive ? (
         <LiveKitRoom
           token={activeSession.token}
           serverUrl={activeSession.serverUrl}

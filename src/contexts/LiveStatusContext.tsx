@@ -9,6 +9,7 @@ import {
 } from 'react';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { db } from '../firebase';
+import { LIVE_HEARTBEAT_STALE_MS } from '../lib/livePresence';
 import { useCurrentUser } from './CurrentUserContext';
 
 export interface LiveEvent {
@@ -46,12 +47,6 @@ const LiveStatusContext = createContext<LiveStatusValue>({
   ready: false,
 });
 
-const isStillLive = (event: LiveEvent) => {
-  if (event.status === 'ended') return false;
-  if (!event.endDate) return true;
-  return new Date(event.endDate).getTime() > Date.now();
-};
-
 const sortLive = (events: LiveEvent[]) =>
   [...events].sort((a, b) => {
     const at = new Date(a.startDate || 0).getTime();
@@ -59,91 +54,91 @@ const sortLive = (events: LiveEvent[]) =>
     return bt - at;
   });
 
+const heartbeatMs = (data: Record<string, any>) => {
+  const beat = data.heartbeatAt;
+  if (typeof beat === 'number') return beat;
+  if (typeof data.updatedAt === 'string') return new Date(data.updatedAt).getTime();
+  if (typeof data.updatedAt?.toMillis === 'function') return data.updatedAt.toMillis();
+  return null;
+};
+
 /**
- * A single public live-events listener powers the red ring on every avatar.
- * Follower-only rooms are intentionally not queried here: Firestore list rules
- * cannot prove access to them without a per-host query.
+ * A single listener over the `liveStatus` heartbeat collection powers the red
+ * ring on avatars. Hosts write one document (keyed by their uid) while their
+ * room is on air; the server deletes it when the room ends. Presence is kept
+ * deliberately lightweight: just who is live and which event to open.
  */
 export function LiveStatusProvider({ children }: { children: ReactNode }) {
   const user = useCurrentUser();
   const uid: string | null = user?.uid ?? null;
-  const [publicLive, setPublicLive] = useState<LiveEvent[]>([]);
-  const [ownLive, setOwnLive] = useState<LiveEvent | null>(null);
+  // Raw documents plus a heartbeat flag. Deriving the visible map from `now`
+  // means a host that disappears without cleaning up stops showing as live,
+  // even when no further Firestore snapshot arrives.
+  const [documents, setDocuments] = useState<Record<string, Record<string, any>>>({});
+  const [now, setNow] = useState(() => Date.now());
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    let active = true;
-    const publicQuery = query(
-      collection(db, 'events'),
-      where('visibility', '==', 'public'),
-      where('status', '==', 'live'),
+    const liveQuery = query(
+      collection(db, 'liveStatus'),
+      where('active', '==', true),
     );
 
     const unsubscribe = onSnapshot(
-      publicQuery,
+      liveQuery,
       (snapshot) => {
-        if (!active) return;
-        setPublicLive(
-          snapshot.docs
-            .map((entry) => ({ id: entry.id, ...entry.data() } as LiveEvent))
-            .filter((event) => event.hostId && isStillLive(event)),
-        );
+        const next: Record<string, Record<string, any>> = {};
+        snapshot.docs.forEach((entry) => {
+          const data = entry.data() as Record<string, any>;
+          const hostId = typeof data.uid === 'string' ? data.uid : entry.id;
+          if (!hostId) return;
+          next[hostId] = { ...data, uid: hostId };
+        });
+        setDocuments(next);
+        setNow(Date.now());
         setReady(true);
       },
       (error) => {
+        // Keep `ready` false so views that filter by presence fall back to the
+        // event date window instead of hiding every room.
         console.warn('Live status listener is unavailable:', error);
-        if (active) {
-          setPublicLive([]);
-          setReady(true);
-        }
+        setDocuments({});
       },
     );
 
-    return () => {
-      active = false;
-      unsubscribe();
-    };
+    return unsubscribe;
   }, []);
 
+  // Re-check staleness on a timer, at half the stale window so the ring
+  // disappears within ~37s of the last heartbeat.
   useEffect(() => {
-    if (!uid) {
-      setOwnLive(null);
-      return;
-    }
-
-    const ownQuery = query(
-      collection(db, 'events'),
-      where('hostId', '==', uid),
-      where('status', '==', 'live'),
-    );
-
-    return onSnapshot(
-      ownQuery,
-      (snapshot) => {
-        const mine = snapshot.docs
-          .map((entry) => ({ id: entry.id, ...entry.data() } as LiveEvent))
-          .filter(isStillLive)
-          .sort((a, b) => new Date(b.startDate || 0).getTime() - new Date(a.startDate || 0).getTime());
-        setOwnLive(mine[0] ?? null);
-      },
-      () => setOwnLive(null),
-    );
-  }, [uid]);
-
-  const liveEvents = useMemo(() => {
-    const byId = new Map<string, LiveEvent>();
-    for (const event of publicLive) byId.set(event.id, event);
-    if (ownLive) byId.set(ownLive.id, ownLive);
-    return sortLive([...byId.values()]);
-  }, [publicLive, ownLive]);
+    const timer = setInterval(() => setNow(Date.now()), Math.round(LIVE_HEARTBEAT_STALE_MS / 2));
+    return () => clearInterval(timer);
+  }, []);
 
   const liveByUser = useMemo(() => {
     const next = new Map<string, LiveEvent>();
-    for (const event of liveEvents) {
-      if (event.hostId) next.set(event.hostId, event);
-    }
+    Object.values(documents).forEach((data) => {
+      const hostId = typeof data.uid === 'string' ? data.uid : '';
+      const eventId = typeof data.eventId === 'string' ? data.eventId : '';
+      const beat = heartbeatMs(data);
+
+      // A stale heartbeat means the host vanished; the room is no longer live.
+      if (!hostId || !eventId) return;
+      if (beat !== null && now - beat > LIVE_HEARTBEAT_STALE_MS) return;
+
+      next.set(hostId, {
+        id: eventId,
+        hostId,
+        status: 'live',
+        visibility: data.visibility,
+        startDate: data.startedAt,
+      });
+    });
     return next;
-  }, [liveEvents]);
+  }, [documents, now]);
+
+  const liveEvents = useMemo(() => sortLive([...liveByUser.values()]), [liveByUser]);
 
   const liveFor = useCallback(
     (userId?: string | null) => (userId ? liveByUser.get(userId) ?? null : null),

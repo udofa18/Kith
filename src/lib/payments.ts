@@ -5,10 +5,53 @@ export interface Bank {
   code: string;
 }
 
+export type PaymentProviderId = 'stripe' | 'paystack';
+export type CheckoutCurrency = 'NGN' | 'USD';
+
+export interface CheckoutProvider {
+  id: PaymentProviderId;
+  label: string;
+  currencies: CheckoutCurrency[];
+  enabled: boolean;
+}
+
+export interface ComingSoonProvider {
+  id: PaymentProviderId;
+  label: string;
+}
+
+export interface CheckoutOptions {
+  kind: CheckoutKind;
+  targetId: string;
+  title: string;
+  /** Authoritative amount in minor units (kobo for NGN, cents for USD). */
+  amountMinor: number;
+  currency: CheckoutCurrency;
+  free: boolean;
+  /** The server's configured default. May not be able to charge this currency. */
+  provider: PaymentProviderId;
+  /** Providers that can charge this currency right now. */
+  providers: CheckoutProvider[];
+  /** Implemented providers that are intentionally paused and shown as "coming soon". */
+  comingSoonProviders: ComingSoonProvider[];
+  /** Kept for compatibility; sellers no longer need a payout account to sell. */
+  sellerReady: boolean;
+}
+
+const ORDER_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** True when a URL value looks like an internal order id. Paystack also returns `reference`. */
+export function isOrderId(value: string | null | undefined): value is string {
+  return typeof value === 'string' && ORDER_ID_RE.test(value);
+}
+
 export interface CheckoutResult {
   free?: boolean;
   orderId: string;
   authorizationUrl?: string;
+  provider?: PaymentProviderId;
+  currency?: CheckoutCurrency;
+  amountMinor?: number;
 }
 
 export interface OrderStatus {
@@ -16,6 +59,9 @@ export interface OrderStatus {
   kind: CheckoutKind;
   status: 'pending' | 'paid' | 'failed' | 'refunded' | 'partially_refunded';
   paidAt: string | null;
+  provider?: PaymentProviderId;
+  currency?: CheckoutCurrency;
+  amountMinor?: number;
 }
 
 export class PaymentError extends Error {
@@ -59,11 +105,60 @@ export async function savePayoutAccount(bankCode: string, accountNumber: string)
   return data.payoutAccount;
 }
 
-export type CheckoutKind = 'product' | 'event_ticket' | 'event_boost' | 'product_boost';
+export type CheckoutKind = 'product' | 'event_ticket' | 'event_boost' | 'product_boost' | 'community_membership';
 
-/** The server prices the target itself. The client only sends what is being bought (and a boost tier id). */
-export function startCheckout(kind: CheckoutKind, targetId: string, tierId?: string): Promise<CheckoutResult> {
-  return request<CheckoutResult>('/api/payments/checkout', { method: 'POST', body: { kind, targetId, tierId } });
+/**
+ * The server prices the target itself. The browser only sends what is being bought (and a boost
+ * tier id), plus an optional provider chosen from `getCheckoutOptions`.
+ */
+export function startCheckout(
+  kind: CheckoutKind,
+  targetId: string,
+  tierId?: string,
+  provider?: PaymentProviderId,
+): Promise<CheckoutResult> {
+  return request<CheckoutResult>('/api/payments/checkout', {
+    method: 'POST',
+    body: { kind, targetId, tierId, provider },
+  });
+}
+
+/**
+ * Authoritative currency, amount and provider capabilities for a checkout target. Call this before
+ * showing provider choices; never derive the amount or currency from product/event data in the browser.
+ */
+export function getCheckoutOptions(
+  kind: CheckoutKind,
+  targetId: string,
+  tierId?: string,
+): Promise<CheckoutOptions> {
+  return request<CheckoutOptions>('/api/payments/checkout-options', {
+    method: 'POST',
+    body: { kind, targetId, tierId },
+  });
+}
+
+/**
+ * For flows with a single call-to-action (boost tiers, promotions): ask the server what can charge
+ * this order and start checkout with the deployment default when it supports the currency, otherwise
+ * the only available provider. The server still validates the chosen provider again.
+ */
+export async function beginCheckout(
+  kind: CheckoutKind,
+  targetId: string,
+  tierId?: string,
+): Promise<CheckoutResult> {
+  const options = await getCheckoutOptions(kind, targetId, tierId);
+  if (options.free) return startCheckout(kind, targetId, tierId);
+  const preferred =
+    options.providers.find(provider => provider.id === options.provider) ?? options.providers[0];
+  if (!preferred) {
+    throw new PaymentError(
+      `Checkout isn't available in ${options.currency} on this deployment yet.`,
+      400,
+    );
+  }
+  return startCheckout(kind, targetId, tierId, preferred.id);
 }
 
 export interface ConnectStatus {
@@ -105,7 +200,7 @@ export interface CreatorEarning {
   order_id: string | null;
 }
 
-export interface BalanceResponse {
+export interface CurrencyBalance {
   currency: string;
   /** Withdrawable now. */
   availableCents: number;
@@ -113,6 +208,23 @@ export interface BalanceResponse {
   pendingCents: number;
   /** Total credited from sales. */
   lifetimeCents: number;
+  /** Only USD can be withdrawn through Stripe Connect today. */
+  withdrawable: boolean;
+}
+
+export interface BalanceResponse {
+  /** Headline currency (USD). */
+  currency: string;
+  /** Withdrawable now. */
+  availableCents: number;
+  /** Still inside the refund hold window. */
+  pendingCents: number;
+  /** Total credited from sales. */
+  lifetimeCents: number;
+  balances?: CurrencyBalance[];
+  withdrawableCurrencies?: string[];
+  /** True while Stripe payouts are paused. Earnings are still credited. */
+  payoutsComingSoon?: boolean;
   holdDays: number;
   minWithdrawalCents: number;
   payouts: CreatorPayout[];
@@ -145,6 +257,17 @@ export function getOrderStatus(orderId: string): Promise<OrderStatus> {
   return request<OrderStatus>(`/api/payments/order?id=${encodeURIComponent(orderId)}`);
 }
 
+/**
+ * Stops a community's monthly renewal for the signed-in member and removes their paid access.
+ * One-time memberships and free communities return `{ cancelled: false }`.
+ */
+export function cancelCommunityMembership(communityId: string): Promise<{ cancelled: boolean }> {
+  return request<{ cancelled: boolean }>('/api/payments/cancel-membership', {
+    method: 'POST',
+    body: { communityId },
+  });
+}
+
 /** Opens a short-lived signed download link. Only works for owners and completed purchases. */
 export async function downloadProduct(productId: string): Promise<void> {
   const data = await request<{ url: string; fileName: string }>(
@@ -158,8 +281,27 @@ export async function downloadProduct(productId: string): Promise<void> {
   link.remove();
 }
 
-/** Card payments (Stripe) are USD only. New listings default to this. */
-export const PAYMENT_CURRENCY = 'USD';
+/** Default currency for new listings. Sellers can choose NGN or USD explicitly. */
+export const PAYMENT_CURRENCY: CheckoutCurrency = 'USD';
+export const DEFAULT_CURRENCY = PAYMENT_CURRENCY;
+
+/**
+ * Converts a major-unit price typed by a seller (dollars/naira) to integer minor units.
+ * Parses the decimal text so 19.99 never becomes 1998.9999999999998.
+ */
+export function toMinorUnits(amount: string | number, currency?: CheckoutCurrency): number {
+  const text = typeof amount === 'number' ? String(amount) : amount.trim();
+  const match = /^(\d+)(?:\.(\d{1,2}))?$/.exec(text);
+  if (!match) throw new PaymentError('Enter a price with up to two decimal places', 400);
+  const minor = Number(match[1]) * 100 + Number((match[2] ?? '').padEnd(2, '0'));
+  if (!Number.isSafeInteger(minor) || minor < 0) {
+    throw new PaymentError('Enter a valid price', 400);
+  }
+  if (currency !== undefined && currency !== 'NGN' && currency !== 'USD') {
+    throw new PaymentError('Unsupported currency', 400);
+  }
+  return minor;
+}
 
 export function formatPrice(minor: number, currency?: string | null): string {
   // Never let missing or malformed data crash a page with "Currency code is required".

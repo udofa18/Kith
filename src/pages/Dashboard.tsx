@@ -2,12 +2,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { AlertTriangle, ArrowUpRight, CheckCircle2, Download, Edit3, Eye, Megaphone, Package, Plus, ShoppingBag, Star, TrendingUp, Wallet } from 'lucide-react';
+import { AlertTriangle, ArrowUpRight, Download, Edit3, Eye, Megaphone, Package, Plus, ShoppingBag, Star, TrendingUp, Wallet } from 'lucide-react';
 import { auth } from '../firebase';
 import { supabase } from '../supabase';
 import { Badge, Button, Card, EmptyState, Skeleton } from '../components/ui';
 import { typeLabel } from '../components/marketplace/MarketCard';
-import { BalanceResponse, ConnectStatus, downloadProduct, formatPrice, getConnectStatus, getCreatorBalance, startCheckout } from '../lib/payments';
+import { BalanceResponse, beginCheckout, downloadProduct, formatPrice, getCreatorBalance } from '../lib/payments';
 import { cn } from '../lib/cn';
 
 type Tab = 'products' | 'sales' | 'purchases';
@@ -69,7 +69,7 @@ export default function Dashboard() {
   const [products, setProducts] = useState<ProductRow[]>([]);
   const [sales, setSales] = useState<SaleRow[]>([]);
   const [purchases, setPurchases] = useState<PurchaseRow[]>([]);
-  const [payout, setPayout] = useState<ConnectStatus | null>(null);
+
   const [balance, setBalance] = useState<BalanceResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -82,7 +82,7 @@ export default function Dashboard() {
     }
     let cancelled = false;
     (async () => {
-      const [productRes, saleRes, purchaseRes, payoutRes, balanceRes] = await Promise.all([
+      const [productRes, saleRes, purchaseRes, balanceRes] = await Promise.all([
         supabase!
           .from('products')
           .select('id, title, product_type, cover_url, price_cents, currency, sales_count, rating_avg, rating_count, status, promoted_until')
@@ -100,7 +100,6 @@ export default function Dashboard() {
           .select('id, product_id, price_cents, created_at, products(title, product_type, cover_url, currency)')
           .eq('status', 'completed')
           .order('created_at', { ascending: false }),
-        getConnectStatus().catch(() => null),
         getCreatorBalance().catch(() => null),
       ]);
       if (cancelled) return;
@@ -110,7 +109,6 @@ export default function Dashboard() {
       setProducts((productRes.data ?? []) as ProductRow[]);
       setSales((saleRes.data ?? []) as unknown as SaleRow[]);
       setPurchases((purchaseRes.data ?? []) as unknown as PurchaseRow[]);
-      setPayout(payoutRes);
       setBalance(balanceRes);
       setLoading(false);
     })();
@@ -147,7 +145,6 @@ export default function Dashboard() {
     return buckets.map(b => ({ month: b.label, amount: Number((totals.get(b.key) ?? 0).toFixed(2)) }));
   }, [sales]);
 
-  const payoutReady = !!payout?.connected && !!payout.payoutsEnabled;
   const hasRevenue = monthly.some(m => m.amount > 0);
 
   const handleDownload = async (productId: string) => {
@@ -173,7 +170,7 @@ export default function Dashboard() {
             <Link to="/payouts" className="inline-flex items-center gap-2 rounded-full border border-border-strong px-4 py-2 text-sm font-semibold transition-colors hover:bg-muted">
               <Wallet size={16} />
               Payouts
-              <Badge variant={payoutReady ? 'success' : 'warning'}>{payoutReady ? 'Active' : 'Set up'}</Badge>
+              <Badge variant="warning">Coming soon</Badge>
             </Link>
             <Link to="/upload" className="inline-flex items-center gap-2 rounded-full bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground shadow-glow-primary transition-colors hover:bg-[var(--ds-primary-hover)]">
               <Plus size={18} /> New product
@@ -181,17 +178,20 @@ export default function Dashboard() {
           </div>
         </header>
 
-        {!loading && !payoutReady && (
+        {!loading && (
           <div className="flex flex-col gap-4 rounded-card border border-warning/40 bg-warning/10 p-5 md:flex-row md:items-center md:justify-between">
             <div className="flex items-start gap-3">
               <AlertTriangle size={20} className="mt-0.5 shrink-0 text-warning" />
               <div>
-                <p className="font-semibold">Set up payouts to sell paid products</p>
-                <p className="text-sm text-muted-foreground">Free products work now. Paid products go live once Stripe has your bank details.</p>
+                <p className="font-semibold">Payouts are coming soon</p>
+                <p className="text-sm text-muted-foreground">
+                  Keep selling with Paystack. Paid sales are saved in your Kith balance until
+                  withdrawals open.
+                </p>
               </div>
             </div>
             <Link to="/payouts" className="inline-flex shrink-0 items-center justify-center rounded-full bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground">
-              Finish setup
+              View earnings
             </Link>
           </div>
         )}
@@ -210,6 +210,14 @@ export default function Dashboard() {
                     {formatPrice(balance.pendingCents, balance.currency)} on hold until sales clear
                   </p>
                 )}
+                {(balance.balances ?? [])
+                  .filter(b => b.currency !== 'USD' && (b.availableCents > 0 || b.pendingCents > 0))
+                  .map(b => (
+                    <p key={b.currency} className="text-xs text-muted-foreground">
+                      {formatPrice(b.availableCents, b.currency)} {b.currency} balance
+                      {b.withdrawable ? '' : ' · held in Kith, payouts coming soon'}
+                    </p>
+                  ))}
               </div>
             </div>
             <Link
@@ -230,7 +238,7 @@ export default function Dashboard() {
             Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-32" />)
           ) : (
             <>
-              <StatCard icon={<TrendingUp size={18} />} label="Revenue" value={formatPrice(stats.revenueCents, 'USD')} hint="Your share after fees" />
+              <StatCard icon={<TrendingUp size={18} />} label="USD revenue" value={formatPrice(stats.revenueCents, 'USD')} hint="Your share after fees" />
               <StatCard icon={<ShoppingBag size={18} />} label="Sales" value={String(stats.salesCount)} hint="Paid orders" />
               <StatCard icon={<Package size={18} />} label="Published" value={String(stats.published)} hint={`${products.length} total incl. drafts`} />
               <StatCard
@@ -412,11 +420,7 @@ export default function Dashboard() {
           </ul>
         )}
 
-        {!loading && payoutReady && tab === 'products' && products.length > 0 && (
-          <p className="flex items-center gap-2 text-xs text-muted-foreground">
-            <CheckCircle2 size={14} className="text-success" /> Payouts are active. Paid sales go to your Kith balance, ready to withdraw.
-          </p>
-        )}
+
       </div>
     </div>
   );
@@ -442,7 +446,7 @@ function PromoteControl({ productId }: { productId: string }) {
   const promote = async (tierId: string) => {
     setBusy(true);
     try {
-      const result = await startCheckout('product_boost', productId, tierId);
+      const result = await beginCheckout('product_boost', productId, tierId);
       if (!result.authorizationUrl) throw new Error('Could not start checkout');
       window.location.href = result.authorizationUrl;
     } catch (e) {

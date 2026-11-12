@@ -287,7 +287,7 @@ export default function ProductPage() {
 
                 <ul className="space-y-3 border-t border-border pt-5 text-sm text-muted-foreground">
                   <Perk>Instant access after payment</Perk>
-                  <Perk>Secure checkout with Stripe</Perk>
+                  <Perk>Secure checkout with Paystack</Perk>
                   <Perk>Download any time from your library</Perk>
                 </ul>
               </Card>

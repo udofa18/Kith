@@ -26,7 +26,8 @@ export function useKithTheme(user: any) {
   }, []);
 
   const toggleTheme = async () => {
-    const newTheme: Theme = theme === 'dark' ? 'light' : 'dark';
+    // Read the resolved theme from the DOM so rapid toggles never reuse stale state.
+    const newTheme: Theme = document.documentElement.classList.contains('light') ? 'dark' : 'light';
     setTheme(newTheme);
     localStorage.setItem('theme', newTheme);
     document.documentElement.classList.remove('light', 'dark');
@@ -36,6 +37,9 @@ export function useKithTheme(user: any) {
     if (user?.uid) {
       try {
         await updateDoc(doc(db, 'users', user.uid), {
+          // `settings.appearance.theme` is the source of truth (see features/settings).
+          // Writing only the legacy flat `theme` let the next user snapshot revert this.
+          'settings.appearance.theme': newTheme,
           theme: newTheme,
           updatedAt: serverTimestamp(),
         });

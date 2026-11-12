@@ -10,6 +10,8 @@
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "db:export": "tsx scripts/firestore-to-postgres/export.ts",
     "db:transform": "tsx scripts/firestore-to-postgres/transform-export.ts",
     "db:load": "tsx scripts/firestore-to-postgres/load.ts",
@@ -85,6 +87,7 @@
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
-    "vite": "^6.2.0"
+    "vite": "^6.2.0",
+    "vitest": "^3.2.7"
   }
 }

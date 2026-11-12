@@ -472,11 +472,38 @@ function MembershipSection({ communityId, community, form, setForm, onSave, isSa
 
     const handleApprove = async (request: any) => {
         try {
-            const batch = writeBatch(db as any);
-
-            // Paid communities charge the applicant now (requests aren't charged up front).
+            // Paid communities charge the applicant after approval, never during it.
             const latest = (await getDoc(doc(db, 'communities', communityId))).data();
             const fee = feeOf(latest);
+
+            // Real-money memberships are granted by the payment server after Paystack confirms the
+            // charge. Approving only unlocks the applicant's checkout, so nothing is written here
+            // and no XP ever moves for a card fee.
+            if (fee && fee.currency === 'usd' && request.userId !== latest?.creatorId) {
+                await updateDoc(doc(db, 'communities', communityId, 'joinRequests', request.id), { status: 'approved' });
+                try {
+                    await addDoc(collection(db, 'notifications'), {
+                        recipientId: request.userId,
+                        senderId: auth.currentUser?.uid,
+                        senderName: auth.currentUser?.displayName || 'Community admin',
+                        senderPhoto: auth.currentUser?.photoURL || '',
+                        type: 'community',
+                        category: 'community',
+                        priority: 'normal',
+                        content: `You're approved to join ${latest?.name || 'the community'}. Pay ${formatFee(fee)} to finish joining.`,
+                        relatedId: communityId,
+                        read: false,
+                        createdAt: serverTimestamp(),
+                    });
+                } catch (notifyError) {
+                    console.error('Could not notify the approved applicant:', notifyError);
+                }
+                toast.success(`${request.userName || 'This person'} can now pay to join`);
+                return;
+            }
+
+            const batch = writeBatch(db as any);
+
             if (fee && request.userId !== latest?.creatorId) {
                 if (!(await canAfford(request.userId, fee))) {
                     toast.error(`${request.userName || 'This person'} doesn't have ${formatFee(fee)} yet, so they can't be approved.`);
@@ -484,7 +511,7 @@ function MembershipSection({ communityId, community, form, setForm, onSave, isSa
                 }
                 addFeePayment(batch, fee, request.userId, latest?.creatorId);
             }
-            
+
             // Compute initial permissions from auto-roles
             const autoRoles = form.membershipControl.autoRoles || [];
             const initialPermissions = new Set<string>();

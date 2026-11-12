@@ -1,12 +1,11 @@
-import { useState, useEffect, useRef } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useLiveSession } from '../../contexts/LiveSessionContext';
-import { 
+import {
   VideoTrack, 
   useTracks, 
   useLocalParticipant, 
   useTrackToggle, 
-  RoomAudioRenderer,
   TrackRefContext,
   useTrackRefContext,
   useRoomContext
@@ -34,19 +33,16 @@ import {
   ArrowUpRight
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
-
+import { auth } from '../../firebase';
+import { liveRoomPath } from '../../lib/eventLinks';
 import { useDocumentPiP } from '../../hooks/useDocumentPiP';
 
 export default function FloatingLiveSession() {
-  const { session, expandSession, minimizeSession, endSession, hideOverlay } = useLiveSession();
-  const location = useLocation();
+  const { session, expandSession, endSession, endSessionForEveryone } = useLiveSession();
   const navigate = useNavigate();
-  const [size, setSize] = useState({ width: 320, height: 180 });
-  const [isResizing, setIsResizing] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
   const room = useRoomContext();
 
-  const { isSupported: isPiPSupported, isActive: isPiPActive, PiPPortal } = useDocumentPiP({
+  const { PiPPortal } = useDocumentPiP({
     pipWindow: session.pipWindow,
     onExit: () => {
       // Handled by context pagehide listener
@@ -56,40 +52,65 @@ export default function FloatingLiveSession() {
   const handleExpand = () => {
     expandSession();
     if (session.eventId) {
-      navigate(`/live/${session.eventId}`);
+      navigate(liveRoomPath({ id: session.eventId }));
     }
   };
 
-  const handleClose = () => {
-    endSession();
+  const handleClose = async () => {
+    const data: any = session.eventData;
+    const uid = auth.currentUser?.uid;
+    const canManage = !!uid && (
+      data?.hostId === uid ||
+      (Array.isArray(data?.coHostIds) && data.coHostIds.includes(uid))
+    );
+
+    if (!canManage) {
+      endSession();
+      return;
+    }
+
+    if (!window.confirm('End this session for everyone?')) return;
+    const ended = await endSessionForEveryone(session.eventId || undefined);
+    if (!ended) toast.error('Could not end the session. You are still live.');
   };
 
-  // Visibility Handler for returning to tab
-  useEffect(() => {
-    const handleVisibility = () => {
-      if (document.visibilityState === 'visible' && session.isActive && session.isMinimized) {
-        handleExpand();
-      }
-    };
-    document.addEventListener('visibilitychange', handleVisibility);
-    return () => document.removeEventListener('visibilitychange', handleVisibility);
-  }, [session.isActive, session.isMinimized, session.eventId, navigate]);
+  if (!session.isActive || !session.token || !session.isMinimized) return null;
 
-  if (!session.isActive || !session.token) return null;
+  // Document Picture-in-Picture where the browser supports it.
+  if (session.pipWindow) {
+    return (
+      <PiPPortal>
+        <div className="w-full h-screen bg-black overflow-hidden relative flex flex-col group">
+          <MiniPlayerContent 
+            title={session.eventTitle} 
+            onExpand={handleExpand}
+            onClose={handleClose}
+            onMinimize={handleExpand} 
+            isPiPActive={true}
+            isSmall={false}
+          />
+        </div>
+      </PiPPortal>
+    );
+  }
 
+  // In-app fallback: a draggable-looking mini player that keeps the room alive
+  // on every browser, including mobile where Document PiP is unavailable.
   return (
-    <PiPPortal>
-      <div className="w-full h-screen bg-black overflow-hidden relative flex flex-col group">
-        <MiniPlayerContent 
-          title={session.eventTitle} 
-          onExpand={handleExpand}
-          onClose={handleClose}
-          onMinimize={handleExpand} 
-          isPiPActive={true}
-          isSmall={false}
-        />
-      </div>
-    </PiPPortal>
+    <div
+      className="fixed bottom-24 right-4 z-[80] w-[min(86vw,340px)] aspect-video overflow-hidden rounded-2xl border border-white/15 bg-black shadow-[0_24px_70px_-20px_rgba(0,0,0,0.85)] group"
+      role="complementary"
+      aria-label="Minimized live session"
+    >
+      <MiniPlayerContent 
+        title={session.eventTitle} 
+        onExpand={handleExpand}
+        onClose={handleClose}
+        onMinimize={handleExpand} 
+        isPiPActive={false}
+        isSmall
+      />
+    </div>
   );
 }
 
@@ -179,7 +200,6 @@ function MiniPlayerContent({
 
   return (
     <div className="relative w-full h-full select-none bg-black">
-      <RoomAudioRenderer />
       {activeTrack ? (
         <TrackRefContext.Provider value={activeTrack}>
            <VideoTrack trackRef={activeTrack} className="w-full h-full object-cover" disablePictureInPicture playsInline />

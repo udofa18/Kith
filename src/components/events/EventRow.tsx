@@ -5,6 +5,7 @@ import { cityOf } from '../../lib/eventCities';
 import { isLive, startsInLabel } from '../../lib/eventRanking';
 import { formatEventPrice } from '../../lib/payments';
 import EventCover from './EventCover';
+import { eventHref } from '../../lib/eventLinks';
 
 interface Props {
   event: any;
@@ -23,7 +24,7 @@ export default function EventRow({ event, promoted = false, isRegistered = false
 
   return (
     <Link
-      to={`/events/${event.id}`}
+      to={eventHref(event)}
       className="group grid grid-cols-[92px_1fr] items-center gap-4 border-b border-border py-4 transition-colors last:border-b-0 hover:bg-foreground/[0.025] sm:grid-cols-[148px_1fr_auto] sm:gap-5 sm:py-5"
     >
       <EventCover

@@ -115,10 +115,10 @@ export default function CommerceSection({ settings, update, onNavigate }: Sectio
         <Subheading>Payouts and selling</Subheading>
         <SettingRow
           title="Payout account"
-          description="Connect Stripe to receive earnings from products, tickets and boosts."
+          description="Payouts are coming soon. You can still sell — earnings are saved in your Kith balance until withdrawals open."
         >
           <Button variant="secondary" size="sm" leftIcon={<Wallet size={14} />} onClick={() => navigate('/payouts')}>
-            Manage
+            View earnings
           </Button>
         </SettingRow>
         <SettingRow

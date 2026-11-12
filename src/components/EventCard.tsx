@@ -6,6 +6,7 @@ import { emojiFor } from '../lib/eventCategories';
 import { themeGradient } from '../lib/eventTheme';
 import { cityOf } from '../lib/eventCities';
 import { formatEventPrice } from '../lib/payments';
+import { eventHref } from '../lib/eventLinks';
 
 const hasImage = (url?: string) => !!url && url.trim() !== '' && !url.includes('picsum.photos');
 
@@ -73,5 +74,5 @@ export default function EventCard({ event, compact = false, promoted = false, is
     </article>
   );
 
-  return preview ? <div className="pointer-events-none">{card}</div> : <Link to={`/events/${event.id}`} className="block">{card}</Link>;
+  return preview ? <div className="pointer-events-none">{card}</div> : <Link to={eventHref(event)} className="block">{card}</Link>;
 }

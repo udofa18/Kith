@@ -24,8 +24,8 @@ import { auth, db } from '../firebase';
 import { generateProductDescription } from '../services/geminiService';
 import { Badge, Button, Card, EmptyState, Field, Input, Skeleton, Textarea } from '../components/ui';
 import { PRODUCT_TYPES } from '../lib/marketplace';
-import { hasPayoutAccount, loadLessons, LessonInput, syncLessons, syncProductToStore } from '../lib/productSync';
-import { formatPrice, PAYMENT_CURRENCY } from '../lib/payments';
+import { loadLessons, LessonInput, syncLessons, syncProductToStore } from '../lib/productSync';
+import { formatPrice, PAYMENT_CURRENCY, toMinorUnits, type CheckoutCurrency } from '../lib/payments';
 import { cn } from '../lib/cn';
 
 const STEPS = ['Details', 'Files & cover', 'Curriculum', 'Price & publish'] as const;
@@ -42,7 +42,7 @@ interface FormState {
   fileName: string;
   previewImage: string;
   price: string;
-  currency: 'NGN' | 'USD';
+  currency: CheckoutCurrency;
 }
 
 interface LessonDraft {
@@ -120,13 +120,11 @@ export default function ProductEditor() {
   const [status, setStatus] = useState<'draft' | 'published' | null>(null);
   const [loading, setLoading] = useState(!!routeId);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [legacyNgn, setLegacyNgn] = useState(false);
   const [saving, setSaving] = useState<null | 'draft' | 'publish'>(null);
   const [stepError, setStepError] = useState<string | null>(null);
   const [uploading, setUploading] = useState<null | 'file' | 'cover'>(null);
   const [uploadPct, setUploadPct] = useState(0);
   const [aiBusy, setAiBusy] = useState(false);
-  const [payoutReady, setPayoutReady] = useState<boolean | null>(null);
 
   const fileInput = useRef<HTMLInputElement>(null);
   const coverInput = useRef<HTMLInputElement>(null);
@@ -157,9 +155,9 @@ export default function ProductEditor() {
           return;
         }
         const data = snap.data();
-        const rawCurrency = data.currency === 'NGN' ? 'NGN' : 'USD';
-        const isLegacyNgn = rawCurrency === 'NGN' && Number(data.price) > 0;
-        setLegacyNgn(isLegacyNgn);
+        // Keep the listing's own currency. Switching currency or reinterpreting the number would
+        // change the price the creator agreed to, so existing values are never converted.
+        const rawCurrency: CheckoutCurrency = data.currency === 'NGN' ? 'NGN' : 'USD';
         setStatus(data.status === 'draft' ? 'draft' : 'published');
         setForm({
           title: data.title ?? '',
@@ -170,9 +168,8 @@ export default function ProductEditor() {
           fileUrl: data.fileUrl ?? '',
           fileName: data.fileUrl ? fileNameFromPath(data.fileUrl) : '',
           previewImage: data.previewImage ?? '',
-          // A legacy NGN price is not a USD amount, so it's cleared rather than reinterpreted.
-          price: isLegacyNgn || !(Number(data.price) > 0) ? '' : String(data.price),
-          currency: PAYMENT_CURRENCY,
+          price: Number(data.price) > 0 ? String(data.price) : '',
+          currency: rawCurrency,
         });
         const rows = await loadLessons(routeId);
         if (cancelled) return;
@@ -199,11 +196,6 @@ export default function ProductEditor() {
     };
   }, [routeId, uid, authReady]);
 
-  useEffect(() => {
-    if (!uid) return;
-    hasPayoutAccount().then(setPayoutReady);
-  }, [uid]);
-
   const set = (patch: Partial<FormState>) => {
     setStepError(null);
     setForm(prev => ({ ...prev, ...patch }));
@@ -218,7 +210,6 @@ export default function ProductEditor() {
       if (!form.title.trim()) return 'Give your product a title.';
       if (!form.productType) return 'Choose a product type.';
     }
-    if (s === 3 && legacyNgn && !form.price) return 'Enter a USD price for this product.';
     return null;
   };
 
@@ -285,10 +276,15 @@ export default function ProductEditor() {
         setStep(1);
         return setStepError('Upload a file or add at least one lesson before publishing.');
       }
-      if (!isFree && !payoutReady) {
-        return setStepError('Set up payouts before selling a paid product.');
+    }
+
+    if (form.price.trim()) {
+      try {
+        toMinorUnits(form.price, form.currency);
+      } catch (e) {
+        setStep(3);
+        return setStepError(e instanceof Error ? e.message : 'Enter a valid price.');
       }
-      if (legacyNgn && !form.price) return setStepError('Enter a USD price for this product.');
     }
 
     setSaving(mode);
@@ -302,7 +298,7 @@ export default function ProductEditor() {
         description: form.description.trim(),
         tags,
         price: isFree ? 0 : Number(form.price),
-        currency: PAYMENT_CURRENCY,
+        currency: form.currency,
         previewImage: form.previewImage,
         fileUrl: form.fileUrl,
         status: nextStatus,
@@ -335,7 +331,7 @@ export default function ProductEditor() {
         productType: payload.productType,
         tags,
         price: payload.price,
-        currency: PAYMENT_CURRENCY,
+        currency: form.currency,
         previewImage: payload.previewImage,
         fileUrl: payload.fileUrl,
         status: nextStatus,
@@ -407,11 +403,12 @@ export default function ProductEditor() {
 
         <Stepper current={step} onSelect={goTo} />
 
-        {legacyNgn && (
-          <div className="flex items-start gap-3 rounded-card border border-warning/40 bg-warning/10 p-4 text-sm">
-            <AlertTriangle size={18} className="mt-0.5 shrink-0 text-warning" />
+        {form.currency === 'NGN' && !isFree && (
+          <div className="flex items-start gap-3 rounded-card border border-border bg-surface p-4 text-sm">
+            <Wallet size={18} className="mt-0.5 shrink-0 text-primary" />
             <p>
-              This product was priced in NGN. Card payments take USD, so enter a USD price in the last step before publishing.
+              This product is priced in Nigerian naira. Both NGN and USD checkout are processed by
+              Paystack for now. Amounts are never converted between currencies.
             </p>
           </div>
         )}
@@ -527,7 +524,7 @@ export default function ProductEditor() {
               <div className="space-y-4">
                 <div>
                   <p className="text-sm font-semibold">Price</p>
-                  <p className="text-sm text-muted-foreground">Leave it free, or set a price in US dollars.</p>
+                  <p className="text-sm text-muted-foreground">Leave it free, or set a price. Choose the currency explicitly.</p>
                 </div>
                 <div className="flex gap-2">
                   <Button variant={isFree ? 'primary' : 'outline'} size="sm" onClick={() => set({ price: '' })}>Free</Button>
@@ -535,17 +532,45 @@ export default function ProductEditor() {
                 </div>
                 {!isFree && (
                   <div className="grid gap-4 sm:grid-cols-2">
-                    <Field label="Price (USD)" htmlFor="p-price">
-                      <Input id="p-price" type="number" min={1} step={0.5} value={form.price} onChange={e => set({ price: e.target.value })} placeholder="10" />
-                    </Field>
-                    <div className="space-y-1 rounded-control bg-muted p-4 text-sm">
+                    <div className="space-y-4">
+                      <Field label="Price" htmlFor="p-price">
+                        <Input id="p-price" type="number" min={1} step={0.5} value={form.price} onChange={e => set({ price: e.target.value })} placeholder="10" />
+                      </Field>
+                      <div className="space-y-2">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-muted-foreground">Currency</p>
+                        <div className="flex gap-2">
+                          {(['USD', 'NGN'] as const).map(code => (
+                            <button
+                              key={code}
+                              type="button"
+                              aria-pressed={form.currency === code}
+                              onClick={() => set({ currency: code })}
+                              className={cn(
+                                'rounded-control border px-3 py-2 text-sm font-semibold transition-colors',
+                                form.currency === code
+                                  ? 'border-primary bg-primary/10 text-foreground'
+                                  : 'border-border text-muted-foreground hover:border-border-strong hover:text-foreground',
+                              )}
+                            >
+                              {code}
+                            </button>
+                          ))}
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          {form.currency === 'NGN'
+                            ? 'Charged with Paystack. Naira prices are stored as kobo. Switching currency never converts the number.'
+                            : 'Charged with Paystack. US dollar prices are stored as cents. Switching currency never converts the number.'}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="space-y-1 self-start rounded-control bg-muted p-4 text-sm">
                       <div className="flex justify-between text-muted-foreground">
                         <span>Platform fee ({PLATFORM_FEE_PERCENT}%)</span>
-                        <span>{formatPrice(feeMinor, 'USD')}</span>
+                        <span>{formatPrice(feeMinor, form.currency)}</span>
                       </div>
                       <div className="flex justify-between font-semibold">
                         <span>You receive</span>
-                        <span>{formatPrice(priceMinor - feeMinor, 'USD')}</span>
+                        <span>{formatPrice(priceMinor - feeMinor, form.currency)}</span>
                       </div>
                     </div>
                   </div>
@@ -553,15 +578,14 @@ export default function ProductEditor() {
               </div>
 
               {!isFree && (
-                <div className={cn('flex items-start gap-3 rounded-card border p-4 text-sm', payoutReady ? 'border-success/40 bg-success/10' : 'border-border bg-surface')}>
-                  <Wallet size={18} className={cn('mt-0.5 shrink-0', payoutReady ? 'text-success' : 'text-primary')} />
-                  <div className="flex-1 space-y-2">
-                    <p className="font-semibold">{payoutReady ? 'Payouts are active' : 'Set up payouts to sell paid products'}</p>
-                    {!payoutReady && (
-                      <Link to="/payouts" className="inline-flex text-sm font-semibold text-primary hover:underline">
-                        Open payout settings
-                      </Link>
-                    )}
+                <div className="flex items-start gap-3 rounded-card border border-border bg-surface p-4 text-sm">
+                  <Wallet size={18} className="mt-0.5 shrink-0 text-primary" />
+                  <div className="flex-1 space-y-1">
+                    <p className="font-semibold">Payouts are coming soon</p>
+                    <p className="text-muted-foreground">
+                      You can still sell paid products. Earnings stay in your Kith balance until
+                      withdrawals open.
+                    </p>
                   </div>
                 </div>
               )}
@@ -578,7 +602,7 @@ export default function ProductEditor() {
                   <dt className="text-muted-foreground">Lessons</dt>
                   <dd>{summaryLessons}</dd>
                   <dt className="text-muted-foreground">Price</dt>
-                  <dd>{isFree ? 'Free' : formatPrice(priceMinor, 'USD')}</dd>
+                  <dd>{isFree ? 'Free' : formatPrice(priceMinor, form.currency)}</dd>
                 </dl>
               </div>
             </div>

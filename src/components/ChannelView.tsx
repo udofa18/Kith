@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import { auth, db, handleFirestoreError, OperationType } from '../firebase';
 import { collection, query, orderBy, onSnapshot, addDoc, serverTimestamp, doc, updateDoc, increment, getDocs, writeBatch, setDoc, where, deleteDoc, limit, startAfter, endBefore, limitToLast, getDoc, Timestamp, arrayUnion } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from '../lib/storage';
 import CreatePollModal from './CreatePollModal';
-import { ArrowDown, MoreHorizontal, Send, Image as ImageIcon, Code as CodeIcon, Paperclip, Smile, MessageSquare, Settings, Snowflake, Megaphone, Hash, MoreVertical, Edit2, Trash2, X, Check, Reply, ExternalLink, Plus, ChevronUp, Zap, Heart, ThumbsUp, PartyPopper, FileText, Video, Music, Download, Play, Film, Sparkles, Lock, Flag, Cpu, Pin, BarChart2, Copy, Globe, Twitter, Github, Linkedin, Info, Gift, ChevronRight } from 'lucide-react';
+import { ArrowDown, ArrowLeft, MoreHorizontal, Send, Image as ImageIcon, Code as CodeIcon, Paperclip, Smile, MessageSquare, Settings, Snowflake, Megaphone, Hash, MoreVertical, Edit2, Trash2, X, Check, Reply, ExternalLink, Plus, ChevronUp, Zap, Heart, ThumbsUp, PartyPopper, FileText, Video, Music, Download, Play, Film, Sparkles, Lock, Flag, Cpu, Pin, BarChart2, Copy, Globe, Twitter, Github, Linkedin, Info, Gift, ChevronRight } from 'lucide-react';
 import PostCard from './PostCard';
 import PostEditor from './PostEditor';
 import XPGiftModal from './XPGiftModal';
@@ -79,6 +79,7 @@ export default function ChannelView({
   onOpenChannel
 }: ChannelViewProps) {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [messages, setMessages] = useState<any[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [loading, setLoading] = useState(true);
@@ -1072,12 +1073,36 @@ export default function ChannelView({
           : null;
 
   if (channel.type === 'feed') {
+    // A post opened from this feed stays inside the community: the channel, the
+    // community shell, and the reader's membership context never change.
+    const selectedPostId = searchParams.get('postId');
+    const openPost = (post: any) => {
+      setSearchParams(prev => {
+        const p = new URLSearchParams(prev);
+        p.set('postId', post.id);
+        return p;
+      });
+    };
+    const closePost = () => {
+      setSearchParams(prev => {
+        const p = new URLSearchParams(prev);
+        p.delete('postId');
+        return p;
+      }, { replace: true });
+    };
+
     return (
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-2xl mx-auto px-3 sm:px-4 py-4 space-y-4">
-          {isMember && !lockedReason && <PostEditor communityId={communityId} channelId={channel.id} />}
-          {lockedReason && <LockedNotice text={lockedReason} />}
-          <FeedContent communityId={communityId} channelId={channel.id} />
+          {!selectedPostId && isMember && !lockedReason && <PostEditor communityId={communityId} channelId={channel.id} />}
+          {!selectedPostId && lockedReason && <LockedNotice text={lockedReason} />}
+          <FeedContent
+            communityId={communityId}
+            channelId={channel.id}
+            selectedPostId={selectedPostId}
+            onOpenPost={openPost}
+            onClosePost={closePost}
+          />
         </div>
       </div>
     );
@@ -1625,9 +1650,26 @@ function AttachmentDisplay({ attachment }: { attachment: any }) {
   );
 }
 
-function FeedContent({ communityId, channelId }: { communityId: string, channelId: string }) {
+function FeedContent({
+  communityId,
+  channelId,
+  selectedPostId,
+  onOpenPost,
+  onClosePost,
+}: {
+  communityId: string;
+  channelId: string;
+  selectedPostId: string | null;
+  onOpenPost: (post: any) => void;
+  onClosePost: () => void;
+}) {
   const [posts, setPosts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  // A post linked from outside the current page (refresh, shared link) isn't in the
+  // loaded window, so resolve it directly — but only if it belongs to this channel.
+  const [deepPost, setDeepPost] = useState<any | null>(null);
+  const [deepLoading, setDeepLoading] = useState(false);
+  const [deepError, setDeepError] = useState(false);
 
   useEffect(() => {
     const q = query(
@@ -1647,11 +1689,72 @@ function FeedContent({ communityId, channelId }: { communityId: string, channelI
     return () => unsubscribe();
   }, [communityId, channelId]);
 
+  const postFromFeed = selectedPostId ? posts.find(p => p.id === selectedPostId) : undefined;
+  const selectedPost = postFromFeed ?? (deepPost?.id === selectedPostId ? deepPost : null);
+
+  useEffect(() => {
+    if (!selectedPostId || postFromFeed) {
+      setDeepPost(null);
+      setDeepError(false);
+      return;
+    }
+    if (deepPost?.id === selectedPostId) return;
+
+    let cancelled = false;
+    setDeepLoading(true);
+    setDeepError(false);
+    getDoc(doc(db, 'posts', selectedPostId))
+      .then(snap => {
+        if (cancelled) return;
+        const data: any = snap.exists() ? { id: snap.id, ...snap.data() } : null;
+        if (data && data.communityId === communityId && data.channelId === channelId) {
+          setDeepPost(data);
+        } else {
+          setDeepError(true);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setDeepError(true);
+      })
+      .finally(() => {
+        if (!cancelled) setDeepLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [selectedPostId, postFromFeed, deepPost?.id, communityId, channelId]);
+
+  if (selectedPostId) {
+    return (
+      <div className="space-y-3">
+        <button
+          onClick={onClosePost}
+          className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-semibold text-foreground/60 hover:bg-foreground/5 hover:text-foreground transition-colors"
+        >
+          <ArrowLeft size={16} /> Back to feed
+        </button>
+
+        {selectedPost ? (
+          <div className="rounded-2xl border border-foreground/10 overflow-hidden bg-background">
+            <PostCard post={selectedPost} isDetailView onOpenPost={onOpenPost} />
+          </div>
+        ) : deepLoading ? (
+          <div className="flex justify-center py-16"><span className="w-6 h-6 border-2 border-primary/30 border-t-primary rounded-full animate-spin" /></div>
+        ) : (
+          <div className="py-16 text-center">
+            <p className="font-semibold mb-1">This post isn't available in this channel</p>
+            <p className="text-sm text-foreground/50 mb-4">It may have been deleted or moved.</p>
+            <button onClick={onClosePost} className="text-sm font-semibold text-primary hover:underline">Back to the feed</button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   if (loading) return <div className="flex justify-center py-12"><span className="w-6 h-6 border-2 border-primary/30 border-t-primary rounded-full animate-spin" /></div>;
 
   return (
     <div className="rounded-2xl border border-foreground/10 overflow-hidden">
-      {posts.map(post => <PostCard key={post.id} post={post} />)}
+      {posts.map(post => <PostCard key={post.id} post={post} onOpenPost={onOpenPost} />)}
       {posts.length === 0 && <p className="py-16 text-center text-sm text-foreground/50">No posts yet. Share the first one.</p>}
     </div>
   );

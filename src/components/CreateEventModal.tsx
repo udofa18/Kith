@@ -147,8 +147,7 @@ export default function CreateEventModal({ isOpen, onClose, communityId, eventId
       : form.isOffline && !form.locationName.trim() ? 'Add where it is happening.'
       : !form.isOffline && form.onlineType === 'external' && !/^https?:\/\//i.test(form.externalUrl.trim()) ? 'Add the full link people should join (https://…).'
       : null,
-    form.isPaid && !(Number(form.price) > 0) ? 'Set a ticket price above $0, or choose Free.' : null,
-    form.isPaid && form.currency === 'NGN' ? 'Card payments take USD. Switch the ticket price to USD.' : null,
+    form.isPaid && !(Number(form.price) > 0) ? 'Set a ticket price above zero, or choose Free.' : null,
   ][step];
 
   const pickBanner = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -409,16 +408,41 @@ export default function CreateEventModal({ isOpen, onClose, communityId, eventId
             <Choice active={form.isPaid} onClick={() => set({ isPaid: true })} icon={Lock} title="Paid" body="Charge per ticket." />
           </div>
           {form.isPaid && (
-            <div className="mt-3 flex items-center gap-2">
-              {form.currency === 'NGN' ? (
-                <select aria-label="Ticket currency" value="NGN" onChange={() => set({ currency: 'USD', price: 0 })} className={`${fieldInput} mt-0 w-40`}>
-                  <option value="NGN">NGN (switch to USD)</option>
-                  <option value="USD">USD</option>
-                </select>
-              ) : (
-                <span className="text-sm text-black/55 dark:text-white/55">USD</span>
-              )}
-              <input aria-label="Ticket price" type="number" min={1} step={1} value={form.price || ''} onChange={e => set({ price: Number(e.target.value) })} placeholder="10" className={`${fieldInput} mt-0 w-32`} />
+            <div className="mt-3 space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="inline-flex rounded-full border border-black/10 p-0.5 dark:border-white/10">
+                  {(['USD', 'NGN'] as const).map(code => (
+                    <button
+                      key={code}
+                      type="button"
+                      aria-pressed={form.currency === code}
+                      onClick={() => set({ currency: code })}
+                      className={`rounded-full px-3 py-1.5 text-xs font-semibold transition-colors ${
+                        form.currency === code
+                          ? 'bg-black text-white dark:bg-white dark:text-black'
+                          : 'text-black/55 hover:text-black dark:text-white/55 dark:hover:text-white'
+                      }`}
+                    >
+                      {code}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  aria-label="Ticket price"
+                  type="number"
+                  min={1}
+                  step={form.currency === 'NGN' ? 100 : 1}
+                  value={form.price || ''}
+                  onChange={e => set({ price: Number(e.target.value) })}
+                  placeholder={form.currency === 'NGN' ? '5000' : '10'}
+                  className={`${fieldInput} mt-0 w-32`}
+                />
+              </div>
+              <p className="text-xs text-black/50 dark:text-white/50">
+                {form.currency === 'NGN'
+                  ? 'Charged in naira with Paystack. Prices are never converted from USD.'
+                  : 'Charged in US dollars with Paystack. Prices are never converted from NGN.'}
+              </p>
             </div>
           )}
         </div>

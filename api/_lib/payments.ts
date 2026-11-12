@@ -10,14 +10,18 @@
  *   event_ticket  paid event → registration in Firestore, sold by the host
  *   event_boost   promote an event → promotion on the event in Firestore, sold by the platform
  *
- * Provider: Stripe (default). Set PAYMENT_PROVIDER=paystack to use the dormant Paystack path.
+ * Providers: Stripe and Paystack both run through the same order, pricing, commission, ledger and
+ * fulfilment code. PAYMENT_PROVIDER selects the deployment default; a checkout request may also
+ * name a provider explicitly. A provider is never selected implicitly when its configuration is
+ * missing or when it cannot charge the order currency.
  *
  * Rules that always hold:
  * - Money is in minor units (cents for USD, kobo for NGN).
- * - Access is granted only after the provider confirms payment and the amount and currency match.
+ * - Access is granted only after the provider confirms payment and the reference, amount, currency,
+ *   order and buyer match the database order.
  * - Fulfilment is idempotent, so webhooks and the order-status poll can both run safely.
  */
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import Stripe from 'stripe';
 import { FieldValue } from 'firebase-admin/firestore';
 import { supabaseAdmin } from './supabaseAdmin.js';
@@ -25,10 +29,22 @@ import { firebaseApp, firestoreAdmin, uidFromAuthHeader } from './firebaseApp.js
 import * as paystack from './paystack.js';
 import { PaystackError } from './paystack.js';
 import * as stripeApi from './stripe.js';
-import { ProviderConfigError } from './stripe.js';
+import { ProviderConfigError, ProviderUnavailableError } from './paymentErrors.js';
+import {
+  assertProviderSupportsCurrency,
+  defaultPaymentProvider,
+  providerAdapter,
+  providerInfo,
+  providersForCurrency,
+  resolvePaymentProvider,
+  type NormalizedPaymentResult,
+  type PaymentProviderId,
+} from './paymentProviders.js';
+import { isSuccess, isTerminalFailure, validatePaymentResult } from './paymentValidation.js';
+import { computeFee, MoneyError, normalizeCurrency, payoutAvailableAt, toMinorUnits } from './money.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const KINDS = ['product', 'event_ticket', 'event_boost', 'product_boost'] as const;
+const KINDS = ['product', 'event_ticket', 'event_boost', 'product_boost', 'community_membership'] as const;
 type OrderKind = (typeof KINDS)[number];
 
 const DAY = 86_400_000;
@@ -36,8 +52,16 @@ const DAY = 86_400_000;
 const payoutHoldDays = () => Math.max(0, Number(process.env.PAYOUT_HOLD_DAYS ?? 7));
 /** Smallest withdrawal, in USD cents. */
 const MIN_WITHDRAWAL_CENTS = 1000;
-/** Card payments (Stripe) are USD only. Paystack's NGN path is dormant. */
+/** Stripe card payments are USD only. Kept for the balance/withdrawal UI. */
 export const STRIPE_CURRENCY = 'USD';
+/**
+ * Payouts are paused while Stripe is marked "coming soon". Checkout still collects money with
+ * Paystack, and every seller share is credited to the existing creator ledger; withdrawals resume
+ * once Stripe (the only payout adapter) is re-enabled.
+ */
+export const PAYOUTS_COMING_SOON = true;
+export const PAYOUTS_COMING_SOON_MESSAGE =
+  'Payouts are coming soon. Keep selling — your earnings stay in your Kith balance until withdrawals open.';
 /** Event boost tiers. Prices are USD cents and live only on the server. */
 export const BOOST_TIERS = {
   feed_3d: { label: 'Feed boost · 3 days', placement: 'feed', days: 3, cents: 900 },
@@ -59,10 +83,43 @@ export interface PaymentResult {
 }
 const fail = (status: number, error: string): PaymentResult => ({ status, body: { error } });
 
-export const paymentProvider = (): 'stripe' | 'paystack' => (process.env.PAYMENT_PROVIDER === 'paystack' ? 'paystack' : 'stripe');
+/** The deployment default provider. Throws if PAYMENT_PROVIDER has an unknown value. */
+export const paymentProvider = (): PaymentProviderId => defaultPaymentProvider();
 /** Platform commission in basis points. 1000 = 10%. */
 const platformFeeBps = () => Number(process.env.PLATFORM_FEE_BPS ?? 1000);
 const appUrl = () => process.env.APP_URL || 'http://localhost:3000';
+
+function absoluteUrl(path: string, base: string): string {
+  const normalizedBase = base.endsWith('/') ? base : `${base}/`;
+  return new URL(path.replace(/^\//, ''), normalizedBase).toString();
+}
+
+/** Paystack has a separate, optional public base URL from Stripe. Must be a site origin. */
+function providerReturnBase(provider: PaymentProviderId): string {
+  if (provider !== 'paystack') return appUrl();
+  const configured = process.env.PAYSTACK_CALLBACK_URL?.trim();
+  if (!configured) return appUrl();
+  try {
+    const url = new URL(configured);
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Error('invalid protocol');
+    return configured;
+  } catch {
+    throw new ProviderConfigError('PAYSTACK_CALLBACK_URL must be an absolute http(s) URL.');
+  }
+}
+
+function successUrlFor(orderId: string, provider: PaymentProviderId, returnPath: string): string {
+  const url = new URL(absoluteUrl(returnPath, providerReturnBase(provider)));
+  url.searchParams.set('order', orderId);
+  url.searchParams.set('provider', provider);
+  return url.toString();
+}
+
+function cancelUrlFor(returnPath: string): string {
+  const url = new URL(absoluteUrl(returnPath, appUrl()));
+  url.searchParams.set('cancelled', '1');
+  return url.toString();
+}
 
 class CheckoutError extends Error {
   constructor(public status: number, message: string) {
@@ -108,7 +165,7 @@ async function priceProduct(uid: string, productId: string): Promise<PricedTarge
     kind: 'product',
     targetId: product.id,
     sellerId: product.creator_uid,
-    currency: product.currency,
+    currency: normalizeCurrency(product.currency),
     amountMinor: product.price_cents,
     title: String(product.title ?? 'Product').slice(0, 120),
     metadata: { productId: product.id },
@@ -129,12 +186,13 @@ async function priceEventTicket(uid: string, eventId: string): Promise<PricedTar
   const registration = await fs.doc(`events/${eventId}/registrations/${uid}`).get();
   if (registration.exists) throw new CheckoutError(409, 'You are already registered for this event');
 
+  const currency = normalizeCurrency(event.currency ?? 'USD');
   return {
     kind: 'event_ticket',
     targetId: eventId,
     sellerId: event.hostId,
-    currency: event.currency === 'NGN' ? 'NGN' : 'USD',
-    amountMinor: Math.round(Number(event.price) * 100),
+    currency,
+    amountMinor: toMinorUnits(event.price, currency),
     title: String(event.title ?? 'Event ticket').slice(0, 120),
     metadata: { eventId },
     productLines: [],
@@ -169,8 +227,7 @@ async function priceEventBoost(uid: string, eventId: string, tierId: string): Pr
   };
 }
 
-async function priceProductBoost(uid: string, productId: string, tierId: string): Promise<PricedTarget> {
-  const tier = PRODUCT_PROMO_TIERS[tierId as ProductPromoTierId];
+async function priceProductBoost(uid: string, productId: string, tierId: string): Promise<PricedTarget> {  const tier = PRODUCT_PROMO_TIERS[tierId as ProductPromoTierId];
   if (!tier) throw new CheckoutError(400, 'Unknown promotion tier');
 
   const { data: product, error } = await supabaseAdmin()
@@ -195,15 +252,248 @@ async function priceProductBoost(uid: string, productId: string, tierId: string)
   };
 }
 
+/**
+ * The joining fee stored on a community. Real-money fees are USD; XP fees stay on the legacy
+ * client-side XP transfer path. Monthly billing is only valid for real money.
+ */
+export interface CommunityFee {
+  amount: number;
+  currency: 'xp' | 'usd';
+  interval: 'once' | 'month';
+}
+
+export function parseCommunityFee(community: any): CommunityFee | null {
+  const raw = community?.fee;
+  if (raw && Number(raw.amount) > 0) {
+    const currency = raw.currency === 'usd' ? 'usd' : 'xp';
+    return {
+      amount: Number(raw.amount),
+      currency,
+      interval: currency === 'usd' && raw.interval === 'month' ? 'month' : 'once',
+    };
+  }
+  // Legacy communities only have isPaid + price, and those were always XP one-time fees.
+  if (community?.isPaid && Number(community.price) > 0) {
+    return { amount: Number(community.price), currency: 'xp', interval: 'once' };
+  }
+  return null;
+}
+
+/** True when an existing member's paid access is still valid. */
+function membershipIsActive(member: any): boolean {
+  if (!member) return false;
+  if (member.subscriptionStatus === 'cancelled') return false;
+  const expires = member.membershipExpiresAt ? new Date(member.membershipExpiresAt).getTime() : 0;
+  return !expires || expires > Date.now();
+}
+
+async function priceCommunityMembership(uid: string, communityId: string): Promise<PricedTarget> {
+  const fs = firestoreAdmin();
+  const snapshot = await fs.doc(`communities/${communityId}`).get();
+  if (!snapshot.exists) throw new CheckoutError(404, 'Community not found');
+  const community = snapshot.data() ?? {};
+
+  const fee = parseCommunityFee(community);
+  if (!fee) throw new CheckoutError(400, 'This community is free to join');
+  if (fee.currency !== 'usd') {
+    throw new CheckoutError(400, 'This community charges XP to join. Card checkout is only available for real-money fees.');
+  }
+  if (community.creatorId === uid) throw new CheckoutError(400, "You can't pay to join your own community");
+  if (typeof community.creatorId !== 'string' || !community.creatorId) {
+    throw new CheckoutError(400, 'This community has no owner to pay');
+  }
+
+  const member = (await fs.doc(`communities/${communityId}/members/${uid}`).get()).data();
+  if (membershipIsActive(member)) throw new CheckoutError(409, 'You are already a member of this community');
+
+  // Paid access is still access: a ban (or a timed ban that hasn't lapsed) blocks checkout even
+  // though the server writes the member document outside the Firestore rules.
+  const ban = (await fs.doc(`communities/${communityId}/bans/${uid}`).get()).data();
+  if (ban) {
+    const raw = ban.expiresAt;
+    const expires = raw?.toMillis?.() ?? (raw ? new Date(raw).getTime() : 0);
+    if (!expires || !Number.isFinite(expires) || expires > Date.now()) {
+      throw new CheckoutError(403, "You can't join this community right now");
+    }
+  }
+
+  // Approval-gated communities collect payment only after an admin approved the request. Without
+  // this check a member could skip review by calling checkout directly.
+  const control = community.membershipControl ?? {};
+  const requiresApproval =
+    community.isPrivate === true ||
+    control.approvalRequired === true ||
+    (typeof control.accessType === 'string' && control.accessType !== 'public');
+  if (requiresApproval) {
+    const request = (await fs.doc(`communities/${communityId}/joinRequests/${uid}`).get()).data();
+    if (request?.status !== 'approved') {
+      throw new CheckoutError(403, 'Your join request must be approved before you can pay');
+    }
+  }
+
+  const amountMinor = toMinorUnits(fee.amount, 'USD');
+  if (amountMinor <= 0) throw new CheckoutError(400, 'This community joining fee is invalid');
+
+  return {
+    kind: 'community_membership',
+    targetId: communityId,
+    sellerId: community.creatorId,
+    currency: 'USD',
+    amountMinor,
+    title: `Membership: ${String(community.name ?? 'Community').slice(0, 80)}`,
+    metadata: {
+      communityId,
+      memberId: uid,
+      interval: fee.interval,
+      subscription: fee.interval === 'month',
+    },
+    productLines: [],
+    returnPath: `/community/${communityId}`,
+  };
+}
+
 async function priceTarget(kind: OrderKind, uid: string, targetId: string, tierId?: string): Promise<PricedTarget> {
   if (kind === 'product') return priceProduct(uid, targetId);
   if (kind === 'event_ticket') return priceEventTicket(uid, targetId);
   if (kind === 'product_boost') return priceProductBoost(uid, targetId, tierId ?? '');
+  if (kind === 'community_membership') return priceCommunityMembership(uid, targetId);
   return priceEventBoost(uid, targetId, tierId ?? '');
 }
 
-export async function listBanks(): Promise<PaymentResult> {
+/** Adds calendar months without rolling a 31st into the next month. */
+function addMonthsIso(from: string | number | Date, months = 1): string {
+  const date = new Date(from);
+  const day = date.getUTCDate();
+  date.setUTCDate(1);
+  date.setUTCMonth(date.getUTCMonth() + months);
+  const lastDay = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
+  date.setUTCDate(Math.min(day, lastDay));
+  return date.toISOString();
+}
+
+/**
+ * Returns a Paystack plan for this exact community fee, creating one if the owner changed the
+ * amount/currency. Plans are keyed by community + currency + amount so unrelated communities never
+ * share billing settings.
+ */
+async function ensureCommunityPlan(
+  communityId: string,
+  amountMinor: number,
+  currency: 'NGN' | 'USD',
+  communityName: string,
+): Promise<string> {
+  const db = supabaseAdmin();
+  const lookup = () =>
+    db
+      .from('community_subscription_plans')
+      .select('provider_plan_code')
+      .eq('community_id', communityId)
+      .eq('provider', 'paystack')
+      .eq('currency', currency)
+      .eq('amount_cents', amountMinor)
+      .eq('interval', 'month')
+      .maybeSingle();
+
+  const { data: existing, error: lookupError } = await lookup();
+  if (lookupError) throw lookupError;
+  if (existing?.provider_plan_code) return String(existing.provider_plan_code);
+
+  const plan = await paystack.createPlan({
+    name: `${String(communityName || 'Community').slice(0, 80)} membership`,
+    description: 'Monthly community membership',
+    amountMinor,
+    currency,
+    interval: 'monthly',
+  });
+  if (!plan?.plan_code) throw new PaystackError('Paystack did not return a plan code', 502);
+  if (plan.amount !== amountMinor || (plan.currency && plan.currency.toUpperCase() !== currency)) {
+    throw new PaystackError('Paystack returned a plan with a different amount or currency', 502);
+  }
+
+  const { error: insertError } = await db.from('community_subscription_plans').insert({
+    community_id: communityId,
+    provider: 'paystack',
+    provider_plan_code: plan.plan_code,
+    currency,
+    amount_cents: amountMinor,
+    interval: 'month',
+  });
+  if (insertError) {
+    if (insertError.code === '23505') {
+      const { data: raced, error: racedError } = await lookup();
+      if (racedError) throw racedError;
+      if (raced?.provider_plan_code) return String(raced.provider_plan_code);
+    }
+    throw insertError;
+  }
+  return plan.plan_code;
+}
+
+/** Stops a previous Paystack subscription for this member before a replacement starts. */
+async function disableStaleCommunitySubscription(
+  communityId: string,
+  memberId: string,
+  keepSubscriptionId?: string | null,
+): Promise<void> {
+  const db = supabaseAdmin();
+  const { data, error } = await db
+    .from('community_subscriptions')
+    .select('provider_subscription_id, provider_email_token, status')
+    .eq('community_id', communityId)
+    .eq('member_id', memberId)
+    .maybeSingle();
+  if (error) throw error;
+  const code = data?.provider_subscription_id ? String(data.provider_subscription_id) : null;
+  if (!code || code === keepSubscriptionId) return;
+  if (data?.status === 'cancelled' || data?.status === 'completed') return;
+
   try {
+    await paystack.disableSubscription({ code, token: String(data?.provider_email_token ?? '') });
+  } catch (e) {
+    // The old subscription will still be reconciled by its own webhooks. Never block a payment
+    // that already succeeded because cleanup failed.
+    console.error('Could not disable stale Paystack subscription', code, e);
+  }
+}
+
+/** Saves the plan/member pairing before checkout so subscription.create can be matched safely. */
+async function upsertPendingCommunitySubscription(input: {
+  communityId: string;
+  memberId: string;
+  sellerId: string;
+  planCode: string;
+  currency: 'NGN' | 'USD';
+  amountMinor: number;
+  orderId: string;
+}): Promise<void> {
+  await disableStaleCommunitySubscription(input.communityId, input.memberId);
+  const { error } = await supabaseAdmin()
+    .from('community_subscriptions')
+    .upsert(
+      {
+        community_id: input.communityId,
+        member_id: input.memberId,
+        seller_id: input.sellerId,
+        provider: 'paystack',
+        provider_plan_code: input.planCode,
+        provider_subscription_id: null,
+        provider_customer_code: null,
+        provider_email_token: null,
+        currency: input.currency,
+        amount_cents: input.amountMinor,
+        interval: 'month',
+        status: 'pending',
+        current_period_end: null,
+        last_order_id: input.orderId,
+        last_invoice_code: null,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'community_id,member_id' },
+    );
+  if (error) throw error;
+}
+
+export async function listBanks(): Promise<PaymentResult> {  try {
     return { status: 200, body: { banks: await paystack.listNigerianBanks() } };
   } catch (e) {
     return failure(e);
@@ -215,10 +505,19 @@ function isMissingRpc(e: unknown): boolean {
   return !!e && typeof e === 'object' && (e as { code?: string }).code === 'PGRST202';
 }
 
+/** True when Postgres/PostgREST rejects a column that the pending audit migration adds. */
+function isMissingColumn(e: unknown): boolean {
+  if (!e || typeof e !== 'object') return false;
+  const { code, message } = e as { code?: string; message?: string };
+  return code === '42703' || code === 'PGRST204' || /column .* does not exist/i.test(message ?? '');
+}
+
 function failure(e: unknown): PaymentResult {
   console.error('Payments error:', e);
   if (e instanceof CheckoutError) return fail(e.status, e.message);
   if (e instanceof ProviderConfigError) return fail(503, e.message);
+  if (e instanceof ProviderUnavailableError) return fail(400, e.message);
+  if (e instanceof MoneyError) return fail(400, e.message);
   if (e instanceof Stripe.errors.StripeError) return fail(502, e.message);
   if (e instanceof PaystackError && e.status !== 500) return fail(502, e.message);
   return fail(500, 'Payments failed. Please try again.');
@@ -268,6 +567,7 @@ async function ensureSupabaseUser(uid: string): Promise<{ email: string | null; 
 export async function startConnectOnboarding(body: any, authorization?: string): Promise<PaymentResult> {
   const uid = await uidFromAuthHeader(authorization);
   if (!uid) return fail(401, 'Sign in required');
+  if (PAYOUTS_COMING_SOON) return fail(503, PAYOUTS_COMING_SOON_MESSAGE);
   const country = typeof body?.country === 'string' ? body.country.toUpperCase() : '';
   if (!/^[A-Z]{2}$/.test(country)) return fail(400, 'Choose your country');
 
@@ -382,6 +682,49 @@ async function syncConnectRow(account: stripeApi.ConnectAccountState): Promise<v
   if (error) throw error;
 }
 
+/**
+ * Returns the authoritative currency, amount and available providers for a checkout target.
+ * The browser never supplies price/currency; this is also what the checkout UI uses to decide
+ * whether to offer Paystack for a particular product/event/boost.
+ */
+export async function getCheckoutOptions(body: any, authorization?: string): Promise<PaymentResult> {
+  const uid = await uidFromAuthHeader(authorization);
+  if (!uid) return fail(401, 'Sign in required');
+  const kind = body?.kind as OrderKind;
+  const targetId = typeof body?.targetId === 'string' ? body.targetId : '';
+  const tierId = typeof body?.tierId === 'string' ? body.tierId : undefined;
+  if (!KINDS.includes(kind) || !/^[\w-]{1,128}$/.test(targetId)) return fail(400, 'Invalid checkout request');
+
+  try {
+    const target = await priceTarget(kind, uid, targetId, tierId);
+    const providers = providersForCurrency(target.currency);
+    // Payouts are paused while Stripe is "coming soon", so sellers do not need a connected payout
+    // account to sell. Their share is still credited to the existing creator ledger.
+    const sellerReady = true;
+    const comingSoonProviders = providerInfo()
+      .filter(p => p.comingSoon)
+      .map(p => ({ id: p.id, label: p.label }));
+
+    return {
+      status: 200,
+      body: {
+        kind,
+        targetId: target.targetId,
+        title: target.title,
+        currency: target.currency,
+        amountMinor: target.amountMinor,
+        free: target.amountMinor === 0,
+        provider: defaultPaymentProvider(),
+        providers,
+        comingSoonProviders,
+        sellerReady,
+      },
+    };
+  } catch (e) {
+    return failure(e);
+  }
+}
+
 export async function createCheckout(body: any, authorization?: string): Promise<PaymentResult> {
   const uid = await uidFromAuthHeader(authorization);
   if (!uid) return fail(401, 'Sign in required');
@@ -390,11 +733,18 @@ export async function createCheckout(body: any, authorization?: string): Promise
   const tierId = typeof body?.tierId === 'string' ? body.tierId : undefined;
   if (!KINDS.includes(kind) || !/^[\w-]{1,128}$/.test(targetId)) return fail(400, 'Invalid checkout request');
 
-  const db = supabaseAdmin();
-  const provider = paymentProvider();
   try {
     const target = await priceTarget(kind, uid, targetId, tierId);
     const orderId = randomUUID();
+    // Orders and order_items reference users, and Paystack needs a real email. Do this before the
+    // free path too, so a buyer who signed in before the marketplace tables existed can still check out.
+    const buyer = await ensureSupabaseUser(uid);
+
+    // Free orders never contact a payment provider. An explicit unknown provider is still rejected.
+    const provider: PaymentProviderId =
+      target.amountMinor === 0 && !body?.provider
+        ? defaultPaymentProvider()
+        : resolvePaymentProvider(body?.provider);
 
     if (target.amountMinor === 0) {
       // Free products are granted directly. Free events never reach checkout.
@@ -410,33 +760,36 @@ export async function createCheckout(body: any, authorization?: string): Promise
         fee_cents: 0,
         seller_cents: 0,
         provider,
+        metadata: { ...target.metadata, provider, buyerId: uid },
         paid_at: new Date().toISOString(),
       });
       await insertOrderItems(orderId, target.productLines.map(l => ({ ...l, platform_fee_cents: 0, creator_amount_cents: 0, currency: target.currency })));
       await grantOrder(orderId);
-      return { status: 200, body: { free: true, orderId } };
+      return { status: 200, body: { free: true, orderId, provider, currency: target.currency, amountMinor: 0 } };
     }
 
-    let seller: { provider_account_id: string; payouts_enabled: boolean } | null = null;
-    if (target.sellerId) {
-      const { data, error } = await db
-        .from('creator_accounts')
-        .select('provider_account_id, payouts_enabled')
-        .eq('user_id', target.sellerId)
-        .maybeSingle();
-      if (error) throw error;
-      if (!data?.payouts_enabled) throw new CheckoutError(400, 'The seller has not finished payout setup yet');
-      seller = data;
-    }
+    // Sellers no longer need a Stripe payout account while payouts are paused. Earnings accrue in
+    // the creator ledger and become withdrawable when Stripe payouts return.
+    assertProviderSupportsCurrency(provider, target.currency);
 
-    const buyer = await ensureSupabaseUser(uid);
-
-    if (provider === 'stripe' && target.currency !== STRIPE_CURRENCY) {
-      throw new CheckoutError(400, `This is priced in ${target.currency}. Card payments take ${STRIPE_CURRENCY} only, so the seller needs to set a USD price.`);
-    }
-
-    const fee = target.sellerId ? Math.round((target.amountMinor * platformFeeBps()) / 10000) : target.amountMinor;
+    const fee = target.sellerId ? computeFee(target.amountMinor, platformFeeBps()) : target.amountMinor;
     const sellerCents = target.amountMinor - fee;
+
+    // Monthly memberships are sold through a Paystack plan. Create/reuse it before the order so a
+    // failure here never leaves a chargeable order without a matching plan.
+    let paystackPlanCode: string | undefined;
+    if (kind === 'community_membership' && target.metadata.interval === 'month') {
+      if (provider !== 'paystack') {
+        throw new CheckoutError(400, 'Recurring community memberships are only available with Paystack');
+      }
+      paystackPlanCode = await ensureCommunityPlan(
+        target.targetId,
+        target.amountMinor,
+        target.currency,
+        target.title,
+      );
+      target.metadata = { ...target.metadata, paystackPlanCode };
+    }
 
     await insertOrder({
       id: orderId,
@@ -450,45 +803,127 @@ export async function createCheckout(body: any, authorization?: string): Promise
       fee_cents: fee,
       seller_cents: sellerCents,
       provider,
-      metadata: target.metadata,
-      // Stripe sales stay on the platform account and are credited to the seller's balance.
-      funds_held: provider === 'stripe' && !!target.sellerId,
+      metadata: { ...target.metadata, provider, buyerId: uid },
+      // Both providers collect into the platform account. Creator sales are credited to the
+      // existing ledger and withdrawn through Stripe Connect; boosts are platform revenue.
+      funds_held: !!target.sellerId,
     });
     await insertOrderItems(
       orderId,
       target.productLines.map(l => ({ ...l, platform_fee_cents: fee, creator_amount_cents: sellerCents, currency: target.currency })),
     );
 
-    if (provider === 'stripe') {
-      const session = await stripeApi.createCheckoutSession({
-        orderId,
-        kind,
-        targetId: target.targetId,
-        title: target.title,
-        amountMinor: target.amountMinor,
+    // Persist the pending subscription before the hosted page can send `subscription.create`.
+    if (paystackPlanCode && target.sellerId) {
+      await upsertPendingCommunitySubscription({
+        communityId: target.targetId,
+        memberId: uid,
+        sellerId: target.sellerId,
+        planCode: paystackPlanCode,
         currency: target.currency,
-        buyerEmail: buyer?.email ?? '',
-        successUrl: `${appUrl()}${target.returnPath}?order=${orderId}`,
-        cancelUrl: `${appUrl()}${target.returnPath}?cancelled=1`,
+        amountMinor: target.amountMinor,
+        orderId,
       });
-      if (!session.url) throw new Error('Stripe did not return a checkout URL');
-      return { status: 200, body: { authorizationUrl: session.url, orderId } };
     }
 
-    // Paystack (dormant). Needs a seller subaccount, so platform-only sales aren't supported here.
-    if (!seller) throw new CheckoutError(400, 'This purchase is not available with the current provider');
-    if (!buyer?.email) throw new CheckoutError(400, 'Add an email address to your profile to check out');
-    const tx = await paystack.initializeTransaction({
-      email: buyer.email,
+    if (provider === 'paystack' && !buyer?.email) {
+      throw new CheckoutError(400, 'Add an email address to your profile to check out with Paystack');
+    }
+
+    const session = await providerAdapter(provider).createSession({
+      orderId,
+      kind,
+      targetId: target.targetId,
+      title: target.title,
       amountMinor: target.amountMinor,
       currency: target.currency,
-      reference: orderId,
-      callbackUrl: `${appUrl()}${target.returnPath}?order=${orderId}`,
-      subaccountCode: seller.provider_account_id,
-      platformFeeMinor: fee,
-      metadata: { orderId, kind, targetId: target.targetId, buyerId: uid },
+      buyerEmail: buyer?.email ?? '',
+      successUrl: successUrlFor(orderId, provider, target.returnPath),
+      cancelUrl: cancelUrlFor(target.returnPath),
+      metadata: { orderId, kind, targetId: target.targetId, buyerId: uid, provider },
+      paystackPlanCode,
     });
-    return { status: 200, body: { authorizationUrl: tx.authorization_url, orderId } };
+    await setOrderProviderReference(orderId, session.providerReference);
+
+    return {
+      status: 200,
+      body: {
+        authorizationUrl: session.authorizationUrl,
+        orderId,
+        provider,
+        currency: target.currency,
+        amountMinor: target.amountMinor,
+      },
+    };
+  } catch (e) {
+    return failure(e);
+  }
+}
+
+/**
+ * Stops a member's monthly community renewal and removes their paid access. Safe to call when there
+ * is no subscription. The Paystack call is skipped when the subscription was never linked or is
+ * already finished, but the member document is still removed so calling this directly cannot keep
+ * access for free.
+ */
+export async function cancelCommunityMembership(
+  body: any,
+  authorization?: string,
+): Promise<PaymentResult> {
+  const uid = await uidFromAuthHeader(authorization);
+  if (!uid) return fail(401, 'Sign in required');
+  const communityId = typeof body?.communityId === 'string' ? body.communityId : '';
+  if (!/^[\w-]{1,128}$/.test(communityId)) return fail(400, 'Invalid community');
+
+  try {
+    const db = supabaseAdmin();
+    const { data: subscription, error } = await db
+      .from('community_subscriptions')
+      .select('id, provider_subscription_id, provider_email_token, status, current_period_end')
+      .eq('community_id', communityId)
+      .eq('member_id', uid)
+      .maybeSingle();
+    if (error) throw error;
+    if (!subscription) return { status: 200, body: { cancelled: false } };
+
+    const code = subscription.provider_subscription_id
+      ? String(subscription.provider_subscription_id)
+      : null;
+    const active = subscription.status !== 'cancelled' && subscription.status !== 'completed';
+    if (code && active) {
+      // Paystack needs the email token from subscription.create. Without it we cannot stop future
+      // charges, so fail loudly instead of leaving the member to be billed again.
+      const token = String(subscription.provider_email_token ?? '');
+      if (!token) {
+        return fail(502, "We couldn't stop the recurring payment yet. Please try again in a moment.");
+      }
+      await paystack.disableSubscription({ code, token });
+    }
+
+    if (active) {
+      const { error: updateError } = await db
+        .from('community_subscriptions')
+        .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+        .eq('id', subscription.id);
+      if (updateError) throw updateError;
+    }
+
+    // Cancelling means giving up paid access, not keeping it for free. The member document is
+    // removed here too so calling the endpoint directly cannot bypass future charges.
+    const fs = firestoreAdmin();
+    const memberRef = fs.doc(`communities/${communityId}/members/${uid}`);
+    const communityRef = fs.doc(`communities/${communityId}`);
+    await fs.runTransaction(async tx => {
+      const [memberSnap, communitySnap] = await Promise.all([tx.get(memberRef), tx.get(communityRef)]);
+      if (!memberSnap.exists) return;
+      tx.delete(memberRef);
+      if (communitySnap.exists) tx.update(communityRef, { memberCount: FieldValue.increment(-1) });
+    });
+
+    return {
+      status: 200,
+      body: { cancelled: true, accessUntil: subscription.current_period_end ?? null },
+    };
   } catch (e) {
     return failure(e);
   }
@@ -502,37 +937,77 @@ export async function getOrderStatus(orderId: string, authorization?: string): P
 
   try {
     const db = supabaseAdmin();
-    const { data: order, error } = await db.from('orders').select('id, buyer_id, status, provider').eq('id', orderId).maybeSingle();
+    const { data: order, error } = await db
+      .from('orders')
+      .select('id, buyer_id, status, provider, metadata')
+      .eq('id', orderId)
+      .maybeSingle();
     if (error) throw error;
     if (!order || order.buyer_id !== uid) return fail(404, 'Order not found');
 
     if (order.status === 'pending') {
-      await reconcileOrder(orderId, order.provider).catch(e => console.error('Order reconcile failed:', e));
+      await reconcileOrder(orderId, order.provider, order.metadata).catch(e => console.error('Order reconcile failed:', e));
     }
 
     const { data: current, error: currentError } = await db
       .from('orders')
-      .select('status, paid_at, kind')
+      .select('status, paid_at, kind, provider, currency, total_cents')
       .eq('id', orderId)
       .single();
     if (currentError) throw currentError;
-    return { status: 200, body: { orderId, kind: current.kind, status: current.status, paidAt: current.paid_at } };
+    return {
+      status: 200,
+      body: {
+        orderId,
+        kind: current.kind,
+        status: current.status,
+        paidAt: current.paid_at,
+        provider: current.provider,
+        currency: current.currency,
+        amountMinor: current.total_cents,
+      },
+    };
   } catch (e) {
     return failure(e);
   }
 }
 
-async function reconcileOrder(orderId: string, provider: string): Promise<void> {
-  if (provider === 'stripe') {
-    // Stripe checkout sessions aren't looked up by order id here, so rely on the webhook.
-    return;
-  }
-  await fulfilPaystackOrder(orderId);
+async function reconcileOrder(
+  orderId: string,
+  provider: string,
+  metadata?: Record<string, unknown> | null,
+): Promise<void> {
+  if (provider !== 'stripe' && provider !== 'paystack') return;
+
+  // Paystack uses the internal order id as the reference. Stripe's checkout session id is stored in
+  // the order metadata when the session is created; older rows fall back to the webhook.
+  const providerReference =
+    provider === 'paystack'
+      ? orderId
+      : typeof metadata?.providerReference === 'string'
+        ? metadata.providerReference
+        : null;
+  if (!providerReference) return;
+
+  const result = await providerAdapter(provider).verify(providerReference);
+  await fulfilOrder(orderId, provider, result);
 }
 
 /** Verifies the Paystack webhook signature, then fulfils the referenced order. Paystack retries on non-200. */
-export async function handlePaystackWebhook(rawBody: Buffer, signature: string | undefined): Promise<PaymentResult> {
-  if (!paystack.isValidWebhookSignature(rawBody, signature)) return fail(401, 'Invalid signature');
+export async function handlePaystackWebhook(
+  rawBody: Buffer,
+  headers: paystack.PaystackWebhookHeaders | string | undefined,
+): Promise<PaymentResult> {
+  const normalizedHeaders: paystack.PaystackWebhookHeaders =
+    typeof headers === 'string' ? { legacySignature: headers } : (headers ?? {});
+
+  let matched: string | null;
+  try {
+    matched = paystack.verifyWebhookSignature(rawBody, normalizedHeaders);
+  } catch (e) {
+    return failure(e);
+  }
+  if (!matched) return fail(401, 'Invalid signature');
 
   let event: any;
   try {
@@ -540,18 +1015,439 @@ export async function handlePaystackWebhook(rawBody: Buffer, signature: string |
   } catch {
     return fail(400, 'Invalid JSON');
   }
+  if (!event || typeof event !== 'object' || typeof event.event !== 'string') {
+    return fail(400, 'Invalid event');
+  }
+
+  const reference = typeof event?.data?.reference === 'string' ? event.data.reference : null;
+  const orderId = reference && UUID_RE.test(reference) ? reference : null;
+  const data = event?.data ?? {};
+  // Subscription events do not always carry a transaction reference or numeric id. Build a stable
+  // key from the most specific identifier so retries dedupe instead of overwriting each other.
+  const eventKey =
+    data?.id != null
+      ? String(data.id)
+      : data?.invoice_code
+        ? String(data.invoice_code)
+        : data?.subscription_code
+          ? String(data.subscription_code)
+          : data?.subscription?.subscription_code
+            ? String(data.subscription.subscription_code)
+            : data?.plan?.plan_code
+              ? String(data.plan.plan_code)
+              : reference ?? createHash('sha256').update(rawBody).digest('hex').slice(0, 32);
+  const eventRecordId = `paystack:${event.event}:${eventKey}`;
 
   try {
-    if (event?.data?.id) await recordEvent(`paystack:${event.event}:${event.data.id}`, 'paystack', String(event.event));
-    const reference = event?.data?.reference;
-    if (event?.event === 'charge.success' && typeof reference === 'string' && UUID_RE.test(reference)) {
-      await fulfilPaystackOrder(reference);
+    // Persist before doing any slow work. A duplicate delivery still runs through idempotent
+    // fulfilment, which is what makes retries and out-of-order events safe.
+    await recordEvent(eventRecordId, 'paystack', event.event, {
+      payload: event,
+      providerReference: reference,
+      orderId,
+    });
+
+    if (event.event === 'charge.success' && orderId) {
+      await fulfilPaystackOrder(orderId);
+    } else if (event.event === 'subscription.create') {
+      await handlePaystackSubscriptionCreated(data);
+    } else if (event.event === 'invoice.update') {
+      await handlePaystackSubscriptionInvoice(data);
+    } else if (event.event === 'invoice.payment_failed') {
+      await handlePaystackSubscriptionFailed(data);
+    } else if (event.event === 'subscription.not_renew') {
+      await setPaystackSubscriptionStatus(data, 'non-renewing');
+    } else if (event.event === 'subscription.disable') {
+      await handlePaystackSubscriptionDisabled(data);
     }
+
+    await markEventProcessed(eventRecordId);
     return { status: 200, body: { received: true } };
   } catch (e) {
-    console.error('Webhook processing failed:', e);
+    console.error('Paystack webhook processing failed:', e);
+    await markEventError(eventRecordId, e).catch(markError => console.error('Could not flag webhook event:', markError));
     return fail(500, 'Could not process event');
   }
+}
+
+function paystackSubscriptionCode(data: any): string | null {
+  const code = data?.subscription?.subscription_code ?? data?.subscription_code ?? data?.code;
+  return typeof code === 'string' && /^SUB_[A-Za-z0-9]+$/.test(code) ? code : null;
+}
+
+function paystackPlanCode(data: any): string | null {
+  const code = data?.plan?.plan_code ?? data?.plan_code;
+  return typeof code === 'string' && /^PLN_[A-Za-z0-9]+$/.test(code) ? code : null;
+}
+
+function paystackCustomerEmail(data: any): string | null {
+  const email = data?.customer?.email ?? data?.email;
+  return typeof email === 'string' && email.includes('@') ? email.toLowerCase() : null;
+}
+
+function isoOrNull(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+/** Merges subscription state onto an existing Firestore member. Never creates a membership. */
+async function updateCommunityMemberSubscription(
+  communityId: string,
+  memberId: string,
+  fields: Record<string, unknown>,
+): Promise<void> {
+  const fs = firestoreAdmin();
+  const ref = fs.doc(`communities/${communityId}/members/${memberId}`);
+  const snapshot = await ref.get();
+  if (!snapshot.exists) return;
+  await ref.set(fields, { merge: true });
+}
+
+/** Removes paid access when a subscription ends. A newer subscription is left alone. */
+async function revokeCommunityMembership(
+  communityId: string,
+  memberId: string,
+  subscriptionCode: string,
+): Promise<void> {
+  const fs = firestoreAdmin();
+  const communityRef = fs.doc(`communities/${communityId}`);
+  const memberRef = fs.doc(`communities/${communityId}/members/${memberId}`);
+
+  await fs.runTransaction(async tx => {
+    const memberSnap = await tx.get(memberRef);
+    if (!memberSnap.exists) return;
+    const member = memberSnap.data() ?? {};
+    // If the member has already started a different subscription, leave the new one in place.
+    if (member.providerSubscriptionId && member.providerSubscriptionId !== subscriptionCode) return;
+    tx.delete(memberRef);
+    tx.update(communityRef, { memberCount: FieldValue.increment(-1) });
+  });
+}
+
+/**
+ * Links a Paystack subscription to the pending community subscription created before checkout.
+ * Paystack identifies the payer by plan + customer email, which is the email we sent to checkout.
+ */
+async function handlePaystackSubscriptionCreated(data: any): Promise<void> {
+  const planCode = paystackPlanCode(data);
+  const subscriptionCode = paystackSubscriptionCode(data);
+  if (!planCode || !subscriptionCode) {
+    console.error('Paystack subscription.create is missing a plan or subscription code');
+    return;
+  }
+
+  const db = supabaseAdmin();
+  const { data: plans, error: planError } = await db
+    .from('community_subscription_plans')
+    .select('community_id')
+    .eq('provider_plan_code', planCode)
+    .limit(1);
+  if (planError) throw planError;
+  if (!plans?.length) {
+    // Not a Kith community plan (for example an operator-created plan). Acknowledge and ignore.
+    return;
+  }
+
+  const { data: pending, error: pendingError } = await db
+    .from('community_subscriptions')
+    .select('id, community_id, member_id, seller_id, status')
+    .eq('provider_plan_code', planCode)
+    .is('provider_subscription_id', null)
+    .order('created_at', { ascending: false })
+    .limit(25);
+  if (pendingError) throw pendingError;
+
+  let target = (pending ?? [])[0];
+  const email = paystackCustomerEmail(data);
+  if (!target) {
+    // Repeated subscription.create after the link was stored.
+    const { data: linked, error: linkedError } = await db
+      .from('community_subscriptions')
+      .select('id, community_id, member_id, seller_id, status')
+      .eq('provider_subscription_id', subscriptionCode)
+      .maybeSingle();
+    if (linkedError) throw linkedError;
+    if (!linked) return;
+    target = linked;
+  } else if ((pending ?? []).length > 1 && email) {
+    // Several members may share a plan. Disambiguate by the customer email Paystack charged.
+    const memberIds = (pending ?? []).map(row => row.member_id);
+    const { data: users, error: usersError } = await db.from('users').select('id, email').in('id', memberIds);
+    if (usersError) throw usersError;
+    const matched = (pending ?? []).find(row =>
+      (users ?? []).some(user => user.id === row.member_id && String(user.email ?? '').toLowerCase() === email),
+    );
+    if (matched) target = matched;
+  }
+
+  // The member left before Paystack finished creating the subscription. Stop it immediately so a
+  // cancelled checkout can never start billing later.
+  if (target.status === 'cancelled' || target.status === 'completed') {
+    const token = typeof data?.email_token === 'string' ? data.email_token : '';
+    if (token) {
+      await paystack
+        .disableSubscription({ code: subscriptionCode, token })
+        .catch(e => console.error('Could not disable a cancelled subscription', subscriptionCode, e));
+    }
+    const { error: cancelError } = await db
+      .from('community_subscriptions')
+      .update({
+        provider_subscription_id: subscriptionCode,
+        provider_email_token: token || null,
+        status: 'cancelled',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', target.id);
+    if (cancelError) throw cancelError;
+    return;
+  }
+
+  const periodEnd = isoOrNull(data?.next_payment_date);
+  const { error: updateError } = await db
+    .from('community_subscriptions')
+    .update({
+      provider_subscription_id: subscriptionCode,
+      provider_customer_code: typeof data?.customer?.customer_code === 'string' ? data.customer.customer_code : null,
+      provider_email_token: typeof data?.email_token === 'string' ? data.email_token : null,
+      status: 'active',
+      current_period_end: periodEnd,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', target.id);
+  if (updateError) throw updateError;
+
+  await updateCommunityMemberSubscription(target.community_id, target.member_id, {
+    providerSubscriptionId: subscriptionCode,
+    subscriptionStatus: 'active',
+    ...(periodEnd ? { membershipExpiresAt: periodEnd } : {}),
+  });
+}
+
+/**
+ * Credits a successful subscription renewal. The webhook body is never trusted for the amount:
+ * every transaction is re-verified with Paystack before an order or ledger row is written.
+ */
+async function handlePaystackSubscriptionInvoice(data: any): Promise<void> {
+  const subscriptionCode = paystackSubscriptionCode(data);
+  if (!subscriptionCode) return;
+
+  const paid = data?.paid === true || data?.paid === 1;
+  if (!paid || data?.status !== 'success') return;
+
+  const db = supabaseAdmin();
+  const { data: subscription, error: subscriptionError } = await db
+    .from('community_subscriptions')
+    .select('id, community_id, member_id, seller_id, currency, amount_cents, last_invoice_code, last_order_id')
+    .eq('provider_subscription_id', subscriptionCode)
+    .maybeSingle();
+  if (subscriptionError) throw subscriptionError;
+  if (!subscription) {
+    console.error('Paystack invoice for an unknown subscription', subscriptionCode);
+    return;
+  }
+
+  const reference = typeof data?.transaction?.reference === 'string' ? data.transaction.reference : null;
+  if (!reference) throw new Error('Successful subscription invoice has no transaction reference');
+  const invoiceCode = String(data?.invoice_code ?? data?.id ?? reference);
+
+  // Initial payments are fulfilled via charge.success with the internal order id. Never credit twice.
+  if (UUID_RE.test(reference)) {
+    const { data: initialOrder, error: initialError } = await db
+      .from('orders')
+      .select('id, status')
+      .eq('id', reference)
+      .maybeSingle();
+    if (initialError) throw initialError;
+    if (initialOrder) {
+      const periodEnd = isoOrNull(data?.period_end) ?? isoOrNull(data?.subscription?.next_payment_date);
+      await updateCommunitySubscriptionPeriod(subscription.id, invoiceCode, initialOrder.id, periodEnd);
+      return;
+    }
+  }
+
+  if (subscription.last_invoice_code === invoiceCode) return;
+
+  const { data: existingOrder, error: existingError } = await db
+    .from('orders')
+    .select('id')
+    .eq('kind', 'community_membership')
+    .contains('metadata', { invoiceCode })
+    .maybeSingle();
+  if (existingError) throw existingError;
+  if (existingOrder) {
+    await grantOrder(existingOrder.id);
+    return;
+  }
+
+  const verified = await paystack.verifyTransaction(reference);
+  if (verified.status !== 'success') {
+    throw new Error(`Paystack renewal ${reference} is ${verified.status}`);
+  }
+  const amount = Number(verified.amount);
+  const currency = normalizeCurrency(verified.currency);
+  if (amount !== subscription.amount_cents || currency !== subscription.currency) {
+    throw new Error(
+      `Renewal amount mismatch: expected ${subscription.amount_cents} ${subscription.currency}, got ${amount} ${currency}`,
+    );
+  }
+
+  const buyerEmail = await buyerEmailFor(subscription.member_id);
+  const paidEmail = verified.customer?.email?.toLowerCase();
+  if (buyerEmail && paidEmail && paidEmail !== buyerEmail.toLowerCase()) {
+    throw new Error('Renewal customer email does not match the member');
+  }
+
+  const periodEnd = isoOrNull(data?.period_end) ?? isoOrNull(data?.subscription?.next_payment_date);
+  const orderId = randomUUID();
+  const fee = computeFee(amount, platformFeeBps());
+  const sellerCents = amount - fee;
+
+  const { error: insertError } = await db.from('orders').insert({
+    id: orderId,
+    buyer_id: subscription.member_id,
+    status: 'paid',
+    currency,
+    total_cents: amount,
+    kind: 'community_membership',
+    target_id: subscription.community_id,
+    seller_id: subscription.seller_id,
+    fee_cents: fee,
+    seller_cents: sellerCents,
+    provider: 'paystack',
+    provider_transaction_id: reference,
+    metadata: {
+      communityId: subscription.community_id,
+      memberId: subscription.member_id,
+      interval: 'month',
+      renewal: true,
+      subscriptionId: subscriptionCode,
+      invoiceCode,
+      periodEnd,
+      provider: 'paystack',
+    },
+    funds_held: !!subscription.seller_id,
+    paid_at: new Date().toISOString(),
+  });
+
+  if (insertError) {
+    if (insertError.code === '23505') {
+      // The provider transaction was already recorded. Grant again (idempotent) instead of failing.
+      const { data: paidOrder, error: paidError } = await db
+        .from('orders')
+        .select('id')
+        .eq('provider_transaction_id', reference)
+        .maybeSingle();
+      if (paidError) throw paidError;
+      if (paidOrder) {
+        await grantOrder(paidOrder.id);
+        await updateCommunitySubscriptionPeriod(subscription.id, invoiceCode, paidOrder.id, periodEnd);
+        return;
+      }
+    }
+    throw insertError;
+  }
+
+  await grantOrder(orderId);
+  await updateCommunitySubscriptionPeriod(subscription.id, invoiceCode, orderId, periodEnd);
+}
+
+async function updateCommunitySubscriptionPeriod(
+  id: string,
+  invoiceCode: string,
+  orderId: string,
+  periodEnd: string | null,
+): Promise<void> {
+  const { error } = await supabaseAdmin()
+    .from('community_subscriptions')
+    .update({
+      status: 'active',
+      last_invoice_code: invoiceCode,
+      last_order_id: orderId,
+      ...(periodEnd ? { current_period_end: periodEnd } : {}),
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', id);
+  if (error) throw error;
+}
+
+/** A failed renewal ends access at the date it was attempted; the previous period has ended. */
+async function handlePaystackSubscriptionFailed(data: any): Promise<void> {
+  const subscriptionCode = paystackSubscriptionCode(data);
+  if (!subscriptionCode) return;
+
+  const db = supabaseAdmin();
+  const { data: subscription, error } = await db
+    .from('community_subscriptions')
+    .select('id, community_id, member_id, last_order_id')
+    .eq('provider_subscription_id', subscriptionCode)
+    .maybeSingle();
+  if (error) throw error;
+  if (!subscription) return;
+
+  const { error: updateError } = await db
+    .from('community_subscriptions')
+    .update({ status: 'attention', updated_at: new Date().toISOString() })
+    .eq('id', subscription.id);
+  if (updateError) throw updateError;
+
+  await updateCommunityMemberSubscription(subscription.community_id, subscription.member_id, {
+    subscriptionStatus: 'attention',
+  });
+
+  // Do not remove access before the first successful payment. After that, a failed renewal means
+  // the paid period is over, so paid access ends (a later successful retry re-grants it).
+  if (subscription.last_order_id) {
+    await revokeCommunityMembership(subscription.community_id, subscription.member_id, subscriptionCode);
+  }
+}
+
+async function setPaystackSubscriptionStatus(data: any, status: string): Promise<void> {
+  const subscriptionCode = paystackSubscriptionCode(data);
+  if (!subscriptionCode) return;
+
+  const db = supabaseAdmin();
+  const { data: subscription, error } = await db
+    .from('community_subscriptions')
+    .select('id, community_id, member_id')
+    .eq('provider_subscription_id', subscriptionCode)
+    .maybeSingle();
+  if (error) throw error;
+  if (!subscription) return;
+
+  const { error: updateError } = await db
+    .from('community_subscriptions')
+    .update({ status, updated_at: new Date().toISOString() })
+    .eq('id', subscription.id);
+  if (updateError) throw updateError;
+
+  await updateCommunityMemberSubscription(subscription.community_id, subscription.member_id, {
+    subscriptionStatus: status,
+  });
+}
+
+async function handlePaystackSubscriptionDisabled(data: any): Promise<void> {
+  const subscriptionCode = paystackSubscriptionCode(data);
+  if (!subscriptionCode) return;
+  const status = data?.status === 'complete' ? 'completed' : 'cancelled';
+  await setPaystackSubscriptionStatus(data, status);
+  const target = await communitySubscriptionTarget(subscriptionCode);
+  if (target) {
+    await revokeCommunityMembership(target.communityId, target.memberId, subscriptionCode);
+  }
+}
+
+async function communitySubscriptionTarget(
+  subscriptionCode: string,
+): Promise<{ communityId: string; memberId: string } | null> {
+  const { data, error } = await supabaseAdmin()
+    .from('community_subscriptions')
+    .select('community_id, member_id')
+    .eq('provider_subscription_id', subscriptionCode)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  return { communityId: String(data.community_id), memberId: String(data.member_id) };
 }
 
 /**
@@ -567,20 +1463,32 @@ export async function handleStripeWebhook(rawBody: Buffer, signature: string | u
     return fail(400, 'Invalid signature');
   }
 
+  const recordId = `stripe:${event.id}`;
+  const session =
+    event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded'
+      ? (event.data.object as Stripe.Checkout.Session)
+      : null;
   try {
-    await recordEvent(`stripe:${event.id}`, 'stripe', event.type);
+    await recordEvent(recordId, 'stripe', event.type, {
+      payload: event,
+      providerReference: session?.id ?? null,
+      orderId: session?.client_reference_id && UUID_RE.test(session.client_reference_id) ? session.client_reference_id : null,
+    });
 
-    if (event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded') {
-      await fulfilStripeSession((event.data.object as Stripe.Checkout.Session).id);
+    if (session) {
+      await fulfilStripeSession(session.id);
     } else if (event.type === 'account.updated') {
       const account = event.data.object as Stripe.Account;
       await syncConnectRow(await stripeApi.retrieveAccountState(account.id));
     } else if (event.type.startsWith('transfer.')) {
       await handleTransferEvent(event);
     }
+
+    await markEventProcessed(recordId);
     return { status: 200, body: { received: true } };
   } catch (e) {
     console.error('Stripe webhook processing failed:', e);
+    await markEventError(recordId, e).catch(markError => console.error('Could not flag webhook event:', markError));
     return fail(500, 'Could not process event');
   }
 }
@@ -608,68 +1516,153 @@ async function handleTransferEvent(event: Stripe.Event): Promise<void> {
   }
 }
 
-async function recordEvent(id: string, provider: string, type: string): Promise<void> {
+interface RecordEventExtra {
+  payload?: unknown;
+  providerReference?: string | null;
+  orderId?: string | null;
+}
+
+async function recordEvent(
+  id: string,
+  provider: string,
+  type: string,
+  extra: RecordEventExtra = {},
+): Promise<void> {
+  const full = {
+    id,
+    provider,
+    type,
+    payload: extra.payload ?? null,
+    provider_reference: extra.providerReference ?? null,
+    order_id: extra.orderId ?? null,
+  };
   const { error } = await supabaseAdmin()
     .from('payment_events')
-    .upsert({ id, provider, type }, { onConflict: 'id', ignoreDuplicates: true });
+    .upsert(full, { onConflict: 'id', ignoreDuplicates: true });
+  if (!error) return;
+
+  // Deploying the code before the audit migration must not break Stripe fulfilment. Keep the basic
+  // audit row and let the handler carry on; the new columns activate as soon as the migration lands.
+  if (isMissingColumn(error)) {
+    const { error: fallbackError } = await supabaseAdmin()
+      .from('payment_events')
+      .upsert({ id, provider, type }, { onConflict: 'id', ignoreDuplicates: true });
+    if (!fallbackError) return;
+    throw fallbackError;
+  }
+  throw error;
+}
+
+async function markEventProcessed(id: string): Promise<void> {
+  const { error } = await supabaseAdmin()
+    .from('payment_events')
+    .update({ processed_at: new Date().toISOString(), processing_error: null })
+    .eq('id', id);
+  if (error && !isMissingColumn(error)) throw error;
+}
+
+async function markEventError(id: string, error: unknown): Promise<void> {
+  const message = error instanceof Error ? error.message : String(error);
+  const { error: updateError } = await supabaseAdmin()
+    .from('payment_events')
+    .update({ processing_error: message.slice(0, 1000) })
+    .eq('id', id);
+  if (updateError && !isMissingColumn(updateError)) throw updateError;
+}
+
+/** Stores the provider session id so the order-status poll can verify without waiting for a webhook. */
+async function setOrderProviderReference(orderId: string, providerReference: string): Promise<void> {
+  const db = supabaseAdmin();
+  const { data, error } = await db.from('orders').select('metadata').eq('id', orderId).single();
   if (error) throw error;
+  const metadata =
+    data?.metadata && typeof data.metadata === 'object' && !Array.isArray(data.metadata)
+      ? (data.metadata as Record<string, unknown>)
+      : {};
+  const { error: updateError } = await db
+    .from('orders')
+    .update({ metadata: { ...metadata, providerReference } })
+    .eq('id', orderId);
+  if (updateError) throw updateError;
 }
 
 /** Fetches the session from Stripe, never trusting the webhook body alone, then fulfils the order. */
 async function fulfilStripeSession(sessionId: string): Promise<void> {
-  const session = await stripeApi.retrieveCheckoutSession(sessionId);
-  if (session.payment_status !== 'paid' || !session.client_reference_id) return;
-  const paymentIntent = typeof session.payment_intent === 'string' ? session.payment_intent : session.payment_intent?.id;
-  await markPaidAndGrant(session.client_reference_id, 'stripe', {
-    providerRef: paymentIntent ?? session.id,
-    amount: session.amount_total ?? -1,
-    currency: (session.currency ?? '').toUpperCase(),
-  });
+  const result = await providerAdapter('stripe').verify(sessionId);
+  if (result.status !== 'success' || !UUID_RE.test(result.reference)) return;
+  await fulfilOrder(result.reference, 'stripe', result);
 }
 
 async function fulfilPaystackOrder(orderId: string): Promise<void> {
-  const tx = await paystack.verifyTransaction(orderId);
-  if (tx.status !== 'success') return;
-  await markPaidAndGrant(orderId, 'paystack', { providerRef: String(tx.id), amount: tx.amount, currency: tx.currency });
+  if (!UUID_RE.test(orderId)) return;
+  const result = await providerAdapter('paystack').verify(orderId);
+  await fulfilOrder(orderId, 'paystack', result);
+}
+
+async function buyerEmailFor(buyerId: string): Promise<string | null> {
+  const { data, error } = await supabaseAdmin().from('users').select('email').eq('id', buyerId).maybeSingle();
+  if (error) throw error;
+  const email = typeof data?.email === 'string' ? data.email : null;
+  // Placeholder addresses are not real contact addresses and cannot match a provider customer.
+  return email && !email.endsWith('@users.kith.local') ? email : null;
 }
 
 /**
- * Marks a pending order as paid after the provider confirms it, then grants access.
- * Amount and currency must match the order. A mismatch marks the order failed and grants nothing.
- * Safe to call repeatedly: the status update only matches pending orders, and each grant is idempotent.
+ * Applies an already-verified provider result to an order.
+ *
+ * The provider result is checked against the database (reference, order metadata, buyer, amount and
+ * currency) before the order becomes paid. A mismatch marks the order failed and grants nothing.
+ * Safe to call repeatedly: the status update only matches pending orders and grants are idempotent.
  */
-async function markPaidAndGrant(
+async function fulfilOrder(
   orderId: string,
-  provider: 'stripe' | 'paystack',
-  confirmed: { providerRef: string; amount: number; currency: string },
+  provider: PaymentProviderId,
+  result: NormalizedPaymentResult,
 ): Promise<void> {
   if (!UUID_RE.test(orderId)) return;
   const db = supabaseAdmin();
   const { data: order, error } = await db
     .from('orders')
-    .select('id, status, provider, total_cents, currency')
+    .select('id, buyer_id, status, provider, total_cents, currency, metadata')
     .eq('id', orderId)
     .maybeSingle();
   if (error) throw error;
   if (!order || order.provider !== provider) return;
 
-  if (order.status === 'pending') {
-    if (confirmed.amount !== order.total_cents || confirmed.currency !== order.currency) {
-      console.error('Payment mismatch for order', orderId, { expected: order.total_cents, got: confirmed.amount });
+  if (order.status === 'paid') {
+    // Webhook retry / status poll after fulfilment: grants are idempotent by order id.
+    await grantOrder(orderId);
+    return;
+  }
+  if (order.status !== 'pending') return;
+
+  if (!isSuccess(result.status)) {
+    if (isTerminalFailure(result.status)) {
       await db.from('orders').update({ status: 'failed' }).eq('id', orderId).eq('status', 'pending');
-      return;
     }
-    const { error: claimError } = await db
-      .from('orders')
-      .update({ status: 'paid', paid_at: new Date().toISOString(), provider_transaction_id: confirmed.providerRef })
-      .eq('id', orderId)
-      .eq('status', 'pending');
-    if (claimError) throw claimError;
+    return;
   }
 
-  if (order.status === 'pending' || order.status === 'paid') {
-    await grantOrder(orderId);
+  const buyerEmail = await buyerEmailFor(order.buyer_id);
+  const validation = validatePaymentResult(order, result, buyerEmail);
+  if (!validation.ok) {
+    console.error('Payment verification rejected for order', orderId, validation.reason, validation.message);
+    await db.from('orders').update({ status: 'failed' }).eq('id', orderId).eq('status', 'pending');
+    return;
   }
+
+  const { error: claimError } = await db
+    .from('orders')
+    .update({
+      status: 'paid',
+      paid_at: new Date().toISOString(),
+      provider_transaction_id: result.providerTransactionId,
+    })
+    .eq('id', orderId)
+    .eq('status', 'pending');
+  if (claimError) throw claimError;
+
+  await grantOrder(orderId);
 }
 
 /** Grants what a paid order is for. Each kind is idempotent, so a retry never double-grants. */
@@ -694,6 +1687,8 @@ async function grantOrder(orderId: string): Promise<void> {
     await grantBoost(order);
   } else if (order.kind === 'product_boost') {
     await grantProductPromotion(order);
+  } else if (order.kind === 'community_membership') {
+    await grantCommunityMembership(order);
   }
 }
 
@@ -707,7 +1702,7 @@ async function creditCreatorEarnings(order: OrderRow): Promise<void> {
     amount_cents: order.seller_cents,
     kind: 'sale',
     order_id: order.id,
-    available_at: new Date(Date.now() + payoutHoldDays() * DAY).toISOString(),
+    available_at: payoutAvailableAt(payoutHoldDays()),
   });
   if (error && error.code !== '23505') throw error; // 23505 = already credited
 }
@@ -795,6 +1790,83 @@ async function grantEventRegistration(order: OrderRow): Promise<void> {
   });
 }
 
+function nextMembershipExpiry(order: OrderRow, existing: any): string {
+  const explicit = typeof order.metadata?.periodEnd === 'string' ? new Date(order.metadata.periodEnd) : null;
+  if (explicit && !Number.isNaN(explicit.getTime()) && explicit.getTime() > Date.now() - DAY) {
+    return explicit.toISOString();
+  }
+  const current = existing?.membershipExpiresAt ? new Date(existing.membershipExpiresAt).getTime() : 0;
+  const start = Math.max(Date.now(), Number.isFinite(current) ? current : 0);
+  return addMonthsIso(start, 1);
+}
+
+/**
+ * Grants or extends a paid community membership. Idempotent per order id; monthly renewals extend
+ * from the later of "now" and the current expiry, so a late webhook never shortens access.
+ */
+async function grantCommunityMembership(order: OrderRow): Promise<void> {
+  if (!order.target_id) throw new Error(`Community membership order ${order.id} has no community`);
+  const interval = order.metadata?.interval === 'month' ? 'month' : 'once';
+  const renewal = order.metadata?.renewal === true;
+
+  // A one-time membership replaces any lapsed monthly subscription so it stops charging.
+  if (interval === 'once' && !renewal) {
+    await disableStaleCommunitySubscription(order.target_id, order.buyer_id);
+  }
+
+  const { data: subscription, error: subscriptionError } = await supabaseAdmin()
+    .from('community_subscriptions')
+    .select('provider_subscription_id, status, current_period_end')
+    .eq('community_id', order.target_id)
+    .eq('member_id', order.buyer_id)
+    .maybeSingle();
+  if (subscriptionError) throw subscriptionError;
+
+  const fs = firestoreAdmin();
+  const communityRef = fs.doc(`communities/${order.target_id}`);
+  const memberRef = fs.doc(`communities/${order.target_id}/members/${order.buyer_id}`);
+  const now = new Date().toISOString();
+
+  await fs.runTransaction(async tx => {
+    const [memberSnap, communitySnap] = await Promise.all([tx.get(memberRef), tx.get(communityRef)]);
+    if (!communitySnap.exists) throw new Error('Community no longer exists');
+
+    const existing = memberSnap.exists ? memberSnap.data() : null;
+    if (existing && (existing.lastOrderId === order.id || existing.orderId === order.id)) return;
+    if (existing && interval === 'once' && membershipIsActive(existing)) return;
+
+    const base: Record<string, unknown> = {
+      userId: order.buyer_id,
+      role: existing?.role ?? 'member',
+      joinedAt: existing?.joinedAt ?? now,
+      paid: true,
+      paymentInterval: interval,
+      feeCurrency: order.currency.toLowerCase(),
+      feeAmount: order.total_cents / 100,
+      membershipStartedAt: existing?.membershipStartedAt ?? now,
+      subscriptionStatus: interval === 'month' ? 'active' : 'paid',
+      lastOrderId: order.id,
+      orderId: order.id,
+    };
+
+    if (interval === 'month') {
+      base.membershipExpiresAt = nextMembershipExpiry(order, existing);
+      base.providerSubscriptionId =
+        subscription?.provider_subscription_id ?? existing?.providerSubscriptionId ?? null;
+    } else {
+      base.membershipExpiresAt = null;
+      base.providerSubscriptionId = null;
+    }
+
+    if (!memberSnap.exists) {
+      tx.set(memberRef, base);
+      tx.update(communityRef, { memberCount: FieldValue.increment(1) });
+    } else {
+      tx.set(memberRef, { ...existing, ...base }, { merge: true });
+    }
+  });
+}
+
 /** Applies a boost to the event. Stacks on an active boost of the same placement. Keyed by order id. */
 async function grantBoost(order: OrderRow): Promise<void> {
   const tier = BOOST_TIERS[order.metadata?.tierId as BoostTierId];
@@ -869,14 +1941,28 @@ export async function getCreatorBalance(authorization?: string): Promise<Payment
     if (payoutRes.error) throw payoutRes.error;
     if (earningRes.error) throw earningRes.error;
 
-    const row = (balanceRes.data ?? []).find((r: any) => r.currency === STRIPE_CURRENCY);
+    // Every currency the creator has been paid in. Withdrawals are paused while Stripe payouts are
+    // "coming soon", so balances are reported but marked non-withdrawable for now.
+    const balances = (balanceRes.data ?? []).map((r: any) => ({
+      currency: String(r.currency),
+      availableCents: Number(r.available_cents ?? 0),
+      pendingCents: Number(r.pending_cents ?? 0),
+      lifetimeCents: Number(r.lifetime_cents ?? 0),
+      withdrawable: false,
+    }));
+    const row = balances.find((b: { currency: string }) => b.currency === STRIPE_CURRENCY);
+
     return {
       status: 200,
       body: {
+        // USD remains the headline balance so existing dashboards keep working.
         currency: STRIPE_CURRENCY,
-        availableCents: Number(row?.available_cents ?? 0),
-        pendingCents: Number(row?.pending_cents ?? 0),
-        lifetimeCents: Number(row?.lifetime_cents ?? 0),
+        availableCents: row?.availableCents ?? 0,
+        pendingCents: row?.pendingCents ?? 0,
+        lifetimeCents: row?.lifetimeCents ?? 0,
+        balances,
+        withdrawableCurrencies: PAYOUTS_COMING_SOON ? [] : [STRIPE_CURRENCY],
+        payoutsComingSoon: PAYOUTS_COMING_SOON,
         holdDays: payoutHoldDays(),
         minWithdrawalCents: MIN_WITHDRAWAL_CENTS,
         payouts: payoutRes.data ?? [],
@@ -896,6 +1982,7 @@ export async function getCreatorBalance(authorization?: string): Promise<Payment
 export async function requestWithdrawal(body: any, authorization?: string): Promise<PaymentResult> {
   const uid = await uidFromAuthHeader(authorization);
   if (!uid) return fail(401, 'Sign in required');
+  if (PAYOUTS_COMING_SOON) return fail(503, PAYOUTS_COMING_SOON_MESSAGE);
 
   const amountCents = Number(body?.amountCents);
   if (!Number.isInteger(amountCents) || amountCents <= 0) return fail(400, 'Enter a valid amount');
@@ -1031,3 +2118,15 @@ export async function createPayoutAccount(body: any, authorization?: string): Pr
 function toPayoutSummary(row: { bank_code: string | null; account_name: string | null; account_last4: string | null }) {
   return { bankCode: row.bank_code, accountName: row.account_name, accountLast4: row.account_last4 };
 }
+
+/**
+ * Internal hooks for unit tests. Server-only: importing this module gives access to order
+ * fulfilment, so it must never be bundled into the browser app.
+ */
+export const __testing = {
+  fulfilOrder,
+  grantOrder,
+  priceTarget,
+  parseCommunityFee,
+  payoutHoldDays,
+};

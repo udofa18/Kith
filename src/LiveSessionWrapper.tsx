@@ -1,13 +1,18 @@
 import React from 'react';
-import { useLocation } from 'react-router-dom';
 import { useLiveSession } from './contexts/LiveSessionContext';
 import { LiveKitRoom, RoomAudioRenderer } from '@livekit/components-react';
 import FloatingLiveSession from './components/live/FloatingLiveSession';
 
+/**
+ * One root LiveKit room for live sessions.
+ *
+ * The room lives here (not inside the page) so minimizing can keep the call
+ * connected while the user browses the rest of the app. Voice rooms are mounted
+ * separately in AppContent and are intentionally skipped on live routes, so a
+ * live page never ends up nested inside a second room.
+ */
 export default function LiveSessionWrapper({ children }: { children: React.ReactNode }) {
-  const { session } = useLiveSession();
-  const location = useLocation();
-  const isLivePage = location.pathname.startsWith('/live/');
+  const { session, endSession } = useLiveSession();
 
   if (!session.token) return <>{children}</>;
 
@@ -18,6 +23,7 @@ export default function LiveSessionWrapper({ children }: { children: React.React
       connect={true}
       audio={false}
       video={false}
+      onDisconnected={endSession}
       className="flex flex-col h-full"
     >
       {children}

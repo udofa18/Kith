@@ -378,11 +378,15 @@ service cloud.firestore {
              (!('backdrop' in data) || data.backdrop is string) &&
              (!('isPaid' in data) || data.isPaid is bool) &&
              (!('price' in data) || data.price is number) &&
-             // Joining fee (see src/lib/communityPricing.ts). XP one-time only until card payments ship.
+             // Joining fee (see src/lib/communityPricing.ts). XP is one-time; real money is one-time
+             // or monthly, and is always charged by the payment server (never directly by clients).
              (!('fee' in data) || data.fee == null || (
                data.fee is map && data.fee.keys().hasOnly(['amount', 'currency', 'interval']) &&
-               data.fee.amount is number && data.fee.amount > 0 && data.fee.amount <= 10000 &&
-               data.fee.currency == 'xp' && data.fee.interval == 'once'
+               data.fee.amount is number &&
+               ((data.fee.currency == 'xp' && data.fee.interval == 'once' &&
+                 data.fee.amount >= 5 && data.fee.amount <= 10000) ||
+                (data.fee.currency == 'usd' && (data.fee.interval == 'once' || data.fee.interval == 'month') &&
+                 data.fee.amount >= 1 && data.fee.amount <= 999))
              )) &&
              (!('website' in data) || data.website == "" || isValidUrl(data.website)) &&
              (!('socials' in data) || data.socials is map) &&
@@ -739,6 +743,19 @@ service cloud.firestore {
       );
     }
 
+    // Who may read a live room and its chat/polls/questions. This mirrors the
+    // event visibility rules, so followers and public viewers can join without
+    // opening the host-only event-details page. It is deterministic per eventId,
+    // which keeps list queries (chat history) valid.
+    function canReadLiveRoom(eventId) {
+      let event = get(/databases/$(database)/documents/events/$(eventId)).data;
+      return isAdmin() || isEventHost(eventId) || isRegisteredForEvent(eventId) ||
+             event.visibility in ['public', 'unlisted'] ||
+             (event.visibility == 'community' && 'communityId' in event && isCommunityMember(event.communityId)) ||
+             (event.visibility == 'followers' && isAuthenticated() &&
+              exists(/databases/$(database)/documents/users/$(request.auth.uid)/following/$(event.hostId)));
+    }
+
     function isValidHashtag(data) {
       let fields = ['name', 'count', 'lastUsed'];
       return data.keys().hasAll(fields) && data.keys().size() <= fields.size() &&
@@ -984,34 +1001,48 @@ service cloud.firestore {
     }
 
     match /eventSessions/{eventId} {
-      // Host-controlled flags are non-sensitive; public rooms expose them so guests honour muted chat/reactions.
-      allow read: if isRegisteredForEvent(eventId) || isEventHost(eventId) || (exists(/databases/$(database)/documents/events/$(eventId)) && get(/databases/$(database)/documents/events/$(eventId)).data.visibility == 'public') || (exists(/databases/$(database)/documents/events/$(eventId)) && get(/databases/$(database)/documents/events/$(eventId)).data.visibility == 'unlisted' && (get(/databases/$(database)/documents/events/$(eventId)).data.hostId == request.auth.uid || !('expiresAt' in get(/databases/$(database)/documents/events/$(eventId)).data) || request.time < timestamp.value(get(/databases/$(database)/documents/events/$(eventId)).data.expiresAt)));
+      // Host-controlled flags are non-sensitive; everyone allowed into the room
+      // (public, followers, community members, ticket holders, guests) can read
+      // them so muted chat/reactions are honoured consistently.
+      allow read: if canReadLiveRoom(eventId);
       allow create: if isEventHost(eventId);
-      allow update: if isEventHost(eventId) || (isAuthenticated() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['activePollId', 'spotlightParticipantId'])) || (exists(/databases/$(database)/documents/events/$(eventId)) && get(/databases/$(database)/documents/events/$(eventId)).data.visibility == 'unlisted' && (get(/databases/$(database)/documents/events/$(eventId)).data.hostId == request.auth.uid || !('expiresAt' in get(/databases/$(database)/documents/events/$(eventId)).data) || request.time < timestamp.value(get(/databases/$(database)/documents/events/$(eventId)).data.expiresAt)));
-      
+      allow update: if isEventHost(eventId) ||
+        (canReadLiveRoom(eventId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['activePollId', 'spotlightParticipantId']));
+      allow delete: if isEventHost(eventId);
+
       match /participants/{userId} {
-        allow read: if isRegisteredForEvent(eventId) || isEventHost(eventId) || (exists(/databases/$(database)/documents/events/$(eventId)) && get(/databases/$(database)/documents/events/$(eventId)).data.visibility == 'unlisted' && (get(/databases/$(database)/documents/events/$(eventId)).data.hostId == request.auth.uid || !('expiresAt' in get(/databases/$(database)/documents/events/$(eventId)).data) || request.time < timestamp.value(get(/databases/$(database)/documents/events/$(eventId)).data.expiresAt)));
-        allow create, update: if isOwner(userId) || isEventHost(eventId) || (exists(/databases/$(database)/documents/events/$(eventId)) && get(/databases/$(database)/documents/events/$(eventId)).data.visibility == 'unlisted' && (get(/databases/$(database)/documents/events/$(eventId)).data.hostId == request.auth.uid || !('expiresAt' in get(/databases/$(database)/documents/events/$(eventId)).data) || request.time < timestamp.value(get(/databases/$(database)/documents/events/$(eventId)).data.expiresAt)));
+        allow read: if canReadLiveRoom(eventId);
+        allow create, update: if canReadLiveRoom(eventId) && (isOwner(userId) || isEventHost(eventId));
         allow delete: if isOwner(userId) || isEventHost(eventId);
       }
 
       match /messages/{messageId} {
-        allow read: if isRegisteredForEvent(eventId) || isEventHost(eventId) || (exists(/databases/$(database)/documents/events/$(eventId)) && get(/databases/$(database)/documents/events/$(eventId)).data.visibility == 'unlisted' && (get(/databases/$(database)/documents/events/$(eventId)).data.hostId == request.auth.uid || !('expiresAt' in get(/databases/$(database)/documents/events/$(eventId)).data) || request.time < timestamp.value(get(/databases/$(database)/documents/events/$(eventId)).data.expiresAt)));
-        allow create: if isRegisteredForEvent(eventId) || isEventHost(eventId) || (exists(/databases/$(database)/documents/events/$(eventId)) && get(/databases/$(database)/documents/events/$(eventId)).data.visibility == 'unlisted' && (get(/databases/$(database)/documents/events/$(eventId)).data.hostId == request.auth.uid || !('expiresAt' in get(/databases/$(database)/documents/events/$(eventId)).data) || request.time < timestamp.value(get(/databases/$(database)/documents/events/$(eventId)).data.expiresAt)));
+        allow read: if canReadLiveRoom(eventId);
+        allow create: if canReadLiveRoom(eventId);
       }
 
       match /polls/{pollId} {
-        allow read: if isRegisteredForEvent(eventId) || isEventHost(eventId);
-        allow create, update: if isEventHost(eventId) || (isRegisteredForEvent(eventId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['voters', 'options'])) ||
-                              (isRegisteredForEvent(eventId) && isOwnVote());
+        allow read: if canReadLiveRoom(eventId);
+        allow create: if isEventHost(eventId);
+        allow update: if isEventHost(eventId) || (canReadLiveRoom(eventId) && isOwnVote());
       }
 
       match /questions/{questionId} {
-        allow read: if isRegisteredForEvent(eventId) || isEventHost(eventId);
-        allow create: if isRegisteredForEvent(eventId) || isEventHost(eventId);
-        allow update: if isEventHost(eventId) || (isRegisteredForEvent(eventId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['upvotes']));
+        allow read: if canReadLiveRoom(eventId);
+        allow create: if canReadLiveRoom(eventId);
+        allow update: if isEventHost(eventId) ||
+          (canReadLiveRoom(eventId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['upvotes']));
         allow delete: if isEventHost(eventId) || (isAuthenticated() && resource.data.userId == request.auth.uid);
       }
+    }
+
+    // Lightweight presence documents for the red "live" ring on avatars.
+    // Hosts write only their own document; the end-session API removes them for
+    // every manager. The document contains no event content, only who is live.
+    match /liveStatus/{uid} {
+      allow read: if true;
+      allow create, update: if isOwner(uid);
+      allow delete: if isOwner(uid) || isAdmin();
     }
 
     function isValidDailyStats(data) {
@@ -1082,7 +1113,12 @@ service cloud.firestore {
             !('rank' in incoming()) && !('timeoutUntil' in incoming()) &&
             (!get(/databases/$(database)/documents/communities/$(communityId)).data.get(['membershipControl', 'approvalRequired'], false)) &&
             get(/databases/$(database)/documents/communities/$(communityId)).data.get(['membershipControl', 'accessType'], 'public') == 'public' &&
-            get(/databases/$(database)/documents/communities/$(communityId)).data.get('isPrivate', false) == false
+            get(/databases/$(database)/documents/communities/$(communityId)).data.get('isPrivate', false) == false &&
+            // Real-money memberships are granted only by the server after Paystack confirms payment.
+            // XP fees keep the client-side transfer because they are not money.
+            (!('fee' in get(/databases/$(database)/documents/communities/$(communityId)).data) ||
+             get(/databases/$(database)/documents/communities/$(communityId)).data.fee == null ||
+             get(/databases/$(database)/documents/communities/$(communityId)).data.fee.currency != 'usd')
           ) ||
           // Initial creator joining
           (isOwner(userId) && get(/databases/$(database)/documents/communities/$(communityId)).data.creatorId == request.auth.uid)

@@ -11,7 +11,7 @@ export default function BillingSection(_props: SectionProps) {
     <div className="space-y-5">
       <SettingsSection
         title="Purchases"
-        description="Marketplace purchases are one-time card payments handled by Stripe. Tickets, boosts and files appear in your library."
+        description="Marketplace purchases are one-time payments handled by Paystack. Tickets, boosts and files appear in your library."
         action={
           <Button variant="secondary" size="sm" leftIcon={<Receipt size={13} />} onClick={() => navigate('/library')}>
             Library
@@ -20,7 +20,7 @@ export default function BillingSection(_props: SectionProps) {
       >
         <SettingRow
           title="Payment methods"
-          description="Cards are stored by Stripe. Kith never sees or stores your full card number."
+          description="Card details are handled by Paystack. Kith never sees or stores your full card number."
         >
           <Button variant="ghost" size="sm" rightIcon={<ExternalLink size={12} />} onClick={() => navigate('/library')}>
             Manage
@@ -50,7 +50,7 @@ export default function BillingSection(_props: SectionProps) {
 
       <SettingsSection
         title="Creator payouts"
-        description="Earnings from products, tickets and boosts are held in your Kith balance until you withdraw."
+        description="Earnings from products, tickets and boosts are saved in your Kith balance. Payouts are coming soon."
         action={
           <Button variant="secondary" size="sm" leftIcon={<Wallet size={13} />} onClick={() => navigate('/payouts')}>
             Payouts
@@ -60,7 +60,7 @@ export default function BillingSection(_props: SectionProps) {
         <Subheading>Balance</Subheading>
         <SettingRow
           title="Available balance"
-          description="Withdraw any time after the holding period. Payouts usually arrive in 2–3 business days."
+          description="Your earnings are saved here. Withdrawals open when payouts return."
         >
           <span className="rounded-pill border border-border bg-surface-raised px-3 py-1 text-[11px] font-semibold text-muted-foreground">
             See dashboard
@@ -68,10 +68,10 @@ export default function BillingSection(_props: SectionProps) {
         </SettingRow>
         <SettingRow
           title="Payout account"
-          description="Connect Stripe to receive transfers. Identity checks are required by law."
+          description="Payouts are coming soon. You can keep selling while your earnings build up."
         >
           <Button variant="secondary" size="sm" leftIcon={<CreditCard size={13} />} onClick={() => navigate('/payouts')}>
-            Manage
+            View earnings
           </Button>
         </SettingRow>
         <SettingRow

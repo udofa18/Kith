@@ -10,10 +10,18 @@ async function readRawBody(req: VercelRequest): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
+function header(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   const rawBody = await readRawBody(req);
-  const signature = req.headers['x-paystack-signature'];
-  const { status, body } = await handlePaystackWebhook(rawBody, typeof signature === 'string' ? signature : undefined);
+  const { status, body } = await handlePaystackWebhook(rawBody, {
+    // Current signature (`t=...,v1=...`) with a whsec_ secret.
+    paystackSignature: header(req.headers['paystack-signature']),
+    // Legacy signature still sent by some Paystack accounts during migration.
+    legacySignature: header(req.headers['x-paystack-signature']),
+  });
   res.status(status).json(body);
 }

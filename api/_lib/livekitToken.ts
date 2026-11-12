@@ -10,6 +10,7 @@
  */
 import admin from 'firebase-admin';
 import { AccessToken, TrackSource } from 'livekit-server-sdk';
+import { firestoreAdmin } from './firebaseApp';
 
 const PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'gen-lang-client-0475896362';
 const DATABASE_ID = process.env.FIRESTORE_DATABASE_ID || 'ai-studio-a6c9e366-2e98-4fcd-bf9b-04eac80f64b4';
@@ -37,6 +38,103 @@ async function readDoc(path: string, idToken: string) {
 
 const isCommunityMember = async (communityId: string, uid: string, idToken: string) =>
   /^[\w-]{1,128}$/.test(communityId) && !!(await readDoc(`communities/${communityId}/members/${uid}`, idToken));
+
+/**
+ * Event rooms are ordinary Firestore event ids. The server decides who may join
+ * from the event document, not from anything the client sends:
+ * - hosts/co-hosts always may join while the room is live
+ * - public and unlisted rooms are link-accessible (guests included)
+ * - community rooms require membership, follower rooms require following
+ * - paid events require a registration
+ */
+const toMillis = (value: any): number => {
+  if (typeof value === 'string') return Date.parse(value);
+  if (value && typeof value.toMillis === 'function') return value.toMillis();
+  if (value && typeof value.seconds === 'number') return value.seconds * 1000;
+  return NaN;
+};
+
+/**
+ * The small, non-sensitive slice of an event the room UI needs to route and
+ * render. Guests cannot read unlisted event documents, so the token response
+ * carries this instead of relying on Firestore rules.
+ */
+const roomInfo = (eventId: string, event: Record<string, any>) => ({
+  id: eventId,
+  title: typeof event.title === 'string' ? event.title : '',
+  type: event.type,
+  isInstant: event.isInstant === true,
+  visibility: event.visibility,
+  hostId: event.hostId,
+  coHostIds: Array.isArray(event.coHostIds) ? event.coHostIds : [],
+  startDate: event.startDate,
+  endDate: event.endDate,
+  expiresAt: event.expiresAt,
+  status: event.status,
+});
+
+interface EventJoinCheck {
+  error: string | null;
+  event?: Record<string, any>;
+}
+
+export async function eventJoinError(eventId: string, identity: string, signedIn: boolean): Promise<EventJoinCheck> {
+  if (!/^[\w-]{1,128}$/.test(eventId)) return { error: 'Invalid room' };
+
+  const snapshot = await firestoreAdmin().collection('events').doc(eventId).get();
+  if (!snapshot.exists) return { error: 'This room does not exist' };
+  const event = snapshot.data() ?? {};
+  const checked = { event };
+
+  if (event.status === 'ended') return { ...checked, error: 'This session has ended' };
+  const coHosts: string[] = Array.isArray(event.coHostIds) ? event.coHostIds : [];
+  const isManager = signedIn && (event.hostId === identity || coHosts.includes(identity));
+
+  // A host may not have pressed "Start" yet even though the scheduled window is
+  // open. Allow the room during that window; block it before and after.
+  const start = toMillis(event.startDate);
+  const end = toMillis(event.endDate);
+  const now = Date.now();
+  const inWindow = Number.isFinite(start) && now >= start - 5 * 60_000 && (!Number.isFinite(end) || now <= end);
+  if (!isManager && event.status !== 'live' && !inWindow) {
+    return { ...checked, error: 'This session has not started yet' };
+  }
+
+  if (isManager) return { ...checked, error: null };
+
+  const visibility = event.visibility;
+  if (visibility === 'public' || visibility === 'unlisted') {
+    // Still enforce tickets for paid rooms.
+  } else if (visibility === 'community') {
+    if (!signedIn || typeof event.communityId !== 'string') {
+      return { ...checked, error: 'Join this community to enter the room' };
+    }
+    const member = await firestoreAdmin()
+      .collection('communities').doc(event.communityId)
+      .collection('members').doc(identity).get();
+    if (!member.exists) return { ...checked, error: 'Join this community to enter the room' };
+  } else if (visibility === 'followers') {
+    if (!signedIn || typeof event.hostId !== 'string') {
+      return { ...checked, error: 'Follow the host to join this room' };
+    }
+    const following = await firestoreAdmin()
+      .collection('users').doc(identity)
+      .collection('following').doc(event.hostId).get();
+    if (!following.exists) return { ...checked, error: 'Follow the host to join this room' };
+  } else {
+    return { ...checked, error: 'This room is private' };
+  }
+
+  if (event.isPaid === true) {
+    if (!signedIn) return { ...checked, error: 'A ticket is required to join this room' };
+    const registration = await firestoreAdmin()
+      .collection('events').doc(eventId)
+      .collection('registrations').doc(identity).get();
+    if (!registration.exists) return { ...checked, error: 'A ticket is required to join this room' };
+  }
+
+  return { ...checked, error: null };
+}
 
 async function isCallParticipant(callId: string, uid: string, idToken: string): Promise<boolean> {
   if (!/^[\w-]{1,128}$/.test(callId)) return false;
@@ -84,6 +182,14 @@ export async function issueLivekitToken(body: any, authorization?: string): Prom
     if (!(await isCallParticipant(room.slice(5), identity, idToken))) return fail(403, "You're not part of this call");
   }
 
+  // Everything that is not a community voice/stage room or a 1:1 call is a live event room.
+  let eventInfo: ReturnType<typeof roomInfo> | undefined;
+  if (!community && !room.startsWith('call_')) {
+    const check = await eventJoinError(room, identity, !!idToken);
+    if (check.error) return fail(idToken ? 403 : 401, check.error);
+    if (check.event) eventInfo = roomInfo(room, check.event);
+  }
+
   const at = new AccessToken(apiKey, apiSecret, {
     identity,
     name: username,
@@ -99,5 +205,11 @@ export async function issueLivekitToken(body: any, authorization?: string): Prom
     canUpdateOwnMetadata: true,
     canPublishSources: [TrackSource.CAMERA, TrackSource.MICROPHONE, TrackSource.SCREEN_SHARE, TrackSource.SCREEN_SHARE_AUDIO],
   });
-  return { status: 200, body: { token: await at.toJwt() } };
+  return {
+    status: 200,
+    body: {
+      token: await at.toJwt(),
+      ...(eventInfo ? { event: eventInfo } : {}),
+    },
+  };
 }

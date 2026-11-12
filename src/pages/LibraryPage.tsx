@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { BookOpen, CheckCircle2, Download, Loader2, XCircle } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { supabase } from '../supabase';
-import { downloadProduct, getOrderStatus, OrderStatus, formatPrice } from '../lib/payments';
+import { downloadProduct, getOrderStatus, isOrderId, OrderStatus, formatPrice } from '../lib/payments';
 
 interface PurchaseRow {
   id: string;
@@ -24,10 +24,15 @@ const POLL_INTERVAL_MS = 2000;
 
 export default function LibraryPage() {
   const [searchParams] = useSearchParams();
-  const orderId = searchParams.get('order');
+  // Paystack redirects with `reference` (our order id) and Stripe with `order`.
+  const orderParam = searchParams.get('order') ?? searchParams.get('reference');
+  const orderId = isOrderId(orderParam) ? orderParam : null;
+  const checkoutCancelled = searchParams.get('cancelled') === '1';
   const [purchases, setPurchases] = useState<PurchaseRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [orderStatus, setOrderStatus] = useState<OrderStatus['status'] | null>(null);
+  const [orderStatus, setOrderStatus] = useState<OrderStatus['status'] | 'verifying' | null>(
+    orderId ? 'verifying' : null,
+  );
 
   const loadPurchases = useCallback(async () => {
     if (!supabase) return;
@@ -86,7 +91,14 @@ export default function LibraryPage() {
         <p className="text-[var(--ds-muted-foreground)] mt-2">Everything you've bought from creators.</p>
       </div>
 
-      {orderId && <OrderBanner status={orderStatus} />}
+      {orderId ? (
+        <OrderBanner status={orderStatus} />
+      ) : checkoutCancelled ? (
+        <div className="flex items-center gap-3 rounded-[var(--ds-radius-md)] border border-[var(--ds-border)] bg-[var(--ds-surface)] p-4">
+          <XCircle className="text-[var(--ds-muted-foreground)]" size={20} />
+          <p className="font-semibold">Checkout was cancelled. You can try again whenever you're ready.</p>
+        </div>
+      ) : null}
 
       {loading ? (
         <div className="flex items-center gap-2 text-[var(--ds-muted-foreground)]">
@@ -145,7 +157,8 @@ export default function LibraryPage() {
   );
 }
 
-function OrderBanner({ status }: { status: OrderStatus['status'] | null }) {
+function OrderBanner({ status }: { status: OrderStatus['status'] | 'verifying' | null }) {
+  if (status === null) return null;
   if (status === 'paid') {
     return (
       <div className="flex items-center gap-3 rounded-[var(--ds-radius-md)] border border-[var(--ds-success)]/40 bg-[var(--ds-success)]/10 p-4">
@@ -165,7 +178,10 @@ function OrderBanner({ status }: { status: OrderStatus['status'] | null }) {
   return (
     <div className="flex items-center gap-3 rounded-[var(--ds-radius-md)] border border-[var(--ds-border)] bg-[var(--ds-surface)] p-4">
       <Loader2 className="animate-spin text-[var(--ds-muted-foreground)]" size={20} />
-      <p className="font-semibold">Confirming your payment...</p>
+      <p className="font-semibold">
+        {status === 'verifying' ? 'Verifying your payment...' : 'Confirming your payment...'}
+        <span className="ml-1 font-normal text-[var(--ds-muted-foreground)]">This can take a minute.</span>
+      </p>
     </div>
   );
 }

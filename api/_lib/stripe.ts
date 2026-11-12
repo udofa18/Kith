@@ -8,11 +8,12 @@
  * platform keeps the full amount.
  */
 import Stripe from 'stripe';
+import { ProviderConfigError } from './paymentErrors.js';
+
+// Kept as a re-export so existing imports from this module keep working.
+export { ProviderConfigError } from './paymentErrors.js';
 
 let client: Stripe | null = null;
-
-/** Missing server configuration. Shown to the seller as-is so they know what to fix. */
-export class ProviderConfigError extends Error {}
 
 export function stripe(): Stripe {
   if (!process.env.STRIPE_SECRET_KEY) throw new ProviderConfigError('Stripe is not configured: STRIPE_SECRET_KEY is missing on the server.');

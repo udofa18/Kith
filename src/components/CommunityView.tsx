@@ -5,6 +5,7 @@ import { auth, db, handleFirestoreError, OperationType } from '../firebase';
 import { collection, query, orderBy, onSnapshot, doc, getDoc, setDoc, deleteDoc, increment, updateDoc, where, getDocs, writeBatch, serverTimestamp } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from '../lib/storage';
 import { motion, AnimatePresence } from 'motion/react';
+import { eventHref } from '../lib/eventLinks';
 import { toast } from 'react-hot-toast';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { feedService } from '../services/feedService';
@@ -40,11 +41,11 @@ import VerifiedBadge from './VerifiedBadge';
 import { CommunityIcon, communityHue } from './CommunityCard';
 import Avatar from './ui/Avatar';
 import { categoryLabel, categoryOf } from '../lib/communityCategories';
-import { feeOf, formatFee } from '../lib/communityPricing';
+import { feeIsRealMoney, feeOf, formatFee } from '../lib/communityPricing';
 import { joinCommunity, leaveCommunity } from '../services/socialService';
 import { presenceLabel } from '../features/messages/api';
 import { channelTypeInfo } from '../lib/channelTypes';
-import { formatEventPrice } from '../lib/payments';
+import { formatEventPrice, getOrderStatus, isOrderId } from '../lib/payments';
 
 export default function CommunityView({ communityId }: { communityId: string }) {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -172,6 +173,50 @@ export default function CommunityView({ communityId }: { communityId: string }) 
       setActiveTab('settings');
     }
   }, [searchParams, isAdmin]);
+
+  // Returning from a membership checkout. The server fulfils the order after Paystack confirms the
+  // charge, so poll the order instead of trusting the redirect. Paystack sends `reference` (our order
+  // id); Stripe uses `order`.
+  const orderParamValue = searchParams.get('order') ?? searchParams.get('reference');
+  const orderParam = isOrderId(orderParamValue) ? orderParamValue : null;
+  const checkoutCancelled = searchParams.get('cancelled');
+  useEffect(() => {
+    if (!checkoutCancelled) return;
+    toast('Checkout cancelled. No charge was made.');
+    setSearchParams({}, { replace: true });
+  }, [checkoutCancelled, setSearchParams]);
+
+  useEffect(() => {
+    if (!orderParam || !auth.currentUser) return;
+    let cancelled = false;
+    let attempts = 0;
+    const finish = () => setSearchParams({}, { replace: true });
+    const poll = async () => {
+      try {
+        const status = await getOrderStatus(orderParam);
+        if (cancelled) return;
+        if (status.status === 'paid') {
+          toast.success(`You're in! Welcome to ${community?.name || 'the community'}.`);
+          queryClient.invalidateQueries({ queryKey: queryKeys.community(communityId) });
+          return finish();
+        }
+        if (status.status === 'failed') {
+          toast.error("That payment didn't go through. Nothing was charged.");
+          return finish();
+        }
+      } catch {
+        // Transient error: keep polling until the limit.
+      }
+      attempts += 1;
+      if (cancelled) return;
+      if (attempts < 15) setTimeout(poll, 2000);
+      else finish();
+    };
+    poll();
+    return () => {
+      cancelled = true;
+    };
+  }, [orderParam, auth.currentUser?.uid, communityId, community?.name, queryClient, setSearchParams]);
 
   const [settingsForm, setSettingsForm] = useState({
     name: '',
@@ -615,6 +660,10 @@ export default function CommunityView({ communityId }: { communityId: string }) 
       queryClient.invalidateQueries({ queryKey: queryKeys.community(communityId) });
       toast.success(`Welcome to ${community.name}`);
     } catch (error) {
+      if (error instanceof Error && error.message.startsWith("We couldn't stop your monthly payment")) {
+        toast.error(error.message);
+        return;
+      }
       handleFirestoreError(error, isMember ? OperationType.DELETE : OperationType.WRITE, `communities/${communityId}/members/${auth.currentUser?.uid}`);
     }
   };
@@ -873,7 +922,7 @@ export default function CommunityView({ communityId }: { communityId: string }) 
                     setActiveChannelId(id);
                     setMobilePane('content');
                     // Keep the open channel in the URL so links, refresh and the voice bar know where you are.
-                    setSearchParams(prev => { const p = new URLSearchParams(prev); p.set('channelId', id); return p; }, { replace: true });
+                    setSearchParams(prev => { const p = new URLSearchParams(prev); p.set('channelId', id); p.delete('postId'); return p; }, { replace: true });
                   }}
                   isAdmin={isAdmin}
                   myPermissions={myPermissions}
@@ -919,7 +968,7 @@ export default function CommunityView({ communityId }: { communityId: string }) 
                   {upcomingEvents.map(event => (
                     <Link 
                       key={event.id} 
-                      to={`/events/${event.id}`}
+                      to={eventHref(event)}
                       className="block p-2.5 rounded-xl border border-foreground/10 hover:border-primary/40 hover:bg-foreground/5 transition-colors group"
                     >
                       <div className="flex flex-col gap-1">
@@ -1214,7 +1263,7 @@ export default function CommunityView({ communityId }: { communityId: string }) 
                   isMuted={activeChannel ? mutedChannels.includes(activeChannel.id) : false}
                   onOpenChannel={(id: string) => {
                     setActiveChannelId(id);
-                    setSearchParams(prev => { const p = new URLSearchParams(prev); p.set('channelId', id); return p; }, { replace: true });
+                    setSearchParams(prev => { const p = new URLSearchParams(prev); p.set('channelId', id); p.delete('postId'); return p; }, { replace: true });
                   }}
                   communityMembers={members}
                   roles={roles}
@@ -1352,6 +1401,8 @@ export default function CommunityView({ communityId }: { communityId: string }) 
 /** Shown in place of channels to people who haven't joined. */
 function JoinPanel({ community, signedIn, onJoin, onAbout, members }: { community: any; signedIn: boolean; onJoin: () => void; onAbout: () => void; members: any[] }) {
   const fee = feeOf(community);
+  const realMoney = feeIsRealMoney(fee);
+  const recurring = realMoney && fee.interval === 'month';
   const control = community.membershipControl;
   const needsApproval = community.isPrivate || control?.approvalRequired || (control?.accessType && control.accessType !== 'public');
   const faces = members.filter(m => m.user).slice(0, 5);
@@ -1373,13 +1424,17 @@ function JoinPanel({ community, signedIn, onJoin, onAbout, members }: { communit
         </div>
         <div className="mt-6 p-4 rounded-2xl border border-foreground/10 text-sm text-foreground/65">
           {needsApproval ? 'This is a private community. Send a request and the admins will review it.' : 'Join to see the channels, chat with members and post in the feed.'}
-          {fee && <span className="block mt-1 text-amber-600 dark:text-amber-400 font-medium">Joining fee: {formatFee(fee)}</span>}
+          {fee && (
+            <span className="block mt-1 text-amber-600 dark:text-amber-400 font-medium">
+              Joining fee: {formatFee(fee)}{realMoney ? (recurring ? ' · card billed monthly, leave to cancel' : ' · paid by card') : ''}
+            </span>
+          )}
         </div>
         <div className="mt-5 flex justify-center gap-2">
           <button onClick={onAbout} className="px-5 py-2.5 rounded-full border border-foreground/15 text-sm font-semibold hover:bg-foreground/5">About</button>
           {signedIn ? (
             <button onClick={onJoin} className="px-6 py-2.5 rounded-full bg-primary text-white text-sm font-semibold hover:bg-primary/90">
-              {needsApproval ? 'Request to join' : 'Join community'}
+              {needsApproval ? 'Request to join' : realMoney ? 'Join & pay' : 'Join community'}
             </button>
           ) : (
             <Link to="/login" className="px-6 py-2.5 rounded-full bg-primary text-white text-sm font-semibold hover:bg-primary/90">Sign in to join</Link>

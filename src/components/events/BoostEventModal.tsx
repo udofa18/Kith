@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Check, Megaphone, Rocket, Sparkles } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { auth } from '../../firebase';
-import { startCheckout } from '../../lib/payments';
+import { beginCheckout } from '../../lib/payments';
 import { isPromoted } from '../../lib/eventRanking';
 import { formatDate } from '../../lib/utils';
 import ModalShell, { ghostBtn, primaryBtn } from '../ui/ModalShell';
@@ -26,7 +26,7 @@ export default function BoostEventModal({ event, isOpen, onClose }: { event: any
     if (!user) return toast.error('Sign in to boost your event');
     setLoading(true);
     try {
-      const result = await startCheckout('event_boost', event.id, tierId);
+      const result = await beginCheckout('event_boost', event.id, tierId);
       if (!result.authorizationUrl) throw new Error('Could not start checkout');
       window.location.href = result.authorizationUrl;
     } catch (e: any) {

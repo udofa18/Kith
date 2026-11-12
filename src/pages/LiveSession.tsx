@@ -5,7 +5,6 @@ import { db, auth, handleFirestoreError, OperationType } from '../firebase';
 import { 
   VideoConference, 
   ControlBar, 
-  RoomAudioRenderer,
   GridLayout,
   ParticipantTile,
   VideoTrack,
@@ -16,16 +15,16 @@ import {
   TrackRefContext,
   LayoutContextProvider,
   Chat,
-  DisconnectButton,
   TrackToggle,
   ParticipantContext,
   ParticipantName,
   ParticipantPlaceholder,
   ConnectionQualityIndicator,
+  useConnectionState,
   useRoomContext,
   useParticipants
 } from '@livekit/components-react';
-import { Track, Participant } from 'livekit-client';
+import { ConnectionState, Track, Participant } from 'livekit-client';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   MessageSquare as ChatIcon, 
@@ -81,11 +80,13 @@ import { toast } from 'react-hot-toast';
 import { useLiveSession } from '../contexts/LiveSessionContext';
 import { sendDirectMessage } from '../features/messages/api';
 import { DEFAULT_LIVE_SETTINGS, normalizeLiveSettings, type LiveSessionSettings } from '../lib/liveSessionSettings';
+import { isInstantLiveSession, liveExitHref } from '../lib/eventLinks';
+import { LIVE_HEARTBEAT_STALE_MS } from '../lib/livePresence';
 
 export default function LiveSession() {
   const { eventId } = useParams();
   const navigate = useNavigate();
-  const { session, minimizeSession, expandSession, endSession, startSession, setGuestName: setGlobalGuestName } = useLiveSession();
+  const { session, minimizeSession, expandSession, endSession, endSessionForEveryone, startSession, setGuestName: setGlobalGuestName } = useLiveSession();
   const [loading, setLoading] = useState(!session.isActive);
   const [error, setError] = useState<string | null>(null);
   const [audioNeedsActivation, setAudioNeedsActivation] = useState(false);
@@ -114,6 +115,12 @@ export default function LiveSession() {
   );
 
   const event = liveEvent || session.eventData;
+  const exitHref = liveExitHref(event || (eventId ? { id: eventId } : null));
+  const startedForRef = useRef<string | null>(null);
+  // True once this page has actually been connected to its room. Clearing the
+  // session afterwards (disconnect, host end) should navigate away; a failed
+  // join should show the error instead.
+  const joinedRef = useRef(false);
 
   useEffect(() => {
     const media = window.matchMedia('(min-width: 1024px)');
@@ -190,15 +197,47 @@ export default function LiveSession() {
 
   useEffect(() => {
     if (!eventId) return;
-    
-    // If no session is active or it's a different event, start it
-    if (!session.isActive || session.eventId !== eventId) {
-      setLoading(true);
-      startSession(eventId).finally(() => setLoading(false));
-    } else {
+
+    // Already connected to this room.
+    if (session.isActive && session.eventId === eventId) {
+      joinedRef.current = true;
       setLoading(false);
+      return;
     }
-  }, [eventId, startSession, session.isActive, session.eventId]);
+
+    if (startedForRef.current === eventId) {
+      // The room we joined is over (ended by the host, disconnected, or cleared
+      // because another account signed in). Leave instead of reconnecting.
+      if (joinedRef.current && !loading && !error) navigate(exitHref, { replace: true });
+      return;
+    }
+
+    // Guests pick a display name before we ask the server for a token, so a
+    // denied join can explain itself instead of bouncing them silently.
+    if (!auth.currentUser && !guestName) {
+      setShowGuestPrompt(true);
+      setLoading(false);
+      return;
+    }
+
+    startedForRef.current = eventId;
+    joinedRef.current = false;
+    setLoading(true);
+    startSession(eventId)
+      .then(() => setError(null))
+      .catch((err: any) => setError(err?.message || 'We could not open this room'))
+      .finally(() => setLoading(false));
+  }, [eventId, session.isActive, session.eventId, guestName, loading, error, navigate, exitHref, startSession]);
+
+  // Opening the room page brings a minimized call back into the tab, so the
+  // full room and the floating mini-player never render at the same time.
+  const expandedOnMountRef = useRef(false);
+  useEffect(() => {
+    if (expandedOnMountRef.current) return;
+    expandedOnMountRef.current = true;
+    if (session.isMinimized) expandSession();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (event) {
@@ -209,12 +248,6 @@ export default function LiveSession() {
       setIsCoHost(currentIsCoHost);
     }
   }, [event]);
-
-  useEffect(() => {
-    if (!session.isActive && !loading && !error) {
-      navigate(`/events/${eventId || ''}`);
-    }
-  }, [session.isActive, loading, error, navigate, eventId]);
 
   const addNotification = (message: string, type: 'info' | 'hand' = 'info', isLocal: boolean = false) => {
     const id = Date.now();
@@ -232,26 +265,22 @@ export default function LiveSession() {
   };
 
   useEffect(() => {
-    if (!event?.isInstant || !event?.expiresAt) return;
+    if (!isInstantLiveSession(event) || !event?.expiresAt) return;
 
     const endSessionFunc = async () => {
       if (canManage && !ending) {
         setEnding(true);
         try {
-          await updateDoc(doc(db, 'events', eventId!), { status: 'ended' });
-          await setDoc(doc(db, 'eventSessions', eventId!), { 
-            status: 'ended', 
-            endTime: new Date().toISOString(),
-            updatedAt: new Date().toISOString()
-          }, { merge: true });
+          await endSessionForEveryone(eventId);
           toast('The room has wrapped up');
-          navigate(`/events/${eventId}`);
+          navigate(exitHref, { replace: true });
         } catch (error) {
           console.error("Error auto-ending session:", error);
         }
       } else if (!canManage) {
         toast('The room has wrapped up');
-        navigate(`/events/${eventId}`);
+        endSession();
+        navigate(exitHref, { replace: true });
       }
     };
 
@@ -266,7 +295,7 @@ export default function LiveSession() {
     const interval = setInterval(tick, 1000);
 
     return () => clearInterval(interval);
-  }, [event?.expiresAt, event?.isInstant, eventId, canManage, ending]);
+  }, [event?.expiresAt, event?.isInstant, event?.type, eventId, canManage, ending, endSessionForEveryone, endSession, navigate, exitHref]);
 
   useEffect(() => {
     if (!eventId || canManage) return;
@@ -277,42 +306,95 @@ export default function LiveSession() {
         if (sessionData.status === 'ended') {
           toast.error('The host or co-host has ended this session');
           endSession();
-          navigate(`/events/${eventId}`);
+          navigate(exitHref, { replace: true });
         }
       }
     });
 
     return () => unsubscribe();
-  }, [eventId, canManage, endSession, navigate]);
+  }, [eventId, canManage, endSession, navigate, exitHref]);
 
+  // If the host disappears (closed tab, lost connection, crashed browser), the
+  // heartbeat goes stale. Attendees should leave instead of waiting in a room
+  // that can no longer be managed.
   useEffect(() => {
-    if (!eventId) return;
+    if (!eventId || canManage || !event?.hostId) return;
 
-    if (!auth.currentUser && !guestName && !session.isActive) {
-      setShowGuestPrompt(true);
-      setLoading(false);
-      return;
-    }
-  }, [eventId, session.isActive, minimizeSession]);
+    let left = false;
+    let sawActive = false;
+    const unsubscribe = onSnapshot(doc(db, 'liveStatus', event.hostId), (snap) => {
+      if (left) return;
+      const data = snap.data();
+      const active = snap.exists() && data?.active === true;
+
+      if (!active) {
+        // The document is created when the host starts. If it disappears after
+        // we've seen it, the host ended the room.
+        if (!sawActive) return;
+        left = true;
+        toast.error('The host has ended this session');
+        endSession();
+        navigate(exitHref, { replace: true });
+        return;
+      }
+
+      sawActive = true;
+      const beat = typeof data.heartbeatAt === 'number' ? data.heartbeatAt : null;
+      if (beat === null || Date.now() - beat <= LIVE_HEARTBEAT_STALE_MS) return;
+
+      left = true;
+      toast.error('The host lost connection, so this room has closed');
+      endSession();
+      navigate(exitHref, { replace: true });
+    });
+
+    return () => unsubscribe();
+  }, [eventId, canManage, event?.hostId, endSession, navigate, exitHref]);
 
   const handleMinimize = async () => {
     await minimizeSession();
-    // No navigate here, we want to stay on the page and show the placeholder
+    // Leave the room page so the user can browse; the floating player keeps the call alive.
+    navigate(exitHref, { replace: true });
   };
 
   const handleLeave = () => {
+    // For a host/co-host, leaving without ending strands everyone in a room
+    // that can no longer be managed. Make them choose to end it.
+    if (canManage) {
+      setShowEndSessionConfirm(true);
+      return;
+    }
     endSession();
-    navigate(`/events/${eventId}`);
+    navigate(exitHref, { replace: true });
   };
 
-  // Auto-minimize when tab is hidden (Manual Document PiP is strict, but we try)
+  const handleEndForEveryone = async () => {
+    setEnding(true);
+    try {
+      const ended = await endSessionForEveryone(eventId);
+      if (!ended) {
+        toast.error('Could not end the session. You are still live.');
+        return;
+      }
+      navigate(exitHref, { replace: true });
+    } finally {
+      setEnding(false);
+    }
+  };
+
+  // Document PiP can pop out automatically when the tab is hidden. Skip this
+  // on browsers without it: the explicit minimize button uses the in-app
+  // fallback instead.
   useEffect(() => {
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'hidden' && session.isActive && !session.isMinimized) {
-        // We try to minimize, but it might fail due to "User activation" requirement
-        minimizeSession().catch(() => {
-           // Silent fail as expected for auto-pip without direct click
-        });
+      if (
+        document.visibilityState === 'hidden' &&
+        session.isActive &&
+        !session.isMinimized &&
+        'documentPictureInPicture' in window
+      ) {
+        // It may still fail without a user gesture; that is fine.
+        minimizeSession().catch(() => undefined);
       }
     };
 
@@ -360,8 +442,9 @@ export default function LiveSession() {
             <button
               disabled={!guestName.trim()}
               onClick={() => {
-                setGlobalGuestName(guestName);
+                setGlobalGuestName(guestName.trim());
                 setShowGuestPrompt(false);
+                setLoading(true);
               }}
               className="w-full bg-primary text-white py-4 rounded-2xl font-bold hover:bg-primary/90 transition-all disabled:opacity-50 shadow-[0_0_30px_rgba(var(--primary),0.3)]"
             >
@@ -380,13 +463,13 @@ export default function LiveSession() {
         <div className="w-20 h-20 bg-red-500/10 rounded-full flex items-center justify-center text-red-500 mb-6">
           <Shield size={40} />
         </div>
-        <h1 className="text-2xl font-bold mb-2">Access Denied</h1>
+        <h1 className="text-2xl font-bold mb-2">Can’t join this room</h1>
         <p className="text-white/40 mb-8 max-w-md">{error}</p>
         <button 
-          onClick={() => navigate(`/events/${eventId}`)}
+          onClick={() => navigate(exitHref, { replace: true })}
           className="bg-white text-black px-8 py-3 rounded-xl font-bold hover:scale-105 transition-all"
         >
-          Return to Event Page
+          Leave room
         </button>
       </div>
     );
@@ -500,8 +583,8 @@ export default function LiveSession() {
         <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
           <button
             onClick={handleMinimize}
-            className="hidden rounded-xl p-2 text-white/45 transition-colors hover:bg-white/5 hover:text-white sm:block"
-            title="Pop out this room"
+            className="rounded-xl p-2 text-white/45 transition-colors hover:bg-white/5 hover:text-white"
+            title="Minimize and keep browsing"
           >
             <Minimize2 size={18} />
           </button>
@@ -550,6 +633,7 @@ export default function LiveSession() {
       <div className="flex flex-1 overflow-hidden">
         <div className="relative flex flex-1 flex-col bg-[#050409]">
           <LayoutContextProvider>
+            <AutoPublish enabled={canManage} />
             <AudioActivationGate
               audioNeedsActivation={audioNeedsActivation}
               setAudioNeedsActivation={setAudioNeedsActivation}
@@ -602,10 +686,13 @@ export default function LiveSession() {
             {/* Custom Controls Overlay */}
             <div className="pointer-events-none absolute bottom-0 left-0 right-0 z-50 flex justify-center p-3 sm:p-4">
               <div className="pointer-events-auto max-w-full">
-                <CustomControlBar allowReactions={settings.reactions} allowHands={settings.handRaise} />
+                <CustomControlBar
+                  allowReactions={settings.reactions}
+                  allowHands={settings.handRaise}
+                  onLeave={handleLeave}
+                />
               </div>
             </div>
-            <RoomAudioRenderer />
           </LayoutContextProvider>
 
           {/* Share Modal */}
@@ -691,23 +778,7 @@ export default function LiveSession() {
         <ConfirmModal 
           isOpen={showEndSessionConfirm}
           onClose={() => setShowEndSessionConfirm(false)}
-          onConfirm={async () => {
-            setEnding(true);
-            try {
-              await updateDoc(doc(db, 'events', eventId!), { status: 'ended' });
-              await setDoc(doc(db, 'eventSessions', eventId!), { 
-                status: 'ended', 
-                endTime: new Date().toISOString(),
-                updatedAt: new Date().toISOString()
-              }, { merge: true });
-              endSession();
-              navigate(`/events/${eventId}`);
-            } catch (error) {
-              console.error("Error ending session:", error);
-            } finally {
-              setEnding(false);
-            }
-          }}
+          onConfirm={handleEndForEveryone}
           title="End Session"
           message="Are you sure you want to end this session for everyone? This action cannot be undone."
           confirmText="End Session"
@@ -716,6 +787,37 @@ export default function LiveSession() {
       </div>
     </div>
   );
+}
+
+/**
+ * Hosts and co-hosts are on stage: publish microphone and camera once the room
+ * connects. Attendees stay muted with their camera off until they choose.
+ */
+function AutoPublish({ enabled }: { enabled: boolean }) {
+  const connectionState = useConnectionState();
+  const { localParticipant } = useLocalParticipant();
+  const started = useRef(false);
+
+  useEffect(() => {
+    if (!enabled || started.current || !localParticipant) return;
+    if (connectionState !== ConnectionState.Connected) return;
+
+    started.current = true;
+    (async () => {
+      try {
+        await localParticipant.setMicrophoneEnabled(true);
+      } catch {
+        // The browser may block the microphone until the host grants it.
+      }
+      try {
+        await localParticipant.setCameraEnabled(true);
+      } catch {
+        // No camera, or permission was denied. The room still works without it.
+      }
+    })();
+  }, [enabled, localParticipant, connectionState]);
+
+  return null;
 }
 
 function AudioActivationGate({ 
@@ -1472,7 +1574,7 @@ function CustomParticipantTile({
   );
 }
 
-function CustomControlBar({ allowReactions = true, allowHands = true }: { allowReactions?: boolean; allowHands?: boolean }) {
+function CustomControlBar({ allowReactions = true, allowHands = true, onLeave }: { allowReactions?: boolean; allowHands?: boolean; onLeave: () => void }) {
   const room = useRoomContext();
   const { localParticipant } = useLocalParticipant();
   const { toggle: toggleScreenShare, enabled: isScreenShareEnabled } = useTrackToggle({
@@ -1702,9 +1804,12 @@ function CustomControlBar({ allowReactions = true, allowHands = true }: { allowR
 
         <div className="w-px h-8 bg-white/10 mx-2" />
 
-        <DisconnectButton className="!bg-red-500/20 !text-red-500 !rounded-2xl !px-6 !py-3 !font-bold hover:!bg-red-500 hover:!text-white !border border-red-500/30 !transition-all">
+        <button
+          onClick={onLeave}
+          className="rounded-2xl border border-red-500/30 bg-red-500/20 px-6 py-3 font-bold text-red-500 transition-all hover:bg-red-500 hover:text-white"
+        >
           Leave
-        </DisconnectButton>
+        </button>
       </div>
     </div>
   );

@@ -6,6 +6,7 @@ import { auth, db } from '../firebase';
 import { formatDate } from '../lib/utils';
 import CreateEventModal from './CreateEventModal';
 import { formatEventPrice } from '../lib/payments';
+import { eventHref } from '../lib/eventLinks';
 
 interface Props {
   communityId: string;
@@ -96,7 +97,7 @@ export default function CommunityEvents({ communityId, isAdmin, isMember, canCre
             const full = e.maxAttendees > 0 && (e.attendeeCount || 0) >= e.maxAttendees;
             return (
               <li key={e.id}>
-                <Link to={`/events/${e.id}`} className="flex gap-4 p-3 sm:p-4 rounded-xl border border-foreground/10 hover:border-primary/40 hover:bg-foreground/[0.02] transition-colors">
+                <Link to={eventHref(e)} className="flex gap-4 p-3 sm:p-4 rounded-xl border border-foreground/10 hover:border-primary/40 hover:bg-foreground/[0.02] transition-colors">
                   <div className="w-14 shrink-0 text-center rounded-lg bg-foreground/5 py-2 self-start">
                     <p className="text-xs font-semibold text-primary uppercase">{start ? formatDate(start, 'MMM') : ''}</p>
                     <p className="text-xl font-semibold leading-tight">{start ? formatDate(start, 'd') : '–'}</p>

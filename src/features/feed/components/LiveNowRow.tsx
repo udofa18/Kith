@@ -3,6 +3,8 @@ import { useQuery } from '@tanstack/react-query';
 import { ArrowUpRight, Radio, Sparkles } from 'lucide-react';
 import { feedService } from '../../../services/feedService';
 import { queryKeys, STALE } from '../../../lib/queryClient';
+import { eventHref } from '../../../lib/eventLinks';
+import { useLiveStatus } from '../../../contexts/LiveStatusContext';
 
 /**
  * The feed's live doorway: rooms that are on air right now, plus a one-tap
@@ -14,7 +16,12 @@ export default function LiveNowRow({ onGoLive }: { onGoLive?: () => void }) {
     queryFn: () => feedService.getUpcomingEvents(4),
     staleTime: STALE.sidebar,
   });
-  const live = data?.live ?? [];
+  // Presence is the source of truth for "on air". An instant room whose host
+  // closed the tab keeps a future endDate, so the date window alone would leave
+  // an abandoned room in the rail.
+  const { liveByUser, ready } = useLiveStatus();
+  const onAir = new Set([...liveByUser.values()].map(event => event.id));
+  const live = (data?.live ?? []).filter(event => !ready || onAir.has(event.id));
 
   return (
     <section aria-label="Live now" className="px-4 pt-3 pb-4 sm:px-5">
@@ -42,7 +49,7 @@ export default function LiveNowRow({ onGoLive }: { onGoLive?: () => void }) {
                 {live.map((event: any) => (
                   <Link
                     key={event.id}
-                    to={`/events/${event.id}`}
+                    to={eventHref(event)}
                     className="group flex max-w-[240px] shrink-0 items-center gap-2 rounded-full border border-[#f7f2e8]/10 bg-[#f7f2e8]/[0.06] py-1.5 pl-1.5 pr-3.5 transition-colors hover:bg-[#f7f2e8]/10"
                   >
                     <span className="relative h-7 w-7 shrink-0 overflow-hidden rounded-full bg-[#2a2234] ring-2 ring-red-500/70">

@@ -9,11 +9,14 @@ import axios from 'axios';
 import multer from 'multer';
 import { fetchMetadata, validateUrl } from './api/_lib/unfurl';
 import { issueLivekitToken } from './api/_lib/livekitToken';
+import { endLiveSession } from './api/_lib/liveSession';
 import {
   listBanks,
   createPayoutAccount,
   createCheckout,
+  getCheckoutOptions,
   getOrderStatus,
+  cancelCommunityMembership,
   handlePaystackWebhook,
   handleStripeWebhook,
   startConnectOnboarding,
@@ -45,8 +48,12 @@ async function startServer() {
 
   // Must be registered before express.json(): Paystack's signature covers the raw bytes.
   app.post('/api/payments/paystack-webhook', express.raw({ type: '*/*' }), async (req, res) => {
-    const signature = req.headers['x-paystack-signature'];
-    const { status, body } = await handlePaystackWebhook(req.body as Buffer, typeof signature === 'string' ? signature : undefined);
+    const current = req.headers['paystack-signature'];
+    const legacy = req.headers['x-paystack-signature'];
+    const { status, body } = await handlePaystackWebhook(req.body as Buffer, {
+      paystackSignature: Array.isArray(current) ? current[0] : current,
+      legacySignature: Array.isArray(legacy) ? legacy[0] : legacy,
+    });
     res.status(status).json(body);
   });
 
@@ -151,6 +158,17 @@ async function startServer() {
   });
 
 
+  // Server-authoritative live-session ending (mirrors api/live-session/end.ts)
+  app.post('/api/live-session/end', async (req, res) => {
+    try {
+      const { status, body } = await endLiveSession(req.body, req.headers.authorization);
+      res.status(status).json(body);
+    } catch (error: any) {
+      console.error('Error ending live session:', error);
+      res.status(500).json({ error: 'Failed to end the live session' });
+    }
+  });
+
   // Supabase third-party auth needs the Firebase role claim on new accounts.
   app.post('/api/auth/role-claim', async (req, res) => {
     const { status, body } = await ensureFirebaseRoleClaim(req.headers.authorization);
@@ -164,6 +182,10 @@ async function startServer() {
   });
   app.post('/api/payments/payout-account', async (req, res) => {
     const { status, body } = await createPayoutAccount(req.body, req.headers.authorization);
+    res.status(status).json(body);
+  });
+  app.post('/api/payments/checkout-options', async (req, res) => {
+    const { status, body } = await getCheckoutOptions(req.body, req.headers.authorization);
     res.status(status).json(body);
   });
   app.post('/api/payments/checkout', async (req, res) => {
@@ -189,6 +211,10 @@ async function startServer() {
   app.get('/api/payments/order', async (req, res) => {
     const id = typeof req.query.id === 'string' ? req.query.id : '';
     const { status, body } = await getOrderStatus(id, req.headers.authorization);
+    res.status(status).json(body);
+  });
+  app.post('/api/payments/cancel-membership', async (req, res) => {
+    const { status, body } = await cancelCommunityMembership(req.body, req.headers.authorization);
     res.status(status).json(body);
   });
   app.get('/api/payments/download', async (req, res) => {

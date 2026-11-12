@@ -5,7 +5,7 @@ import { db, auth, OperationType, handleFirestoreError } from '../firebase';
 import { collection, addDoc, doc, getDoc, updateDoc } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL } from '../lib/storage';
 import { generateProductDescription } from "../services/geminiService";
-import { hasPayoutAccount, syncProductToStore } from "../lib/productSync";
+import { syncProductToStore } from "../lib/productSync";
 import { formatPrice } from "../lib/payments";
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -231,11 +231,6 @@ export default function UploadComponent() {
         currency: formData.currency === 'NGN' ? 'NGN' : 'USD',
         updatedAt: new Date().toISOString()
       };
-
-      if (payload.price > 0 && !(await hasPayoutAccount())) {
-        setError('Set up your payout account before selling paid products.');
-        return;
-      }
 
       if (isEditMode && id) {
         await updateDoc(doc(db, 'products', id), payload);

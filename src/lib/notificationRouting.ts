@@ -39,9 +39,10 @@ export function notificationTarget(
     case 'channel_mention':
     case 'message':
     case 'message_request':
-      // Live-session invites were written as messages; route them to the room.
-      if (relatedId && /live session|instant session/i.test(content)) {
-        return `/events/${relatedId}`;
+      // Live-session invites were written as messages; route them to the room,
+      // never to the host-only event-details page.
+      if (relatedId && /live session|instant session|live now/i.test(content)) {
+        return `/live/${relatedId}`;
       }
       if (options.isCommunity ?? isCommunityNotification(notification)) {
         if (!relatedId) return null;
@@ -72,7 +73,12 @@ export function notificationTarget(
 
     case 'event_invite':
     case 'event_reminder':
-      return relatedId ? `/events/${relatedId}` : '/events';
+      if (!relatedId) return '/events';
+      // Instant-session invites ("is live now") open the room. Scheduled event
+      // invites keep their public details page.
+      return /live now|live session|instant session/i.test(content)
+        ? `/live/${relatedId}`
+        : `/events/${relatedId}`;
 
     default:
       return null;

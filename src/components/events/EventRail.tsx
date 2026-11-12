@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom';
 import { formatDate } from '../../lib/utils';
 import { isLive, startsInLabel } from '../../lib/eventRanking';
 import { communityHue } from '../CommunityCard';
+import { eventHref } from '../../lib/eventLinks';
 
 const hasImage = (url?: string) => !!url && url.trim() !== '' && !url.includes('picsum.photos');
 
@@ -16,7 +17,7 @@ export default function EventRail({ title, events, note }: { title: string; even
           const live = isLive(e);
           const hue = communityHue(e.id);
           return (
-            <Link key={e.id} to={`/events/${e.id}`} className="shrink-0 w-[250px] flex items-center gap-3 p-3 rounded-2xl border border-black/10 dark:border-white/10 hover:bg-black/[0.03] dark:hover:bg-white/[0.04] transition-colors">
+            <Link key={e.id} to={eventHref(e)} className="shrink-0 w-[250px] flex items-center gap-3 p-3 rounded-2xl border border-black/10 dark:border-white/10 hover:bg-black/[0.03] dark:hover:bg-white/[0.04] transition-colors">
               <span
                 className="shrink-0 w-11 h-11 rounded-xl overflow-hidden flex flex-col items-center justify-center leading-none"
                 style={hasImage(e.banner) ? undefined : { background: `linear-gradient(135deg, hsl(${hue} 70% 62%), hsl(${(hue + 45) % 360} 65% 48%))`, color: '#fff' }}

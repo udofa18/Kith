@@ -1,4 +1,4 @@
-import { useParams, useLocation } from 'react-router-dom';
+import { useParams, useLocation, Navigate } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import { auth, db } from '../firebase';
 import { doc, getDoc } from 'firebase/firestore';
@@ -49,6 +49,14 @@ export default function PostDetails() {
     };
     fetchPost();
   }, [id, post]);
+
+  // Community posts belong to their community feed, not the global feed. Old links
+  // and shared URLs land in the community-scoped detail instead of leaking out.
+  if (post?.communityId) {
+    const params = new URLSearchParams({ view: 'community', id: post.communityId, postId: post.id });
+    if (post.channelId) params.set('channelId', post.channelId);
+    return <Navigate to={`/feed?${params.toString()}`} replace />;
+  }
 
   return (
     <div className="max-w-[1200px] mx-auto px-2 sm:px-4 pb-8 text-black dark:text-white relative">

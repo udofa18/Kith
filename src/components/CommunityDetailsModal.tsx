@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { auth, db, handleFirestoreError, OperationType } from '../firebase';
-import { doc, getDoc, setDoc, deleteDoc, updateDoc, increment, collection, query, where, getDocs, limit, addDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, setDoc, deleteDoc, updateDoc, increment, collection, query, where, getDocs, limit, addDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Users, Calendar, Globe, Lock, Shield, Zap, UserPlus, UserMinus, Loader2, Plus } from 'lucide-react';
 import { formatDate } from '../lib/utils';
@@ -8,7 +8,8 @@ import { toast } from 'react-hot-toast';
 import { joinCommunity } from '../services/socialService';
 import { CommunityIcon, communityHue } from './CommunityCard';
 import { categoryLabel, categoryOf } from '../lib/communityCategories';
-import { canAfford, feeOf, formatFee } from '../lib/communityPricing';
+import { canAfford, feeIsRealMoney, feeOf, formatFee } from '../lib/communityPricing';
+import { beginCheckout } from '../lib/payments';
 
 export default function CommunityDetailsModal({ isOpen, onClose, communityId, onJoinSuccess, inviteCode }: { 
   isOpen: boolean, 
@@ -76,6 +77,28 @@ export default function CommunityDetailsModal({ isOpen, onClose, communityId, on
     }
   }, [isOpen, communityId, auth.currentUser]);
 
+  // Keep the request state live, so an approval shows up while the dialog is still open.
+  useEffect(() => {
+    const uid = auth.currentUser?.uid;
+    if (!isOpen || !communityId || !uid) return;
+    return onSnapshot(
+      doc(db, 'communities', communityId, 'joinRequests', uid),
+      snap => {
+        if (snap.exists()) {
+          setRequestStatus((snap.data().status as any) ?? 'none');
+        }
+      },
+      error => console.error('Could not watch join request:', error),
+    );
+  }, [isOpen, communityId, auth.currentUser]);
+
+  const refreshMembership = async (): Promise<boolean> => {
+    if (!auth.currentUser) return false;
+    const memberDoc = await getDoc(doc(db, 'communities', communityId, 'members', auth.currentUser.uid));
+    setIsMember(memberDoc.exists());
+    return memberDoc.exists();
+  };
+
   const handleJoin = async () => {
     if (!auth.currentUser) {
         toast.error("Please login to join communities", {
@@ -109,10 +132,11 @@ export default function CommunityDetailsModal({ isOpen, onClose, communityId, on
     }
 
     const fee = feeOf(community);
+    const realMoney = feeIsRealMoney(fee);
     const isPrivateFlag = community?.isPrivate || (control?.accessType && control?.accessType !== 'public') || control?.approvalRequired;
 
-    // Direct joins pay now, so check the balance first. Requests are charged on approval.
-    if (fee && !isMember && !isPrivateFlag && community.creatorId !== auth.currentUser.uid) {
+    // XP is checked up front. Card fees are collected by the server at checkout instead.
+    if (fee && !realMoney && !isMember && !isPrivateFlag && community.creatorId !== auth.currentUser.uid) {
         if (!(await canAfford(auth.currentUser.uid, fee))) {
             toast.error(`You need ${formatFee(fee)} to join. Earn XP by posting and helping others.`);
             return;
@@ -121,11 +145,10 @@ export default function CommunityDetailsModal({ isOpen, onClose, communityId, on
 
     const hasOnboarding = control?.onboardingQuestions?.length > 0;
 
-    if (isPrivateFlag || hasOnboarding) {
-        if (!showOnboarding) {
-            setShowOnboarding(true);
-            return;
-        }
+    // An approved applicant already answered the questions; asking again would lose their place.
+    if ((isPrivateFlag || hasOnboarding) && !showOnboarding && requestStatus !== 'approved') {
+        setShowOnboarding(true);
+        return;
     }
 
     const unanswered = (control?.onboardingQuestions || []).find((q: any) => q.required && !answers[q.id]?.trim());
@@ -136,6 +159,42 @@ export default function CommunityDetailsModal({ isOpen, onClose, communityId, on
 
     setJoining(true);
     try {
+      // Real-money memberships are granted by the server only after Paystack confirms payment.
+      // Direct joins pay now; approval-gated communities pay after the request is approved.
+      if (realMoney && !isMember && community.creatorId !== auth.currentUser.uid) {
+        if (!isPrivateFlag || requestStatus === 'approved') {
+          const checkout = await beginCheckout('community_membership', communityId);
+          if (checkout.authorizationUrl) {
+            window.location.assign(checkout.authorizationUrl);
+            return;
+          }
+          if (await refreshMembership()) {
+            toast.success(`Welcome to ${community.name}`);
+            if (onJoinSuccess) onJoinSuccess();
+          }
+          return;
+        }
+      }
+
+      // Approval for a free/XP community is written together with the membership. If the live
+      // listener hasn't delivered it yet, re-read rather than charging XP a second time.
+      if (requestStatus === 'approved' && !realMoney && !isMember) {
+        if (await refreshMembership()) {
+          toast.success(`Welcome to ${community.name}`);
+          if (onJoinSuccess) onJoinSuccess();
+          return;
+        }
+        if (fee?.currency === 'xp') {
+          toast.error('Your approval is recorded, but the XP transfer is still pending. Ask an admin to finish it.');
+          return;
+        }
+        await joinCommunity(auth.currentUser.uid, auth.currentUser.displayName, community, { onboardingAnswers: answers });
+        setIsMember(true);
+        toast.success(`Welcome to ${community.name}`);
+        if (onJoinSuccess) onJoinSuccess();
+        return;
+      }
+
       if (isPrivateFlag) {
           // Submit join request
           const requestId = auth.currentUser.uid; // One request per user
@@ -265,6 +324,7 @@ export default function CommunityDetailsModal({ isOpen, onClose, communityId, on
     } catch (error) {
       // Top level catch for unhandled errors within handleJoin
       console.error("Join operation failed:", error);
+      toast.error(error instanceof Error && error.message ? error.message : 'Could not join. Please try again.');
     } finally {
       setJoining(false);
     }
@@ -274,6 +334,9 @@ export default function CommunityDetailsModal({ isOpen, onClose, communityId, on
 
   const hue = community ? communityHue(community.id || community.name || 'x') : 0;
   const hasCover = !!community?.backdrop?.trim() && !community.backdrop.includes('picsum.photos');
+  const joinFee = community ? feeOf(community) : null;
+  const needsApproval = !!(community?.membershipControl?.approvalRequired || community?.isPrivate);
+  const approvedPayment = !isMember && requestStatus === 'approved' && feeIsRealMoney(joinFee);
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
@@ -376,9 +439,17 @@ export default function CommunityDetailsModal({ isOpen, onClose, communityId, on
                                  </div>
                                  <p className="text-sm text-foreground/70">
                                    <span className="text-amber-500 font-semibold">{formatFee(feeOf(community)!)}</span>{' '}
-                                   {(community.isPrivate || community.membershipControl?.approvalRequired || (community.membershipControl?.accessType && community.membershipControl.accessType !== 'public'))
-                                     ? 'is charged only if your request is approved.'
-                                     : 'is charged when you join.'}
+                                   {feeIsRealMoney(feeOf(community))
+                                     ? feeOf(community)!.interval === 'month'
+                                       ? (community.isPrivate || community.membershipControl?.approvalRequired || (community.membershipControl?.accessType && community.membershipControl.accessType !== 'public'))
+                                         ? 'per month, charged by card once your request is approved.'
+                                         : 'per month by card, and access renews until you leave.'
+                                       : (community.isPrivate || community.membershipControl?.approvalRequired || (community.membershipControl?.accessType && community.membershipControl.accessType !== 'public'))
+                                         ? 'is charged by card only if your request is approved.'
+                                         : 'is charged by card when you join.'
+                                     : (community.isPrivate || community.membershipControl?.approvalRequired || (community.membershipControl?.accessType && community.membershipControl.accessType !== 'public'))
+                                       ? 'is charged only if your request is approved.'
+                                       : 'is charged when you join.'}
                                  </p>
                               </div>
                             )}
@@ -390,7 +461,11 @@ export default function CommunityDetailsModal({ isOpen, onClose, communityId, on
                             className="w-full py-5 bg-primary text-white rounded-[2rem] font-black text-xs uppercase tracking-widest shadow-[0_0_30px_rgba(139,92,246,0.5)] hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-3"
                         >
                             {joining ? <Loader2 className="animate-spin" /> : <Shield size={18} />}
-                            {(community.membershipControl.approvalRequired || community.isPrivate) ? 'Send request' : 'Join community'}
+                            {(community.membershipControl.approvalRequired || community.isPrivate)
+                              ? 'Send request'
+                              : feeIsRealMoney(feeOf(community))
+                                ? `Continue to payment`
+                                : 'Join community'}
                         </button>
                     </motion.div>
                 ) : (
@@ -431,7 +506,7 @@ export default function CommunityDetailsModal({ isOpen, onClose, communityId, on
                             onClick={handleJoin}
                             disabled={joining || isMember || requestStatus === 'pending' || requestStatus === 'rejected'}
                             className={`flex-1 py-3.5 rounded-full font-semibold text-base transition-all flex items-center justify-center gap-2 ${
-                              isMember || requestStatus !== 'none'
+                              (isMember || requestStatus === 'pending' || requestStatus === 'rejected')
                                 ? 'bg-foreground/10 text-foreground/50 cursor-default' 
                                 : 'bg-primary text-primary-foreground hover:opacity-90'
                             }`}
@@ -443,7 +518,15 @@ export default function CommunityDetailsModal({ isOpen, onClose, communityId, on
                             ) : requestStatus === 'rejected' ? (
                                 <>Request not accepted</>
                             ) : (
-                                <>{joining ? 'Joining…' : feeOf(community) && !(community.membershipControl?.approvalRequired || community.isPrivate) ? `Join · ${formatFee(feeOf(community)!)}` : (community.membershipControl?.approvalRequired || community.isPrivate) ? 'Request to join' : 'Join community'} <UserPlus size={20} /></>
+                                <>{joining
+                                  ? 'Joining…'
+                                  : approvedPayment
+                                    ? `Pay ${formatFee(joinFee!)} & join`
+                                    : joinFee && !needsApproval
+                                      ? `Join · ${formatFee(joinFee)}`
+                                      : needsApproval
+                                        ? 'Request to join'
+                                        : 'Join community'} <UserPlus size={20} /></>
                             )}
                           </button>
                         </div>

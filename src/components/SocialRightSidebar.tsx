@@ -4,6 +4,7 @@ import { Check, Flame, TrendingUp } from 'lucide-react';
 import { feedService } from '../services/feedService';
 import { queryKeys, STALE } from '../lib/queryClient';
 import { formatDate } from '../lib/utils';
+import { eventHref } from '../lib/eventLinks';
 import { useCurrentUser } from '../contexts/CurrentUserContext';
 import { activeStreak, recentDays, shippedToday } from '../features/shiplog/streak';
 import RailSection, { RailEmpty, RailRow } from './ui/RailSection';
@@ -83,7 +84,7 @@ function UpcomingEvents() {
   return (
     <RailSection title="Upcoming events" action={{ label: 'All events', to: '/events' }}>
       {isLoading ? <RailSkeleton rows={3} avatar /> : upcoming.length === 0 ? <RailEmpty>No upcoming events.</RailEmpty> : upcoming.map((event: any) => (
-        <RailRow key={event.id} to={`/events/${event.id}`}>
+        <RailRow key={event.id} to={eventHref(event)}>
           <div className="w-10 shrink-0 text-center rounded-lg bg-primary/10 text-primary py-1">
             <p className="text-[10px] font-semibold uppercase leading-none">{formatDate(event.startMs, 'MMM')}</p>
             <p className="text-base font-bold leading-tight">{formatDate(event.startMs, 'd')}</p>

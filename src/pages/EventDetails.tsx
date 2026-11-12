@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { useParams, Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { doc, getDoc, setDoc, deleteDoc, onSnapshot, collection, query, where, increment, updateDoc, limit } from 'firebase/firestore';
 import { db, auth, handleFirestoreError, OperationType } from '../firebase';
 import { motion, AnimatePresence } from 'motion/react';
@@ -43,7 +43,9 @@ import CoHostManagementModal from '../components/CoHostManagementModal';
 import BoostEventModal from '../components/events/BoostEventModal';
 import EventCover, { hasEventBanner } from '../components/events/EventCover';
 import Avatar from '../components/ui/Avatar';
-import { startCheckout, getOrderStatus, formatEventPrice } from '../lib/payments';
+import CheckoutButtons from '../components/marketplace/CheckoutButtons';
+import { getOrderStatus, formatEventPrice, isOrderId } from '../lib/payments';
+import { eventHref, isInstantLiveSession, liveRoomPath } from '../lib/eventLinks';
 
 export default function EventDetails() {
   const [isLoaded, setIsLoaded] = useState(false);
@@ -165,7 +167,16 @@ export default function EventDetails() {
   }, [eventId]);
 
   // Returning from checkout (tickets or boosts): the server fulfils the order, so wait for it.
-  const orderParam = searchParams.get('order');
+  // Paystack redirects with `reference` (our order id) and Stripe with `order`.
+  const orderParamValue = searchParams.get('order') ?? searchParams.get('reference');
+  const orderParam = isOrderId(orderParamValue) ? orderParamValue : null;
+  const checkoutCancelled = searchParams.get('cancelled');
+  useEffect(() => {
+    if (!checkoutCancelled) return;
+    toast('Checkout cancelled. No charge was made.');
+    setSearchParams({}, { replace: true });
+  }, [checkoutCancelled, setSearchParams]);
+
   useEffect(() => {
     if (!orderParam || !auth.currentUser) return;
     let cancelled = false;
@@ -204,21 +215,9 @@ export default function EventDetails() {
     }
     if (!eventId || !event) return;
 
-    if (event.isPaid && isRegisteredState) {
-      toast.error("Paid tickets can't be cancelled here. Contact the host.");
-      return;
-    }
-
     if (event.isPaid) {
-      setRegistering(true);
-      try {
-        const result = await startCheckout('event_ticket', eventId);
-        if (!result.authorizationUrl) throw new Error('Checkout could not start. Please try again.');
-        window.location.href = result.authorizationUrl;
-      } catch (error) {
-        toast.error(error instanceof Error ? error.message : 'Checkout failed');
-        setRegistering(false);
-      }
+      // Paid tickets are bought through CheckoutButtons, which uses server-priced options.
+      toast.error("Paid tickets can't be cancelled here. Contact the host.");
       return;
     }
 
@@ -285,6 +284,13 @@ export default function EventDetails() {
   const canJoinNow = live || now >= fiveMinsBefore.getTime();
   const isInstantExpired = event.type === 'instant' && event.expiresAt && new Date(event.expiresAt).getTime() < now;
 
+  // Instant sessions are room-first. Their details page is the host/co-host
+  // console, so everyone else belongs in the room (or back in the feed once it
+  // has ended), never on this page.
+  if (isInstantLiveSession(event) && !canManage) {
+    return <Navigate to={ended || isInstantExpired ? '/feed' : liveRoomPath(event)} replace />;
+  }
+
   const handleStartSession = async (allowEarly = true) => {
     if (!canManage || !eventId) return;
 
@@ -308,7 +314,7 @@ export default function EventDetails() {
       }, { merge: true });
 
       setShowEarlyAccessConfirm(false);
-      navigate(`/events/${eventId}/live`);
+      navigate(liveRoomPath(event));
     } catch (error) {
       console.error('Error starting session:', error);
       toast.error('Failed to start session');
@@ -328,7 +334,7 @@ export default function EventDetails() {
   };
 
   const handleShare = async () => {
-    const url = `${window.location.origin}/events/${eventId}`;
+    const url = `${window.location.origin}${eventHref(event)}`;
     try {
       if (navigator.share) {
         await navigator.share({ title: event.title, text: event.description || undefined, url });
@@ -661,7 +667,7 @@ export default function EventDetails() {
 
                 {!canManage && isRegistered && !event.isOffline && canJoinNow && !ended && (
                   <button
-                    onClick={() => navigate(`/events/${eventId}/live`)}
+                    onClick={() => navigate(liveRoomPath(event))}
                     className="group flex w-full items-center justify-center gap-2 rounded-full bg-primary py-3.5 text-[13px] font-bold text-primary-foreground shadow-glow-primary transition-all hover:brightness-105 active:scale-[0.99]"
                   >
                     <Radio size={16} /> Join the live room
@@ -669,7 +675,14 @@ export default function EventDetails() {
                   </button>
                 )}
 
-                {!canManage && (
+                {!canManage && event.isPaid && !isRegistered && !ended ? (
+                  <CheckoutButtons
+                    kind="event_ticket"
+                    targetId={eventId!}
+                    label="Pay & register"
+                    buttonClassName="py-3.5"
+                  />
+                ) : !canManage ? (
                   <button
                     onClick={handleRegister}
                     disabled={registering || ended}
@@ -687,13 +700,11 @@ export default function EventDetails() {
                       <><Check size={16} /> Registered</>
                     ) : ended ? (
                       'Registration closed'
-                    ) : event.isPaid ? (
-                      <>Pay & register <ArrowUpRight size={14} /></>
                     ) : (
                       <>Register free <ArrowUpRight size={14} /></>
                     )}
                   </button>
-                )}
+                ) : null}
 
                 {isRegistered && !event.isOffline && !canJoinNow && !ended && (
                   <p className="rounded-2xl bg-foreground/[0.03] px-4 py-3 text-center text-[11px] leading-relaxed text-muted-foreground">

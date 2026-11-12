@@ -38,7 +38,7 @@ export default function JoiningFeeSettings({ communityId, community }: { communi
     <div className="space-y-5">
       <div>
         <h3 className="text-xl font-semibold">Joining fee</h3>
-        <p className="text-sm text-foreground/55">Charge a one-time fee to join your community.</p>
+        <p className="text-sm text-foreground/55">Charge XP or real money to join your community.</p>
       </div>
 
       <Card title="Fee">
@@ -47,10 +47,11 @@ export default function JoiningFeeSettings({ communityId, community }: { communi
 
       <Card title="How it works">
         <ul className="space-y-2 text-sm text-foreground/70 list-disc pl-5">
-          <li>{needsApproval ? 'Because people request to join, the fee is taken when you approve them, and only if they can afford it.' : 'The fee is taken when someone joins, so they need enough XP first.'}</li>
-          <li>The fee is paid in XP and goes to you, the community owner. You aren't charged to join your own community.</li>
-          <li>Members who are already in aren't charged, and changing the fee later doesn't refund anyone.</li>
-          <li>Card payments aren't available yet.</li>
+          <li>{needsApproval ? 'Because people request to join, they pay when you approve them. Real-money members pay from their own account after approval.' : 'The fee is taken when someone joins.'}</li>
+          <li>XP fees are one-time and go straight to you. Real-money fees are collected by Paystack and credited to your Kith balance, less the platform fee.</li>
+          <li>Monthly fees renew automatically every month. Leaving the community stops future payments. If a renewal fails, access pauses until the payment succeeds.</li>
+          <li>The fee goes to you, the community owner. You aren't charged to join your own community.</li>
+          <li>Members who are already in aren't charged again, and changing the fee later doesn't refund anyone or change an existing subscription.</li>
         </ul>
       </Card>
 

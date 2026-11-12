@@ -1,5 +1,6 @@
 import { auth } from '../firebase';
 import { supabase } from '../supabase';
+import { toMinorUnits } from './payments';
 
 export interface StoreProductInput {
   title: string;
@@ -60,7 +61,7 @@ export async function syncProductToStore(productId: string, input: StoreProductI
       product_type: input.productType,
       category: input.category ?? input.productType,
       tags: input.tags ?? [],
-      price_cents: Math.round(Number(input.price) * 100),
+      price_cents: input.price > 0 ? toMinorUnits(input.price, input.currency) : 0,
       currency: input.currency,
       cover_url: input.previewImage?.startsWith('https://') ? input.previewImage : null,
       status: input.status ?? 'published',

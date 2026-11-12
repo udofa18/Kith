@@ -2,9 +2,10 @@ import { db } from '../firebase';
 import { getSupabase } from '../supabase';
 import { dualRead, dualWrite } from './db/utils';
 import {
-  doc, setDoc, deleteDoc, updateDoc, addDoc, getDocs, collection, query, where, limit, increment, serverTimestamp, writeBatch,
+  doc, getDoc, setDoc, deleteDoc, updateDoc, addDoc, getDocs, collection, query, where, limit, increment, serverTimestamp, writeBatch,
 } from 'firebase/firestore';
 import { addFeePayment, feeOf } from '../lib/communityPricing';
+import { cancelCommunityMembership } from '../lib/payments';
 
 /** Follow edges live on both sides: users/{me}/following/{them} and users/{them}/followers/{me}. */
 export async function followUser(myUid: string, targetUid: string): Promise<void> {
@@ -88,7 +89,12 @@ export async function joinCommunity(
     ...extra,
   });
   const fee = feeOf(community);
-  if (fee && community.creatorId !== uid) addFeePayment(batch, fee, uid, community.creatorId);
+  if (fee && community.creatorId !== uid) {
+    if (fee.currency !== 'xp') {
+      throw new Error('This community charges a real-money fee. Pay at checkout to join.');
+    }
+    addFeePayment(batch, fee, uid, community.creatorId);
+  }
   await batch.commit();
 
   try {
@@ -106,11 +112,33 @@ export async function joinCommunity(
 }
 
 export async function leaveCommunity(uid: string, communityId: string): Promise<void> {
-  await deleteDoc(doc(db, 'communities', communityId, 'members', uid));
-  try {
-    await updateDoc(doc(db, 'communities', communityId), { memberCount: increment(-1) });
-  } catch (err) {
-    console.error('Failed to update community member count:', err);
+  const memberRef = doc(db, 'communities', communityId, 'members', uid);
+  const memberSnap = await getDoc(memberRef);
+  const monthly = memberSnap.exists() && memberSnap.data()?.paymentInterval === 'month';
+
+  if (memberSnap.exists()) {
+    await deleteDoc(memberRef);
+    try {
+      await updateDoc(doc(db, 'communities', communityId), { memberCount: increment(-1) });
+    } catch (err) {
+      console.error('Failed to update community member count:', err);
+    }
+  }
+
+  // A monthly membership starts a Paystack subscription. Leaving must stop future charges, or the
+  // member would keep paying for a community they can no longer open.
+  if (monthly) {
+    try {
+      await cancelCommunityMembership(communityId);
+    } catch (error) {
+      // Put the membership back rather than leaving someone billed without access.
+      if (memberSnap.exists()) {
+        await setDoc(memberRef, memberSnap.data()).catch(() => undefined);
+        await updateDoc(doc(db, 'communities', communityId), { memberCount: increment(1) }).catch(() => undefined);
+      }
+      console.error('Failed to cancel community subscription:', error);
+      throw new Error("We couldn't stop your monthly payment, so you haven't left yet. Please try again.");
+    }
   }
 }
 

@@ -49,7 +49,7 @@ export interface PostFeedActions {
   onMute: () => void;
 }
 
-export default function PostCard({ post, onPostDeleted, isDetailView = false, compact = false, feedActions }: { post: any, onPostDeleted?: () => void, isDetailView?: boolean, compact?: boolean, feedActions?: PostFeedActions }) {
+export default function PostCard({ post, onPostDeleted, isDetailView = false, compact = false, feedActions, onOpenPost }: { post: any, onPostDeleted?: () => void, isDetailView?: boolean, compact?: boolean, feedActions?: PostFeedActions, onOpenPost?: (post: any) => void }) {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [liked, setLiked] = useState(false);
@@ -525,8 +525,27 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
     }
   };
 
+  /** Community posts open inside their community; everyone else gets the global detail page. */
+  const openPost = (target: any) => {
+    if (onOpenPost && target.communityId && target.communityId === post.communityId) {
+      onOpenPost(target);
+      return;
+    }
+    navigate(`/post/${target.id}`, { state: { post: target } });
+  };
+
   const handleShare = async () => {
-    const url = `${window.location.origin}/post/${post.id}`;
+    const communityParams = post.communityId
+      ? new URLSearchParams({
+          view: 'community',
+          id: post.communityId,
+          ...(post.channelId ? { channelId: post.channelId } : {}),
+          postId: post.id,
+        })
+      : null;
+    const url = communityParams
+      ? `${window.location.origin}/feed?${communityParams.toString()}`
+      : `${window.location.origin}/post/${post.id}`;
     try {
       if (navigator.share) {
         await navigator.share({ title: `${post.authorName} on Kith`, url });
@@ -637,7 +656,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
             <div className="h-20 bg-black/5 dark:bg-white/5 rounded-2xl" />
           </div>
         ) : originalPost ? (
-          <PostCard post={originalPost} />
+          <PostCard post={originalPost} onOpenPost={onOpenPost} />
         ) : (
           <div className="px-5 py-6 border-b border-black/10 dark:border-white/10 text-center text-sm text-black/40 dark:text-white/40">
             Original post was deleted
@@ -866,7 +885,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
                 renderContent(content)
               ) : (
                 <div 
-                  onClick={() => navigate(`/post/${post.id}`, { state: { post } })} 
+                  onClick={() => openPost(post)}
                   className="block hover:opacity-80 transition-opacity cursor-pointer"
                 >
                   {renderContent(displayContent)}
@@ -885,7 +904,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
                     <div className="h-24 bg-black/5 dark:bg-white/5 rounded-2xl animate-pulse border border-black/10 dark:border-white/10" />
                   ) : originalPost ? (
                     <div 
-                      onClick={(e) => { e.stopPropagation(); navigate(`/post/${originalPost.id}`, { state: { post: originalPost } }); }}
+                      onClick={(e) => { e.stopPropagation(); openPost(originalPost); }}
                       className="border border-black/20 dark:border-white/10 rounded-2xl p-4 hover:bg-black/5 dark:hover:bg-white/5 transition-all group/quote cursor-pointer bg-black/5 dark:bg-white/5"
                     >
                       <div className="flex items-center gap-2 mb-2">
