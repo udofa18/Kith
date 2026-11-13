@@ -45,6 +45,7 @@ export default function LiveNowRow({ onGoLive }: { onGoLive?: () => void }) {
     staleTime: 0,
     refetchInterval: 20_000,
     refetchOnWindowFocus: true,
+    placeholderData: (previous) => previous,
   });
 
   const followingIds = viewer?.followingIds;
