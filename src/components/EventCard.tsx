@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 import { ArrowUpRight, Flame, Megaphone, MapPin, Video } from 'lucide-react';
 import { formatDate } from '../lib/utils';
-import { isFillingFast, isLive, spotsLeft, startsInLabel } from '../lib/eventRanking';
+import { isEnded, isFillingFast, isLive, spotsLeft, startsInLabel } from '../lib/eventRanking';
 import { emojiFor } from '../lib/eventCategories';
 import { themeGradient } from '../lib/eventTheme';
 import { cityOf } from '../lib/eventCities';
@@ -23,7 +23,7 @@ interface Props {
 /** Poster-style event card: the image (or vibe gradient) carries the card. */
 export default function EventCard({ event, compact = false, promoted = false, isRegistered = false, preview = false }: Props) {
   const live = isLive(event);
-  const ended = event.status === 'ended';
+  const ended = isEnded(event);
   const soon = live ? '' : startsInLabel(event);
   const left = spotsLeft(event);
   const going = event.attendeeCount || 0;

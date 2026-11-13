@@ -30,12 +30,32 @@ export const endMs = (e: RankableEvent) =>
   e.endDate ? new Date(e.endDate).getTime() : startMs(e) + HOUR;
 
 export function isLive(e: RankableEvent, now = Date.now()) {
-  if (e.status === 'ended') return false;
+  if (isEnded(e, now) || isSessionEnded(e)) return false;
   return e.status === 'live' || (startMs(e) <= now && now <= endMs(e));
 }
 
-export const isEnded = (e: RankableEvent, now = Date.now()) =>
-  e.status === 'ended' || endMs(e) < now;
+/**
+ * True when the latest live room has closed and the host has not restarted it.
+ * `endedAt` marks a room close; `lastStartedAt` is written on every start, so a
+ * restart after an early close revives the room without clearing history.
+ */
+export const isSessionEnded = (e: RankableEvent) => {
+  if (!e.endedAt) return false;
+  const ended = new Date(e.endedAt).getTime();
+  const started = e.lastStartedAt ? new Date(e.lastStartedAt).getTime() : NaN;
+  return Number.isFinite(ended) && (!Number.isFinite(started) || ended >= started);
+};
+
+/**
+ * An event is over when its schedule says so, not when a live room closes.
+ * A host may open a scheduled room early and end it, which used to leave a
+ * sticky `status: 'ended'` on an event whose date is still in the future.
+ * The stored status only decides when there is no usable end date.
+ */
+export const isEnded = (e: RankableEvent, now = Date.now()) => {
+  const end = endMs(e);
+  return Number.isFinite(end) ? end < now : e.status === 'ended';
+};
 
 export function isPromoted(e: RankableEvent, now = Date.now()) {
   const p = e.promotion;

@@ -59,15 +59,25 @@ export async function endLiveSession(body: any, authorization?: string): Promise
   const now = new Date().toISOString();
   const managers = [event.hostId, ...coHosts].filter((id): id is string => typeof id === 'string' && id.length > 0);
 
+  // Closing a room is not the same as the event finishing. An instant session's
+  // event only exists for the room, so it ends with it. A scheduled event keeps
+  // its start/end date: the host may open the room early, close it, and still be
+  // hosting on the scheduled date. Overwriting `endDate` here used to make that
+  // event look permanently ended, even after the host edited the dates.
+  const isInstant = event.type === 'instant' || event.isInstant === true;
+  const scheduledEnd = typeof event.endDate === 'string' ? Date.parse(event.endDate) : NaN;
+  const scheduledStatus = Number.isFinite(scheduledEnd) && scheduledEnd <= Date.now() ? 'ended' : 'upcoming';
+
   await db.runTransaction(async (transaction) => {
     const fresh = await transaction.get(eventRef);
     if (!fresh.exists) return;
 
-    transaction.update(eventRef, {
-      status: 'ended',
-      endDate: now,
-      endedAt: now,
-    });
+    transaction.update(
+      eventRef,
+      isInstant
+        ? { status: 'ended', endDate: now, endedAt: now }
+        : { status: scheduledStatus, endedAt: now },
+    );
     transaction.set(
       sessionRef,
       {

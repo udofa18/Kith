@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom';
 import { ArrowUpRight, CalendarDays, MapPin, Megaphone, Radio, Users, Video } from 'lucide-react';
 import { formatDate } from '../../lib/utils';
 import { cityOf } from '../../lib/eventCities';
-import { isLive, startsInLabel } from '../../lib/eventRanking';
+import { isEnded, isLive, startsInLabel } from '../../lib/eventRanking';
 import { formatEventPrice } from '../../lib/payments';
 import EventCover from './EventCover';
 import { eventHref } from '../../lib/eventLinks';
@@ -16,7 +16,7 @@ interface Props {
 /** Editorial event row: one image, one story, thin divider — instead of another card. */
 export default function EventRow({ event, promoted = false, isRegistered = false }: Props) {
   const live = isLive(event);
-  const ended = event.status === 'ended';
+  const ended = isEnded(event);
   const city = cityOf(event);
   const where = event.isOffline ? event.locationName || city || 'Location TBD' : 'Online';
   const going = event.attendeeCount || 0;

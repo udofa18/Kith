@@ -34,7 +34,7 @@ import { setOptions, importLibrary } from '@googlemaps/js-api-loader';
 import { toast } from 'react-hot-toast';
 
 import { formatDate } from '../lib/utils';
-import { isEnded, isLive, isPromoted } from '../lib/eventRanking';
+import { isEnded, isLive, isPromoted, isSessionEnded } from '../lib/eventRanking';
 import UserHoverCard from '../components/UserHoverCard';
 import CreateEventModal from '../components/CreateEventModal';
 import { updateEventStatus } from '../lib/eventUtils';
@@ -276,7 +276,10 @@ export default function EventDetails() {
   const canManage = isHost || isCoHost;
   const canSeeDetails = !isAccessRestricted || isRegistered || canManage;
   const live = isLive(event, now);
-  const ended = event.status === 'ended' || isEnded(event, now);
+  const ended = isEnded(event, now);
+  // The room can close before the event's scheduled date; that is not the end
+  // of the event, so the banner says the session ended and the date remains.
+  const sessionEnded = !live && !ended && isSessionEnded(event);
   const promo = isPromoted(event, now);
 
   const startDate = new Date(event.startDate);
@@ -402,6 +405,9 @@ export default function EventDetails() {
             )}
             {!live && ended && (
               <span className="rounded-full bg-white/15 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.16em] text-white backdrop-blur-md">Ended</span>
+            )}
+            {sessionEnded && (
+              <span className="rounded-full bg-white/15 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.16em] text-white backdrop-blur-md">Session ended</span>
             )}
             <span className="rounded-full bg-white/15 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.16em] text-white backdrop-blur-md">
               {event.eventType === 'community' ? 'Community event' : 'Event'}
@@ -659,7 +665,7 @@ export default function EventDetails() {
                       className="group flex w-full items-center justify-center gap-2 rounded-full bg-primary py-3.5 text-[13px] font-bold text-primary-foreground shadow-glow-primary transition-all hover:brightness-105 active:scale-[0.99]"
                     >
                       <Radio size={16} />
-                      {live ? 'Enter your live room' : ended ? 'Restart the room' : 'Start the room'}
+                      {live ? 'Enter your live room' : ended || sessionEnded ? 'Restart the room' : 'Start the room'}
                       <ArrowUpRight size={14} className="transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
                     </button>
                   )
@@ -786,7 +792,7 @@ export default function EventDetails() {
                         <HostAction icon={<Info size={14} />} onClick={() => { setShowHostTools(false); setIsEditModalOpen(true); }}>
                           Edit event details
                         </HostAction>
-                        {event.visibility === 'public' && event.status !== 'ended' && (
+                        {event.visibility === 'public' && !ended && (
                           <HostAction icon={<Rocket size={14} className="text-amber-500" />} onClick={() => { setShowHostTools(false); setIsBoostOpen(true); }}>
                             {promo ? 'Extend the boost' : 'Boost this event'}
                           </HostAction>

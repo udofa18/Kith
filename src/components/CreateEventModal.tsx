@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
-import { addDoc, collection, doc, getDoc, getDocs, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
+import { addDoc, collection, deleteField, doc, getDoc, getDocs, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
 import { getDownloadURL, ref, uploadBytes } from '../lib/storage';
 import { ArrowLeft, Camera, Check, Globe, Lock, MapPin, Users, Video, X } from 'lucide-react';
 import { importLibrary, setOptions } from '@googlemaps/js-api-loader';
@@ -200,7 +200,20 @@ export default function CreateEventModal({ isOpen, onClose, communityId, eventId
       if (eventId) {
         const before = (await getDoc(doc(db, 'events', eventId))).data();
         const { attendeeCount, status, createdAt, ...update } = data;
-        await updateDoc(doc(db, 'events', eventId), update);
+        // Rescheduling is also the repair path for an event that a room ending
+        // marked ended early. Recompute the status from the new dates and clear
+        // the stale end marker so the event returns to discovery.
+        const nextEnd = endIso ? new Date(endIso).getTime() : NaN;
+        const nextStatus = Number.isFinite(nextEnd) && nextEnd <= Date.now()
+          ? 'ended'
+          : before?.status === 'live'
+            ? 'live'
+            : 'upcoming';
+        await updateDoc(doc(db, 'events', eventId), {
+          ...update,
+          status: nextStatus,
+          endedAt: deleteField(),
+        });
         const moved = before && (before.locationAddress !== update.locationAddress || before.locationName !== update.locationName);
         const retimed = before && (before.startDate !== update.startDate || before.endDate !== update.endDate);
         if (moved || retimed) {

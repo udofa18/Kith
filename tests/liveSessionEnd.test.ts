@@ -101,23 +101,59 @@ describe('end live session', () => {
     expect(fake.store.get('events/e1')?.status).toBe('live');
   });
 
-  it('marks the event and session ended and clears every manager presence', async () => {
+  it('closes a scheduled room without ending the event', async () => {
     seedLiveRoom();
+    const scheduledEnd = fake.store.get('events/e1')?.endDate;
 
     const result = await endLiveSession({ eventId: 'e1' }, 'Bearer host-token');
 
     expect(result).toMatchObject({ status: 200, body: { ok: true, eventId: 'e1' } });
 
     const event = fake.store.get('events/e1');
-    expect(event?.status).toBe('ended');
-    expect(typeof event?.endDate).toBe('string');
-    expect(event?.endedAt).toBe(event?.endDate);
+    // The room closed, but the event is still scheduled for its original date.
+    expect(event?.status).toBe('upcoming');
+    expect(event?.endDate).toBe(scheduledEnd);
+    expect(typeof event?.endedAt).toBe('string');
     expect(fake.store.get('eventSessions/e1')?.status).toBe('ended');
     expect(fake.store.get('eventSessions/e1')?.endedBy).toBe(host);
 
     // Presence docs are gone so no avatar keeps the red ring.
     expect(fake.store.has(`liveStatus/${host}`)).toBe(false);
     expect(fake.store.has(`liveStatus/${coHost}`)).toBe(false);
+  });
+
+  it('ends an instant room together with its event', async () => {
+    seedLiveRoom({ type: 'instant' });
+
+    await expect(endLiveSession({ eventId: 'e1' }, 'Bearer host-token')).resolves.toMatchObject({
+      status: 200,
+    });
+
+    const event = fake.store.get('events/e1');
+    expect(event?.status).toBe('ended');
+    expect(typeof event?.endDate).toBe('string');
+    expect(event?.endedAt).toBe(event?.endDate);
+    expect(fake.store.get('eventSessions/e1')?.status).toBe('ended');
+  });
+
+  it('treats isInstant as an instant session too', async () => {
+    seedLiveRoom({ isInstant: true });
+
+    await endLiveSession({ eventId: 'e1' }, 'Bearer host-token');
+
+    expect(fake.store.get('events/e1')?.status).toBe('ended');
+  });
+
+  it('keeps a scheduled event ended once its scheduled end has passed', async () => {
+    const pastEnd = new Date(Date.now() - 60 * 60_000).toISOString();
+    seedLiveRoom({ endDate: pastEnd });
+
+    await endLiveSession({ eventId: 'e1' }, 'Bearer host-token');
+
+    const event = fake.store.get('events/e1');
+    expect(event?.status).toBe('ended');
+    // The historical end date is preserved rather than rewritten to "now".
+    expect(event?.endDate).toBe(pastEnd);
   });
 
   it('allows a co-host to end the room', async () => {

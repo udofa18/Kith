@@ -7,6 +7,7 @@ import { formatDate } from '../lib/utils';
 import CreateEventModal from './CreateEventModal';
 import { formatEventPrice } from '../lib/payments';
 import { eventHref } from '../lib/eventLinks';
+import { isEnded } from '../lib/eventRanking';
 
 interface Props {
   communityId: string;
@@ -41,7 +42,9 @@ export default function CommunityEvents({ communityId, isAdmin, isMember, canCre
 
   const now = Date.now();
   const { upcoming, past } = useMemo(() => {
-    const isPast = (e: any) => e.status === 'ended' || (e.status !== 'live' && (toMs(e.endDate) ?? toMs(e.startDate) ?? 0) < now);
+    // The schedule decides whether an event is past. A room that closed early
+    // must not move a future event into the past tab.
+    const isPast = (e: any) => isEnded(e, now);
     return {
       upcoming: events.filter(e => !isPast(e)).sort((a, b) => (a.status === 'live' ? -1 : 0) - (b.status === 'live' ? -1 : 0) || (toMs(a.startDate) ?? 0) - (toMs(b.startDate) ?? 0)),
       past: events.filter(isPast).sort((a, b) => (toMs(b.startDate) ?? 0) - (toMs(a.startDate) ?? 0)),
