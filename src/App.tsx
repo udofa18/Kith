@@ -14,6 +14,7 @@ import { unlockAudio } from './lib/sounds';
 import { applyNotificationPreferences, clearNotificationPreferences } from './lib/notificationPreferences';
 import { prefetchFeedExperienceData } from './lib/queryClient';
 import { applyAppearance, normalizeSettings } from './features/settings/preferences';
+import { canSeeChallenges, isAdminUser } from './lib/features';
 
 // Pages
 import LandingPage from './pages/LandingPage';
@@ -112,8 +113,12 @@ function AppRoutes({ user, onboardingRequired }: { user: any, onboardingRequired
     return <Navigate to={from && from !== '/login' ? from : '/feed'} replace />;
   }
 
-  const isAdmin = user && (user.role === 'admin' || user.email === 'danieludofa452@gmail.com');
+  const isAdmin = isAdminUser(user);
   const priv = (element: ReactElement) => <RequireAuth user={user}>{element}</RequireAuth>;
+  // Challenges are unfinished, so they stay hidden from everyone except admins
+  // who are previewing them. All entry points use the same flag.
+  const challenge = (element: ReactElement) =>
+    canSeeChallenges(user) ? element : <Navigate to={user ? '/feed' : '/'} replace />;
 
   return (
     <Routes>
@@ -129,8 +134,8 @@ function AppRoutes({ user, onboardingRequired }: { user: any, onboardingRequired
       <Route path="/success" element={<Navigate to="/library" replace />} />
       <Route path="/feed" element={<SocialFeed />} />
       <Route path="/post/:id" element={<PostDetails />} />
-      <Route path="/challenges" element={<Challenges />} />
-      <Route path="/challenges/:challengeId" element={<ChallengeDetails />} />
+      <Route path="/challenges" element={challenge(<Challenges />)} />
+      <Route path="/challenges/:challengeId" element={challenge(<ChallengeDetails />)} />
       <Route path="/events" element={<EventsPage />} />
       <Route path="/events/:eventId" element={<EventDetails />} />
       <Route path="/live/:eventId" element={<LiveSession />} />
@@ -143,9 +148,9 @@ function AppRoutes({ user, onboardingRequired }: { user: any, onboardingRequired
       {/* Signed-in only */}
       <Route path="/onboarding" element={priv(<Onboarding user={user} />)} />
       <Route path="/profile" element={priv(<Navigate to={`/creators/${user?.uid}`} replace />)} />
-      <Route path="/create-challenge" element={priv(<CreateChallenge />)} />
-      <Route path="/edit-challenge/:challengeId" element={priv(<CreateChallenge />)} />
-      <Route path="/challenges/:challengeId/submissions" element={priv(<ChallengeSubmissions />)} />
+      <Route path="/create-challenge" element={challenge(priv(<CreateChallenge />))} />
+      <Route path="/edit-challenge/:challengeId" element={challenge(priv(<CreateChallenge />))} />
+      <Route path="/challenges/:challengeId/submissions" element={challenge(priv(<ChallengeSubmissions />))} />
       <Route path="/events/:eventId/live" element={priv(<LiveSession />)} />
       <Route path="/write" element={priv(<ArticleWrite />)} />
       <Route path="/write/:articleId" element={priv(<ArticleWrite />)} />

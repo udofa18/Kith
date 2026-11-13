@@ -3,6 +3,8 @@
  * so both always land on the same screen.
  */
 
+import { CHALLENGES_ENABLED } from './features';
+
 export interface RoutableNotification {
   type?: string;
   relatedId?: string;
@@ -62,6 +64,7 @@ export function notificationTarget(
         : `/feed?view=community&id=${relatedId}`;
 
     case 'challenge':
+      if (!CHALLENGES_ENABLED) return '/feed';
       return relatedId ? `/challenges/${relatedId}` : '/challenges';
 
     case 'xp_gift':

@@ -36,6 +36,7 @@ import { avatarFor, levelFor } from '../lib/profile';
 import { useKithNavData } from '../hooks/useKithNavData';
 import { useKithTheme } from '../hooks/useKithTheme';
 import { useLiveStatus } from '../contexts/LiveStatusContext';
+import { canSeeChallenges } from '../lib/features';
 
 const TONES = {
   feed: '#ff6b4a',
@@ -220,13 +221,17 @@ export default function MobileNav({ user }: { user: any }) {
           },
         ]
       : []),
-    {
-      to: '/challenges',
-      icon: Award,
-      label: 'Bounties',
-      hint: 'Open briefs',
-      tone: TONES.bounties,
-    },
+    ...(canSeeChallenges(user)
+      ? [
+          {
+            to: '/challenges',
+            icon: Award,
+            label: 'Bounties',
+            hint: 'Open briefs',
+            tone: TONES.bounties,
+          },
+        ]
+      : []),
     {
       to: '/articles',
       icon: FileText,

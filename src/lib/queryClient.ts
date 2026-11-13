@@ -1,6 +1,7 @@
 import { QueryClient, keepPreviousData } from '@tanstack/react-query';
 import { feedService } from '../services/feedService';
 import { feedQueryOptions } from '../features/feed/hooks/useFeed';
+import { CHALLENGES_ENABLED } from './features';
 
 export const STALE = {
   feed: 1000 * 60 * 2,
@@ -73,11 +74,15 @@ export async function prefetchFeedExperienceData(userId?: string | null) {
       queryFn: () => feedService.getFeaturedArticles(5),
       staleTime: STALE.sidebar,
     }),
-    queryClient.prefetchQuery({
-      queryKey: queryKeys.featuredChallenges(),
-      queryFn: () => feedService.getFeaturedChallenges(3),
-      staleTime: STALE.sidebar,
-    }),
+    ...(CHALLENGES_ENABLED
+      ? [
+          queryClient.prefetchQuery({
+            queryKey: queryKeys.featuredChallenges(),
+            queryFn: () => feedService.getFeaturedChallenges(3),
+            staleTime: STALE.sidebar,
+          }),
+        ]
+      : []),
   ]);
 }
 

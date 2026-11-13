@@ -10,6 +10,7 @@ import { activeStreak, recentDays, shippedToday } from '../features/shiplog/stre
 import RailSection, { RailEmpty, RailRow } from './ui/RailSection';
 import Avatar from './ui/Avatar';
 import { RailSkeleton } from './SocialLeftSidebar';
+import { canSeeChallenges } from '../lib/features';
 
 /** Activity rail: your streak, what's coming up, open challenges, recent articles. */
 export default function SocialRightSidebar() {
@@ -18,7 +19,7 @@ export default function SocialRightSidebar() {
     <aside className="app-secondary-rail hidden xl:flex flex-col gap-4 w-80 shrink-0 order-3 sticky top-0 self-start max-h-screen overflow-y-auto no-scrollbar py-4">
       {user && <StreakCard streak={user.streak} />}
       <UpcomingEvents />
-      <Challenges />
+      {canSeeChallenges(user) && <Challenges />}
       <Articles />
     </aside>
   );

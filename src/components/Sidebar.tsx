@@ -3,6 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { Clock, TrendingUp, Award, Users, Bell, MessageSquare, Calendar, FileText } from 'lucide-react';
 import { collection, onSnapshot, query, where, collectionGroup, getDoc, doc } from 'firebase/firestore';
 import { db, auth, handleFirestoreError, OperationType } from '../firebase';
+import { canSeeChallenges } from '../lib/features';
 
 interface SidebarProps {
   activeType?: string;
@@ -123,7 +124,9 @@ export default function Sidebar({ activeType }: SidebarProps) {
         <nav className="space-y-2">
           <NavLink to="/feed" icon={Clock} label="Latest" active={isActive('new')} />
           <NavLink to="/articles" icon={FileText} label="Articles" active={isActive('articles')} />
-          <NavLink to="/challenges" icon={Award} label="Challenges" active={isActive('challenges')} />
+          {canSeeChallenges(auth.currentUser) && (
+            <NavLink to="/challenges" icon={Award} label="Challenges" active={isActive('challenges')} />
+          )}
           <NavLink to="/events" icon={Calendar} label="Events" active={isActive('events')} />
           <NavLink to="/feed?view=communities" icon={Users} label="Communities" active={activeType === 'communities' || activeType === 'community'} badgeCount={totalUnreadMessages} />
           <NavLink to="/feed?view=notifications" icon={Bell} label="Notifications" active={isActive('notifications')} badgeCount={totalUnreadNotifications} />

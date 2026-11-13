@@ -6,6 +6,7 @@ import type { FeedItem, FeedPage, SearchParams, ViewerContext } from '../types';
 import { engagementOf, reasonLabel, scoreItem, toDate } from '../ranking/score';
 import { rankAndMix } from '../ranking/mix';
 import { fetchPostsByAuthors, fetchPostsSince, fetchRecent, searchPosts, type SearchCursor, type SourceCursor, type SourceType } from './sources';
+import { CHALLENGES_ENABLED } from '../../../lib/features';
 
 const PAGE_SIZE = 15;
 
@@ -26,13 +27,13 @@ const allowed = (viewer: ViewerContext) => {
  * How many of each type to pull per page. This doubles as a rough mix:
  * mostly posts, with a few articles and occasional events, products, and jobs.
  */
-const FOR_YOU_MIX: Record<SourceType, number> = { post: 12, article: 3, challenge: 1, event: 1, product: 1, job: 1 };
+const FOR_YOU_MIX: Record<SourceType, number> = { post: 12, article: 3, challenge: CHALLENGES_ENABLED ? 1 : 0, event: 1, product: 1, job: 1 };
 
 /** Per-source position. A missing key means "start from the newest"; null means exhausted. */
 export type ForYouCursor = Partial<Record<SourceType, SourceCursor | null>>;
 
 export async function fetchForYouPage(viewer: ViewerContext, cursor: ForYouCursor = {}): Promise<FeedPage<ForYouCursor>> {
-  const types = (Object.keys(FOR_YOU_MIX) as SourceType[]).filter(t => cursor[t] !== null);
+  const types = (Object.keys(FOR_YOU_MIX) as SourceType[]).filter(t => FOR_YOU_MIX[t] > 0 && cursor[t] !== null);
 
   const results = await Promise.all(types.map(async type => {
     try {

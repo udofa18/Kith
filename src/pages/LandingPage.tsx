@@ -14,7 +14,6 @@ import {
   ChevronDown,
   CircleDollarSign,
   Compass,
-  Flame,
   Globe,
   Hash,
   Heart,
@@ -87,7 +86,6 @@ const faces = [
 const navLinks = [
   { label: 'Communities', to: '/feed?view=communities' },
   { label: 'Events', to: '/events' },
-  { label: 'Bounties', to: '/challenges' },
   { label: 'Marketplace', to: '/marketplace' },
   { label: 'Journal', to: '/articles' },
 ];
@@ -892,38 +890,6 @@ function EventMock() {
   );
 }
 
-function BountyMock() {
-  return (
-    <div className="rounded-2xl border border-[#ffffff0f] bg-[#0b0810] p-3.5">
-      <div className="flex items-center justify-between">
-        <span className="rounded-full bg-[#ffb65c]/12 px-2 py-0.5 text-[8px] font-bold uppercase tracking-[0.16em] text-[#ffb65c]">
-          Open bounty
-        </span>
-        <span className="flex items-center gap-1 text-[9px] text-[#f7f2e8]/35">
-          <Flame size={9} /> 6 days left
-        </span>
-      </div>
-      <p className="mt-2.5 text-sm font-semibold leading-snug text-[#f7f2e8]">
-        Rebrand the neighborhood library
-      </p>
-      <div className="mt-3 flex items-end justify-between">
-        <div>
-          <p className="text-[8px] uppercase tracking-[0.16em] text-[#f7f2e8]/30">Prize pool</p>
-          <p className="mt-0.5 text-xl font-extrabold tracking-[-0.04em] text-[#ffb65c]">$2,500</p>
-        </div>
-        <FaceStack size={20} count={4} className="[&>*]:ring-[#0b0810]" />
-      </div>
-      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-[#ffffff0d]">
-        <div className="h-full w-[68%] rounded-full bg-gradient-to-r from-[#ff6b4a] to-[#ffb65c]" />
-      </div>
-      <div className="mt-1.5 flex items-center justify-between text-[8px] text-[#f7f2e8]/35">
-        <span>142 entries</span>
-        <span>Design · Branding</span>
-      </div>
-    </div>
-  );
-}
-
 function MarketMock() {
   const products = [
     {
@@ -1173,20 +1139,6 @@ function Bento() {
           delay={0.06}
         >
           <EventMock />
-        </BentoCard>
-
-        <BentoCard
-          className="lg:col-span-4"
-          icon={Trophy}
-          eyebrow="Bounties"
-          title="Put your skills to work."
-          copy="Build, design, write and solve. Win the prize, earn XP, and get seen by people who care about the craft."
-          link="/challenges"
-          linkLabel="See open bounties"
-          accent="#ff9d8a"
-          delay={0.12}
-        >
-          <BountyMock />
         </BentoCard>
 
         <BentoCard
@@ -2104,7 +2056,6 @@ function Footer() {
       links: [
         { label: 'Communities', to: '/feed?view=communities' },
         { label: 'Events', to: '/events' },
-        { label: 'Bounties', to: '/challenges' },
         { label: 'Marketplace', to: '/marketplace' },
         { label: 'Journal', to: '/articles' },
       ],

@@ -5,6 +5,7 @@ import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { useState, useEffect } from 'react';
 import { LogIn, LogOut, Plus, Search, Settings, User as UserIcon, Zap, Github, Chrome, Bell } from 'lucide-react';
 import KithLogo from './KithLogo';
+import { canSeeChallenges } from '../lib/features';
 
 export default function Navbar({ user }: { user: any }) {
   const navigate = useNavigate();
@@ -55,10 +56,12 @@ export default function Navbar({ user }: { user: any }) {
         <div className="hidden md:flex items-center gap-8 text-[10px] font-black uppercase tracking-widest text-black/50 dark:text-white/50">
           <Link to="/explore" className="hover:text-black dark:hover:text-white transition-colors">Neural Market</Link>
           <Link to="/feed" className="hover:text-black dark:hover:text-white transition-colors">Pulse Feed</Link>
-          <Link to="/challenges" className="flex items-center gap-1.5 hover:text-black dark:hover:text-white transition-colors relative">
-            Bounties
-            <span className="text-[8px] bg-primary text-white px-1.5 py-0.5 rounded-md font-black leading-none uppercase">Alpha</span>
-          </Link>
+          {canSeeChallenges(user) && (
+            <Link to="/challenges" className="flex items-center gap-1.5 hover:text-black dark:hover:text-white transition-colors relative">
+              Bounties
+              <span className="text-[8px] bg-primary text-white px-1.5 py-0.5 rounded-md font-black leading-none uppercase">Alpha</span>
+            </Link>
+          )}
         </div>
 
         <div className="hidden lg:flex flex-1 max-w-sm mx-8">

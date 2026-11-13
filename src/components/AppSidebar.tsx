@@ -42,6 +42,7 @@ import { avatarFor, levelFor } from '../lib/profile';
 import { useKithNavData } from '../hooks/useKithNavData';
 import { useKithTheme, type Theme } from '../hooks/useKithTheme';
 import { useLiveStatus } from '../contexts/LiveStatusContext';
+import { canSeeChallenges } from '../lib/features';
 
 const TONES = {
   feed: '#ff6b4a',
@@ -750,13 +751,15 @@ export default function AppSidebar({ user }: { user: any }) {
               active={isActive('/marketplace')}
               tone={TONES.marketplace}
             />
-            <NavItem
-              to="/challenges"
-              icon={Award}
-              label="Bounties"
-              active={isActive('/challenges')}
-              tone={TONES.bounties}
-            />
+            {canSeeChallenges(user) && (
+              <NavItem
+                to="/challenges"
+                icon={Award}
+                label="Bounties"
+                active={isActive('/challenges')}
+                tone={TONES.bounties}
+              />
+            )}
             <NavItem
               to="/articles"
               icon={FileText}
