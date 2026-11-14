@@ -293,7 +293,9 @@ const paystackAdapter: PaymentProviderAdapter = {
       status,
       reference: tx.reference,
       providerTransactionId: String(tx.id),
-      amountMinor: tx.amount,
+      // When Paystack charges its fee on top, `amount` is higher than the order total. Validate
+      // against `requested_amount` so a successful payment is not rejected as an amount mismatch.
+      amountMinor: paystack.requestedAmount(tx),
       currency: (tx.currency ?? '').toUpperCase(),
       customerEmail: tx.customer?.email ?? undefined,
       metadata: objectMetadata(tx.metadata),

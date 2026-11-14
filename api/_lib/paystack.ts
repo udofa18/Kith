@@ -295,6 +295,24 @@ export function fetchPlan(planCode: string): Promise<PaystackPlan> {
   return request<PaystackPlan>('GET', `/plan/${encodeURIComponent(planCode)}`);
 }
 
+export interface PaystackSubscriptionState {
+  status: string;
+  subscription_code?: string | null;
+  next_payment_date?: string | null;
+  amount?: number | null;
+  currency?: string | null;
+}
+
+/**
+ * Reads one subscription so the nightly reconciliation can tell a missed webhook apart from a real
+ * lapse. A successful renewal updates `next_payment_date`; access must never be cut off when it has
+ * moved forward but the webhook was lost.
+ */
+export function fetchSubscription(code: string): Promise<PaystackSubscriptionState> {
+  if (!/^SUB_[A-Za-z0-9]+$/.test(code)) throw new PaystackError('Invalid Paystack subscription code', 400);
+  return request<PaystackSubscriptionState>('GET', `/subscription/${encodeURIComponent(code)}`);
+}
+
 /** Stops a subscription from charging again. Used when a member replaces or cancels their plan. */
 export function disableSubscription(input: { code: string; token: string }): Promise<{ status: string }> {
   if (!/^SUB_[A-Za-z0-9]+$/.test(input.code)) throw new PaystackError('Invalid Paystack subscription code', 400);
@@ -309,7 +327,15 @@ export interface VerifiedTransaction {
   id: number;
   status: string;
   reference: string;
+  /** Amount actually charged. Includes Paystack's fee when the customer bears it. */
   amount: number;
+  /**
+   * Amount the merchant requested. Paystack returns the charge plus its fee in `amount` when the
+   * merchant account passes fees to the customer, so this is the value to reconcile against an order.
+   */
+  requested_amount?: number | null;
+  /** Paystack's transaction fee, when reported. */
+  fees?: number | null;
   currency: string;
   customer?: { email?: string | null } | null;
   /** Paystack returns this as an object in practice; the docs describe it as a JSON string. */
@@ -317,6 +343,12 @@ export interface VerifiedTransaction {
   gateway_response?: string | null;
   paid_at?: string | null;
   channel?: string | null;
+}
+
+/** The amount to compare with an order: what we requested, not the fee-inclusive charge. */
+export function requestedAmount(tx: VerifiedTransaction): number {
+  const requested = typeof tx.requested_amount === 'number' ? tx.requested_amount : NaN;
+  return Number.isSafeInteger(requested) && requested > 0 ? requested : tx.amount;
 }
 
 /** Always verify with Paystack before fulfilling an order. Never trust a redirect or webhook body. */

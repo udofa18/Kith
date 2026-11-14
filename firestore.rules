@@ -527,6 +527,32 @@ service cloud.firestore {
       return isAdmin() || (isAuthenticated() && exists(/databases/$(database)/documents/communities/$(communityId)/members/$(request.auth.uid)));
     }
 
+    // A paid membership carries `membershipExpiresAt`. Channels require that period to still be
+    // running; a lapsed member keeps the community visible during grace but cannot open channels.
+    function hasRunningPaidAccess(communityId) {
+      return amMember(communityId) && (
+        myMember(communityId).get('membershipExpiresAt', null) == null ||
+        myMember(communityId).membershipExpiresAt > request.time
+      );
+    }
+
+    function communityHasPaidFee(communityId) {
+      let community = get(/databases/$(database)/documents/communities/$(communityId)).data;
+      return community.get('fee', {}).get('amount', 0) > 0 || community.get('isPaid', false) == true;
+    }
+
+    // Public communities stay readable without joining, but a paid community never does: payment is
+    // the only way in, including after grace has ended.
+    function communityChannelsArePublic(communityId) {
+      let community = get(/databases/$(database)/documents/communities/$(communityId)).data;
+      return community.get('membershipControl', {}).get('accessType', 'public') == 'public' &&
+             !communityHasPaidFee(communityId);
+    }
+
+    function hasOpenChannelAccess(communityId) {
+      return isAdmin() || hasRunningPaidAccess(communityId);
+    }
+
     function memberDocPath(communityId, uid) {
       return /databases/$(database)/documents/communities/$(communityId)/members/$(uid);
     }
@@ -610,7 +636,9 @@ service cloud.firestore {
       let ch = get(/databases/$(database)/documents/communities/$(communityId)/channels/$(channelId)).data;
       let actor = get(memberDocPath(communityId, request.auth.uid)).data;
       let roles = actor.get('customRoles', []);
-      return !(actor.get('timeoutUntil', null) != null && actor.timeoutUntil > request.time) && (
+      let paidOk = actor.get('membershipExpiresAt', null) == null || actor.membershipExpiresAt > request.time;
+      return paidOk &&
+        !(actor.get('timeoutUntil', null) != null && actor.timeoutUntil > request.time) && (
         actor.role in ['owner', 'admin', 'moderator'] ||
         actor.get('permissions', []).hasAny(['moderate_chat']) || (
           ch.get('isHidden', false) == false &&
@@ -708,8 +736,8 @@ service cloud.firestore {
           get(/databases/$(database)/documents/communities/$(communityId)/channels/$(channelId)).data.get('isHidden', false) == false &&
           (get(/databases/$(database)/documents/communities/$(communityId)/channels/$(channelId)).data.get('scheduledAt', null) == null || 
            get(/databases/$(database)/documents/communities/$(communityId)/channels/$(channelId)).data.scheduledAt <= request.time) && (
-            (get(/databases/$(database)/documents/communities/$(communityId)/channels/$(channelId)).data.get('isPremium', false) == false || (get(/databases/$(database)/documents/communities/$(communityId)/channels/$(channelId)).data.get('premiumRoles', []).size() == 0 && get(/databases/$(database)/documents/communities/$(communityId)/channels/$(channelId)).data.get('allowedRoles', []).size() > 0) || (isCommunityMember(communityId) && hasPremiumAccess(communityId, get(/databases/$(database)/documents/communities/$(communityId)/channels/$(channelId)).data.get('premiumRoles', [])))) &&
-            (isCommunityMember(communityId) || get(/databases/$(database)/documents/communities/$(communityId)).data.get('membershipControl', {}).get('accessType', 'public') == 'public') &&
+            (get(/databases/$(database)/documents/communities/$(communityId)/channels/$(channelId)).data.get('isPremium', false) == false || (get(/databases/$(database)/documents/communities/$(communityId)/channels/$(channelId)).data.get('premiumRoles', []).size() == 0 && get(/databases/$(database)/documents/communities/$(communityId)/channels/$(channelId)).data.get('allowedRoles', []).size() > 0) || (hasOpenChannelAccess(communityId) && hasPremiumAccess(communityId, get(/databases/$(database)/documents/communities/$(communityId)/channels/$(channelId)).data.get('premiumRoles', [])))) &&
+            (hasOpenChannelAccess(communityId) || communityChannelsArePublic(communityId)) &&
             (get(/databases/$(database)/documents/communities/$(communityId)/channels/$(channelId)).data.get('allowedRoles', []).size() == 0 ||
              hasAnyRole(communityId, get(/databases/$(database)/documents/communities/$(communityId)/channels/$(channelId)).data.allowedRoles))
           )
@@ -1199,8 +1227,8 @@ service cloud.firestore {
 
       match /categories/{categoryId} {
         allow read: if isAuthenticated() && (
-          isCommunityMember(communityId) || 
-          get(/databases/$(database)/documents/communities/$(communityId)).data.get('membershipControl', {}).get('accessType', 'public') == 'public'
+          hasOpenChannelAccess(communityId) || 
+          communityChannelsArePublic(communityId)
         );
         allow create: if (isCommunityAdmin(communityId) || hasPermission(communityId, 'create_channels')) && isValidCategory(incoming());
         allow update: if isCommunityAdmin(communityId) && isValidCategory(incoming());
@@ -1211,8 +1239,8 @@ service cloud.firestore {
         // Allow members or authenticated users in public communities to read metadata to prevent listener errors
         // The real content security is in the messages subcollection
         allow read: if isAuthenticated() && (
-          isCommunityMember(communityId) || 
-          get(/databases/$(database)/documents/communities/$(communityId)).data.get('membershipControl', {}).get('accessType', 'public') == 'public'
+          hasOpenChannelAccess(communityId) || 
+          communityChannelsArePublic(communityId)
         );
         allow create: if (isCommunityAdmin(communityId) || hasPermission(communityId, 'create_channels')) && isValidChannel(incoming());
         allow delete: if isCommunityAdmin(communityId) || (isAuthenticated() && request.auth.uid in resource.data.get('owners', []));

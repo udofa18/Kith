@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { AlertTriangle, ArrowUpRight, Download, Edit3, Eye, Megaphone, Package, Plus, ShoppingBag, Star, TrendingUp, Wallet } from 'lucide-react';
+import { AlertTriangle, ArrowUpRight, CreditCard, Download, Edit3, Eye, Megaphone, Package, Plus, ShoppingBag, Star, TrendingUp, Wallet } from 'lucide-react';
 import { auth } from '../firebase';
 import { supabase } from '../supabase';
 import { Badge, Button, Card, EmptyState, Skeleton } from '../components/ui';
@@ -167,6 +167,10 @@ export default function Dashboard() {
             <h1 className="font-display text-3xl font-extrabold tracking-tight md:text-4xl">Your business, at a glance</h1>
           </div>
           <div className="flex flex-wrap items-center gap-3">
+            <Link to="/billing" className="inline-flex items-center gap-2 rounded-full border border-border-strong px-4 py-2 text-sm font-semibold transition-colors hover:bg-muted">
+              <CreditCard size={16} />
+              Billing
+            </Link>
             <Link to="/payouts" className="inline-flex items-center gap-2 rounded-full border border-border-strong px-4 py-2 text-sm font-semibold transition-colors hover:bg-muted">
               <Wallet size={16} />
               Payouts

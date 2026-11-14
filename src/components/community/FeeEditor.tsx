@@ -2,7 +2,7 @@ import { CalendarClock, CreditCard, Gift, Zap } from 'lucide-react';
 import { FEE_LIMITS, formatFee, validateFee, type CommunityFee, type FeeInterval } from '../../lib/communityPricing';
 
 /**
- * Free vs. paid joining. Owners can charge XP (one-time) or real money (one-time or monthly).
+ * Free vs. paid joining. Owners can charge XP (one-time) or naira (one-time or monthly).
  * Real-money fees are collected by Paystack through the shared checkout engine.
  */
 export default function FeeEditor({
@@ -13,9 +13,9 @@ export default function FeeEditor({
   onChange: (fee: CommunityFee | null) => void;
 }) {
   const paid = !!value;
-  const fee: CommunityFee = value ?? { amount: FEE_LIMITS.usd.presets[1], currency: 'usd', interval: 'once' };
+  const fee: CommunityFee = value ?? { amount: FEE_LIMITS.ngn.presets[1], currency: 'ngn', interval: 'once' };
   const error = paid ? validateFee(fee) : null;
-  const realMoney = fee.currency === 'usd';
+  const realMoney = fee.currency === 'ngn';
 
   const chooseCurrency = (currency: CommunityFee['currency']) => {
     if (currency === fee.currency) return;
@@ -49,10 +49,10 @@ export default function FeeEditor({
             </button>
             <button
               type="button"
-              onClick={() => chooseCurrency('usd')}
+              onClick={() => chooseCurrency('ngn')}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium ${realMoney ? 'bg-primary text-white' : 'bg-black/5 dark:bg-white/10'}`}
             >
-              <CreditCard size={14} /> Real money
+              <CreditCard size={14} /> Naira
             </button>
           </div>
 
@@ -63,18 +63,18 @@ export default function FeeEditor({
                 <input
                   id="fee-amount"
                   type="number"
-                  inputMode={realMoney ? 'decimal' : 'numeric'}
-                  step={realMoney ? '0.01' : '1'}
+                  inputMode="numeric"
+                  step="1"
                   min={FEE_LIMITS[fee.currency].min}
                   max={FEE_LIMITS[fee.currency].max}
                   value={Number.isFinite(fee.amount) ? fee.amount : ''}
                   onChange={e => {
                     const amount = e.target.value === '' ? 0 : Number(e.target.value);
-                    onChange({ ...fee, amount: realMoney ? amount : Math.round(amount) });
+                    onChange({ ...fee, amount: Math.round(amount) });
                   }}
                   className="w-full pl-4 pr-12 py-2.5 rounded-xl bg-background border border-black/10 dark:border-white/15 outline-none focus:border-primary text-sm"
                 />
-                <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm text-black/45 dark:text-white/45">{realMoney ? 'USD' : 'XP'}</span>
+                <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm text-black/45 dark:text-white/45">{realMoney ? 'NGN' : 'XP'}</span>
               </div>
             </div>
             <div className="mt-2 flex flex-wrap gap-1.5">

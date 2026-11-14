@@ -363,6 +363,48 @@ describe('payment engine', () => {
     });
   });
 
+  it('fulfils when Paystack adds its fee to the charged amount', async () => {
+    const { handlePaystackWebhook } = await import('../api/_lib/payments.js');
+    state.order = {
+      id: ORDER_ID,
+      buyer_id: BUYER,
+      status: 'pending',
+      provider: 'paystack',
+      total_cents: 900,
+      currency: 'NGN',
+      metadata: { orderId: ORDER_ID, buyerId: BUYER, tierId: 'feed_3d' },
+      kind: 'event_boost',
+      target_id: 'event-1',
+      seller_id: null,
+      seller_cents: 0,
+      funds_held: false,
+    };
+    // Paystack "passes the fee to the customer" accounts charge `amount` = requested + fees.
+    mocks.verifyTransaction.mockResolvedValue({
+      id: 789,
+      status: 'success',
+      reference: ORDER_ID,
+      amount: 917,
+      requested_amount: 900,
+      fees: 17,
+      currency: 'NGN',
+      customer: { email: 'buyer@example.com' },
+      metadata: { orderId: ORDER_ID, buyerId: BUYER },
+    });
+
+    const rawBody = Buffer.from(
+      JSON.stringify({ event: 'charge.success', data: { id: 789, reference: ORDER_ID } }),
+    );
+    const legacySignature = crypto.createHmac('sha512', 'sk_test_paystack').update(rawBody).digest('hex');
+
+    const result = await handlePaystackWebhook(rawBody, { legacySignature });
+    expect(result.status).toBe(200);
+    expect(state.updates).toContainEqual({
+      table: 'orders',
+      row: expect.objectContaining({ status: 'paid', provider_transaction_id: '789' }),
+    });
+  });
+
   it('rejects a webhook with a bad signature before touching the database', async () => {
     const { handlePaystackWebhook } = await import('../api/_lib/payments.js');
     const rawBody = Buffer.from(JSON.stringify({ event: 'charge.success', data: { id: 1 } }));

@@ -89,14 +89,15 @@ always re-verifies with Paystack.
 ## Community memberships
 
 Communities can charge a real joining fee instead of XP. The fee lives on the community as
-`fee: { amount, currency: 'xp' | 'usd', interval: 'once' | 'month' }`; legacy `isPaid`/`price`
-communities are treated as one-time XP fees.
+`fee: { amount, currency: 'xp' | 'ngn', interval: 'once' | 'month' }`; legacy `isPaid`/`price`
+communities are treated as one-time XP fees. Older `usd` fees are read as naira so they keep using
+the card path, but the owner should review the amount in community settings.
 
 - **XP fees** stay on the legacy client-side XP transfer path. They never touch Paystack.
-- **USD fees** are `community_membership` orders priced by the server. The browser never sends the
+- **Naira fees** are `community_membership` orders priced by the server. The browser never sends the
   amount. `priceCommunityMembership` rejects XP fees, the owner, banned members, and members whose
   paid access is still active; a lapsed monthly member can check out again.
-- **One-time USD fees** use a normal Paystack transaction. The membership is granted only after
+- **One-time naira fees** use a normal Paystack transaction. The membership is granted only after
   `charge.success` (or the status poll) verifies the payment.
 - **Monthly fees** create/reuse a Paystack Plan (`POST /plan`) keyed by community, currency and
   amount, then initialize the transaction with `plan`. A pending `community_subscriptions` row is
@@ -236,7 +237,7 @@ WHERE provider = 'paystack' AND metadata->>'providerReference' = '<reference>';
 - current and legacy webhook signatures, tolerance and tampering
 - fulfilment validation (status, reference, buyer, amount, currency)
 - idempotent fulfilment and duplicate webhook handling
-- community fee parsing (XP/USD/month/legacy) and pricing rejection rules
+- community fee parsing (XP/NGN/month/legacy) and pricing rejection rules
 - one-time and monthly community checkout, Paystack plans and pending subscriptions
 
 Run `npm run lint` (TypeScript) after changes.

@@ -198,6 +198,20 @@ export interface CreatorEarning {
   created_at: string;
   available_at: string;
   order_id: string | null;
+  /** Descriptive fields joined from the order and buyer. */
+  orderId?: string | null;
+  orderKind?: string | null;
+  description?: string | null;
+  buyerName?: string | null;
+  buyerUsername?: string | null;
+  buyerPhotoUrl?: string | null;
+  grossCents?: number | null;
+  feeCents?: number | null;
+  netCents?: number | null;
+  paymentStatus?: string | null;
+  provider?: string | null;
+  providerTransactionId?: string | null;
+  paidAt?: string | null;
 }
 
 export interface CurrencyBalance {
@@ -258,14 +272,142 @@ export function getOrderStatus(orderId: string): Promise<OrderStatus> {
 }
 
 /**
- * Stops a community's monthly renewal for the signed-in member and removes their paid access.
+ * Stops a community's monthly renewal for the signed-in member.
+ * `period_end` (default) keeps the access they already paid for; `now` removes it immediately.
  * One-time memberships and free communities return `{ cancelled: false }`.
  */
-export function cancelCommunityMembership(communityId: string): Promise<{ cancelled: boolean }> {
-  return request<{ cancelled: boolean }>('/api/payments/cancel-membership', {
-    method: 'POST',
-    body: { communityId },
-  });
+export function cancelCommunityMembership(
+  communityId: string,
+  mode: 'period_end' | 'now' = 'period_end',
+): Promise<{ cancelled: boolean; mode?: string; accessUntil?: string | null; graceUntil?: string | null }> {
+  return request<{ cancelled: boolean; mode?: string; accessUntil?: string | null; graceUntil?: string | null }>(
+    '/api/payments/cancel-membership',
+    {
+      method: 'POST',
+      body: { communityId, mode },
+    },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Community memberships: owner reporting and buyer billing
+// ---------------------------------------------------------------------------
+
+export type MembershipState = 'active' | 'non-renewing' | 'grace' | 'expired' | 'pending';
+
+export interface PaidMemberRow {
+  memberId: string;
+  name: string;
+  username: string | null;
+  photoUrl: string | null;
+  status: string;
+  state: MembershipState;
+  interval: string;
+  currency: string;
+  amountCents: number;
+  periodStart: string | null;
+  periodEnd: string | null;
+  accessUntil: string | null;
+  lastPaidAt: string | null;
+  orderId: string | null;
+  provider: string;
+  providerTransactionId: string | null;
+  providerSubscriptionId: string | null;
+  feeCents: number | null;
+  netCents: number | null;
+}
+
+export interface CommunityPaidMembersResponse {
+  communityId: string;
+  communityName: string;
+  summary: {
+    totalMembers: number;
+    activeCount: number;
+    nonRenewingCount: number;
+    graceCount: number;
+    expiredCount: number;
+    attentionCount: number;
+    expiringThisWeek: number;
+    mrrCents: number;
+    currency: string;
+  };
+  members: PaidMemberRow[];
+}
+
+/** Owner/admin only. Server-side because subscription tables are not client-readable. */
+export function getCommunityPaidMembers(communityId: string): Promise<CommunityPaidMembersResponse> {
+  return request<CommunityPaidMembersResponse>(
+    `/api/payments/community/subscriptions?communityId=${encodeURIComponent(communityId)}`,
+  );
+}
+
+export interface MembershipSummary {
+  communityId: string;
+  communityName: string;
+  status: string;
+  state: MembershipState;
+  interval: string;
+  currency: string;
+  amountCents: number;
+  currentPeriodEnd: string | null;
+  accessUntil: string | null;
+  canCancelRenewal: boolean;
+  providerSubscriptionId: string | null;
+  lastPaidAt: string | null;
+  lastOrderId: string | null;
+}
+
+export interface MembershipReceipt {
+  orderId: string;
+  communityId: string;
+  communityName: string;
+  amountCents: number;
+  feeCents: number;
+  netCents: number;
+  currency: string;
+  paidAt: string | null;
+  periodStart: string | null;
+  periodEnd: string | null;
+  provider: string;
+  providerTransactionId: string | null;
+  status: string;
+}
+
+export interface MyMembershipsResponse {
+  memberships: MembershipSummary[];
+  receipts: MembershipReceipt[];
+}
+
+/** The signed-in member's memberships and every membership payment they have made. */
+export function getMyMemberships(): Promise<MyMembershipsResponse> {
+  return request<MyMembershipsResponse>('/api/payments/community/billing');
+}
+
+export interface Receipt {
+  orderId: string;
+  kind: string;
+  title: string;
+  status: string;
+  currency: string;
+  amountCents: number;
+  feeCents: number;
+  sellerCents: number;
+  paidAt: string | null;
+  createdAt: string | null;
+  provider: string;
+  providerTransactionId: string | null;
+  periodStart: string | null;
+  periodEnd: string | null;
+  buyer: { id: string; name: string; username: string | null };
+  seller: { id: string; name: string; username: string | null } | null;
+}
+
+/** Buyer or seller only. */
+export async function getReceipt(orderId: string): Promise<Receipt> {
+  const data = await request<{ receipt: Receipt }>(
+    `/api/payments/receipt?orderId=${encodeURIComponent(orderId)}`,
+  );
+  return data.receipt;
 }
 
 /** Opens a short-lived signed download link. Only works for owners and completed purchases. */

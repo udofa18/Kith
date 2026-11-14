@@ -26,6 +26,7 @@ import Onboarding from './pages/Onboarding';
 import Dashboard from './pages/Dashboard';
 import LibraryPage from './pages/LibraryPage';
 import PayoutSettingsPage from './pages/PayoutSettingsPage';
+import BillingPage from './pages/BillingPage';
 import SocialFeed from './pages/SocialFeed';
 import PostDetails from './pages/PostDetails';
 import Challenges from './pages/Challenges';
@@ -159,6 +160,7 @@ function AppRoutes({ user, onboardingRequired }: { user: any, onboardingRequired
       <Route path="/dashboard" element={priv(<Dashboard />)} />
       <Route path="/library" element={priv(<LibraryPage />)} />
       <Route path="/payouts" element={priv(<PayoutSettingsPage />)} />
+      <Route path="/billing" element={priv(<BillingPage />)} />
       <Route path="/settings" element={priv(<SettingsPage />)} />
       <Route path="/admin" element={priv(isAdmin ? <AdminPage user={user} /> : <Navigate to="/feed" replace />)} />
 

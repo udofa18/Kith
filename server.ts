@@ -27,6 +27,12 @@ import {
   requestWithdrawal,
 } from './api/_lib/payments';
 import { createDownloadUrl } from './api/_lib/downloads';
+import {
+  getCommunityPaidMembers,
+  getMyMemberships,
+  getReceipt,
+  reconcileCommunityMemberships,
+} from './api/_lib/communityBilling';
 import { ensureFirebaseRoleClaim } from './api/_lib/authClaims';
 import sitemapHandler from './api/sitemap';
 import rssHandler from './api/rss';
@@ -239,6 +245,47 @@ async function startServer() {
   });
   app.post('/api/payments/cancel-membership', async (req, res) => {
     const { status, body } = await cancelCommunityMembership(req.body, req.headers.authorization);
+    res.status(status).json(body);
+  });
+  app.get('/api/payments/community/subscriptions', async (req, res) => {
+    const communityId = typeof req.query.communityId === 'string' ? req.query.communityId : '';
+    const { status, body } = await getCommunityPaidMembers(communityId, req.headers.authorization);
+    res.status(status).json(body);
+  });
+  app.get('/api/payments/community/billing', async (req, res) => {
+    const { status, body } = await getMyMemberships(req.headers.authorization);
+    res.status(status).json(body);
+  });
+  app.get('/api/payments/receipt', async (req, res) => {
+    const orderId = typeof req.query.orderId === 'string' ? req.query.orderId : '';
+    const { status, body } = await getReceipt(orderId, req.headers.authorization);
+    res.status(status).json(body);
+  });
+  app.get('/api/payments/community/reconcile', async (req, res) => {
+    const secret = process.env.CRON_SECRET;
+    if (secret) {
+      const auth = req.headers.authorization;
+      const bearer = typeof auth === 'string' && auth.startsWith('Bearer ') ? auth.slice(7) : null;
+      const querySecret = typeof req.query.secret === 'string' ? req.query.secret : null;
+      if (bearer !== secret && querySecret !== secret) {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+    }
+    const { status, body } = await reconcileCommunityMemberships();
+    res.status(status).json(body);
+  });
+  app.post('/api/payments/community/reconcile', async (req, res) => {
+    const secret = process.env.CRON_SECRET;
+    if (secret) {
+      const auth = req.headers.authorization;
+      const bearer = typeof auth === 'string' && auth.startsWith('Bearer ') ? auth.slice(7) : null;
+      if (bearer !== secret) {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+    }
+    const { status, body } = await reconcileCommunityMemberships();
     res.status(status).json(body);
   });
   app.get('/api/payments/download', async (req, res) => {

@@ -42,6 +42,7 @@ import {
 } from './paymentProviders.js';
 import { isSuccess, isTerminalFailure, validatePaymentResult } from './paymentValidation.js';
 import { computeFee, MoneyError, normalizeCurrency, payoutAvailableAt, toMinorUnits } from './money.js';
+import { addDaysIso, membershipGraceDays } from './communityBilling.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const KINDS = ['product', 'event_ticket', 'event_boost', 'product_boost', 'community_membership'] as const;
@@ -253,23 +254,25 @@ async function priceProductBoost(uid: string, productId: string, tierId: string)
 }
 
 /**
- * The joining fee stored on a community. Real-money fees are USD; XP fees stay on the legacy
- * client-side XP transfer path. Monthly billing is only valid for real money.
+ * The joining fee stored on a community. Real-money fees are charged in naira; XP fees stay on the
+ * legacy client-side XP transfer path. Monthly billing is only valid for real money.
  */
 export interface CommunityFee {
   amount: number;
-  currency: 'xp' | 'usd';
+  currency: 'xp' | 'ngn';
   interval: 'once' | 'month';
 }
 
 export function parseCommunityFee(community: any): CommunityFee | null {
   const raw = community?.fee;
   if (raw && Number(raw.amount) > 0) {
-    const currency = raw.currency === 'usd' ? 'usd' : 'xp';
+    // `usd` is the legacy real-money value. It is read as NGN so older communities keep using the
+    // card path; owners should review the amount in community settings.
+    const currency = raw.currency === 'ngn' || raw.currency === 'usd' ? 'ngn' : 'xp';
     return {
       amount: Number(raw.amount),
       currency,
-      interval: currency === 'usd' && raw.interval === 'month' ? 'month' : 'once',
+      interval: currency === 'ngn' && raw.interval === 'month' ? 'month' : 'once',
     };
   }
   // Legacy communities only have isPaid + price, and those were always XP one-time fees.
@@ -295,8 +298,8 @@ async function priceCommunityMembership(uid: string, communityId: string): Promi
 
   const fee = parseCommunityFee(community);
   if (!fee) throw new CheckoutError(400, 'This community is free to join');
-  if (fee.currency !== 'usd') {
-    throw new CheckoutError(400, 'This community charges XP to join. Card checkout is only available for real-money fees.');
+  if (fee.currency !== 'ngn') {
+    throw new CheckoutError(400, 'This community charges XP to join. Card checkout is only available for naira fees.');
   }
   if (community.creatorId === uid) throw new CheckoutError(400, "You can't pay to join your own community");
   if (typeof community.creatorId !== 'string' || !community.creatorId) {
@@ -331,14 +334,14 @@ async function priceCommunityMembership(uid: string, communityId: string): Promi
     }
   }
 
-  const amountMinor = toMinorUnits(fee.amount, 'USD');
+  const amountMinor = toMinorUnits(fee.amount, 'NGN');
   if (amountMinor <= 0) throw new CheckoutError(400, 'This community joining fee is invalid');
 
   return {
     kind: 'community_membership',
     targetId: communityId,
     sellerId: community.creatorId,
-    currency: 'USD',
+    currency: 'NGN',
     amountMinor,
     title: `Membership: ${String(community.name ?? 'Community').slice(0, 80)}`,
     metadata: {
@@ -512,8 +515,37 @@ function isMissingColumn(e: unknown): boolean {
   return code === '42703' || code === 'PGRST204' || /column .* does not exist/i.test(message ?? '');
 }
 
+/** True when a table the payments code needs has not been created by its migration yet. */
+function isMissingTable(e: unknown): boolean {
+  if (!e || typeof e !== 'object') return false;
+  const { code, message } = e as { code?: string; message?: string };
+  return (
+    code === 'PGRST205' ||
+    code === '42P01' ||
+    /Could not find the table|relation .* does not exist/i.test(message ?? '')
+  );
+}
+
+/** The community memberships migration widens the orders.kind check constraint. */
+function isMissingOrderKindConstraint(e: unknown): boolean {
+  if (!e || typeof e !== 'object') return false;
+  const { code, message } = e as { code?: string; message?: string };
+  return code === '23514' && /orders_kind_check/i.test(message ?? '');
+}
+
+const MISSING_PAYMENTS_SCHEMA_MESSAGE =
+  'Card payments are not available yet because the payment database is missing a required migration. ' +
+  'Ask the platform operator to apply supabase/migrations/20261110000001_community_memberships.sql.';
+
 function failure(e: unknown): PaymentResult {
   console.error('Payments error:', e);
+  // Checked before the typed errors: Supabase rejects with a plain PostgREST/Postgres error object.
+  if (isMissingTable(e) || isMissingOrderKindConstraint(e)) {
+    console.error(
+      'Payments database migration is missing. Apply supabase/migrations/20261110000001_community_memberships.sql.',
+    );
+    return fail(503, MISSING_PAYMENTS_SCHEMA_MESSAGE);
+  }
   if (e instanceof CheckoutError) return fail(e.status, e.message);
   if (e instanceof ProviderConfigError) return fail(503, e.message);
   if (e instanceof ProviderUnavailableError) return fail(400, e.message);
@@ -861,10 +893,13 @@ export async function createCheckout(body: any, authorization?: string): Promise
 }
 
 /**
- * Stops a member's monthly community renewal and removes their paid access. Safe to call when there
- * is no subscription. The Paystack call is skipped when the subscription was never linked or is
- * already finished, but the member document is still removed so calling this directly cannot keep
- * access for free.
+ * Stops a member's monthly community renewal. Two intents:
+ *
+ *  - `period_end` (default): stop future charges but keep the access they already paid for until
+ *    `current_period_end`. The member becomes "non-renewing" and can renew at any time.
+ *  - `now`: stop future charges and give up the rest of the current period immediately.
+ *
+ * Safe to call when there is no subscription (one-time memberships and free communities).
  */
 export async function cancelCommunityMembership(
   body: any,
@@ -874,6 +909,7 @@ export async function cancelCommunityMembership(
   if (!uid) return fail(401, 'Sign in required');
   const communityId = typeof body?.communityId === 'string' ? body.communityId : '';
   if (!/^[\w-]{1,128}$/.test(communityId)) return fail(400, 'Invalid community');
+  const mode: 'period_end' | 'now' = body?.mode === 'now' ? 'now' : 'period_end';
 
   try {
     const db = supabaseAdmin();
@@ -884,7 +920,7 @@ export async function cancelCommunityMembership(
       .eq('member_id', uid)
       .maybeSingle();
     if (error) throw error;
-    if (!subscription) return { status: 200, body: { cancelled: false } };
+    if (!subscription) return { status: 200, body: { cancelled: false, mode } };
 
     const code = subscription.provider_subscription_id
       ? String(subscription.provider_subscription_id)
@@ -900,19 +936,56 @@ export async function cancelCommunityMembership(
       await paystack.disableSubscription({ code, token });
     }
 
+    const periodEnd = subscription.current_period_end
+      ? new Date(subscription.current_period_end)
+      : null;
+    const stillPaid = !!periodEnd && !Number.isNaN(periodEnd.getTime()) && periodEnd.getTime() > Date.now();
+    const accessUntil = periodEnd
+      ? addDaysIso(periodEnd, membershipGraceDays())
+      : null;
+
     if (active) {
       const { error: updateError } = await db
         .from('community_subscriptions')
-        .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+        .update({
+          status: stillPaid && mode === 'period_end' ? 'non-renewing' : 'cancelled',
+          updated_at: new Date().toISOString(),
+        })
         .eq('id', subscription.id);
       if (updateError) throw updateError;
     }
 
-    // Cancelling means giving up paid access, not keeping it for free. The member document is
-    // removed here too so calling the endpoint directly cannot bypass future charges.
     const fs = firestoreAdmin();
     const memberRef = fs.doc(`communities/${communityId}/members/${uid}`);
     const communityRef = fs.doc(`communities/${communityId}`);
+
+    if (mode === 'period_end' && stillPaid) {
+      // Keep the paid period. Channels stay open until `membershipExpiresAt`; after that the member
+      // is in grace until `accessUntil` and the nightly job removes them.
+      const memberSnap = await memberRef.get();
+      if (memberSnap.exists) {
+        await memberRef.set(
+          {
+            subscriptionStatus: 'non-renewing',
+            renewalCancelledAt: new Date().toISOString(),
+            membershipExpiresAt: periodEnd!.toISOString(),
+            accessUntil,
+          },
+          { merge: true },
+        );
+      }
+      return {
+        status: 200,
+        body: {
+          cancelled: true,
+          mode,
+          accessUntil: periodEnd!.toISOString(),
+          graceUntil: accessUntil,
+        },
+      };
+    }
+
+    // Leaving now (or cancelling something already past its paid period) removes paid access.
     await fs.runTransaction(async tx => {
       const [memberSnap, communitySnap] = await Promise.all([tx.get(memberRef), tx.get(communityRef)]);
       if (!memberSnap.exists) return;
@@ -922,7 +995,7 @@ export async function cancelCommunityMembership(
 
     return {
       status: 200,
-      body: { cancelled: true, accessUntil: subscription.current_period_end ?? null },
+      body: { cancelled: true, mode, accessUntil: null, graceUntil: accessUntil },
     };
   } catch (e) {
     return failure(e);
@@ -1371,7 +1444,7 @@ async function updateCommunitySubscriptionPeriod(
   if (error) throw error;
 }
 
-/** A failed renewal ends access at the date it was attempted; the previous period has ended. */
+/** A failed renewal starts the grace period; channels lock at the paid period end. */
 async function handlePaystackSubscriptionFailed(data: any): Promise<void> {
   const subscriptionCode = paystackSubscriptionCode(data);
   if (!subscriptionCode) return;
@@ -1379,7 +1452,7 @@ async function handlePaystackSubscriptionFailed(data: any): Promise<void> {
   const db = supabaseAdmin();
   const { data: subscription, error } = await db
     .from('community_subscriptions')
-    .select('id, community_id, member_id, last_order_id')
+    .select('id, community_id, member_id, last_order_id, current_period_end')
     .eq('provider_subscription_id', subscriptionCode)
     .maybeSingle();
   if (error) throw error;
@@ -1391,14 +1464,22 @@ async function handlePaystackSubscriptionFailed(data: any): Promise<void> {
     .eq('id', subscription.id);
   if (updateError) throw updateError;
 
-  await updateCommunityMemberSubscription(subscription.community_id, subscription.member_id, {
-    subscriptionStatus: 'attention',
-  });
-
   // Do not remove access before the first successful payment. After that, a failed renewal means
-  // the paid period is over, so paid access ends (a later successful retry re-grants it).
+  // the paid period is over: the member enters grace and the nightly job removes them if unpaid.
   if (subscription.last_order_id) {
-    await revokeCommunityMembership(subscription.community_id, subscription.member_id, subscriptionCode);
+    const periodEnd = subscription.current_period_end
+      ? new Date(subscription.current_period_end)
+      : new Date();
+    const endIso = Number.isNaN(periodEnd.getTime()) ? new Date().toISOString() : periodEnd.toISOString();
+    await updateCommunityMemberSubscription(subscription.community_id, subscription.member_id, {
+      subscriptionStatus: 'attention',
+      membershipExpiresAt: endIso,
+      accessUntil: addDaysIso(endIso, membershipGraceDays()),
+    });
+  } else {
+    await updateCommunityMemberSubscription(subscription.community_id, subscription.member_id, {
+      subscriptionStatus: 'attention',
+    });
   }
 }
 
@@ -1421,6 +1502,7 @@ async function setPaystackSubscriptionStatus(data: any, status: string): Promise
     .eq('id', subscription.id);
   if (updateError) throw updateError;
 
+  // Access is not removed here: a member who turned off auto-renew keeps the period they paid for.
   await updateCommunityMemberSubscription(subscription.community_id, subscription.member_id, {
     subscriptionStatus: status,
   });
@@ -1429,11 +1511,41 @@ async function setPaystackSubscriptionStatus(data: any, status: string): Promise
 async function handlePaystackSubscriptionDisabled(data: any): Promise<void> {
   const subscriptionCode = paystackSubscriptionCode(data);
   if (!subscriptionCode) return;
-  const status = data?.status === 'complete' ? 'completed' : 'cancelled';
-  await setPaystackSubscriptionStatus(data, status);
-  const target = await communitySubscriptionTarget(subscriptionCode);
-  if (target) {
-    await revokeCommunityMembership(target.communityId, target.memberId, subscriptionCode);
+
+  const db = supabaseAdmin();
+  const { data: subscription, error } = await db
+    .from('community_subscriptions')
+    .select('id, community_id, member_id, current_period_end')
+    .eq('provider_subscription_id', subscriptionCode)
+    .maybeSingle();
+  if (error) throw error;
+  if (!subscription) return;
+
+  const periodEnd = subscription.current_period_end
+    ? new Date(subscription.current_period_end)
+    : null;
+  const stillPaid = !!periodEnd && !Number.isNaN(periodEnd.getTime()) && periodEnd.getTime() > Date.now();
+  const complete = data?.status === 'complete';
+  const status = complete ? 'completed' : stillPaid ? 'non-renewing' : 'cancelled';
+
+  const { error: updateError } = await db
+    .from('community_subscriptions')
+    .update({ status, updated_at: new Date().toISOString() })
+    .eq('id', subscription.id);
+  if (updateError) throw updateError;
+
+  if (stillPaid) {
+    const endIso = periodEnd!.toISOString();
+    await updateCommunityMemberSubscription(subscription.community_id, subscription.member_id, {
+      subscriptionStatus: complete ? 'completed' : 'non-renewing',
+      membershipExpiresAt: endIso,
+      accessUntil: addDaysIso(endIso, membershipGraceDays()),
+    });
+  } else {
+    // Channels are already locked by the expiry rule; keep the doc for grace + renewal.
+    await updateCommunityMemberSubscription(subscription.community_id, subscription.member_id, {
+      subscriptionStatus: complete ? 'completed' : 'cancelled',
+    });
   }
 }
 
@@ -1850,13 +1962,19 @@ async function grantCommunityMembership(order: OrderRow): Promise<void> {
     };
 
     if (interval === 'month') {
-      base.membershipExpiresAt = nextMembershipExpiry(order, existing);
+      const expiry = nextMembershipExpiry(order, existing);
+      base.membershipExpiresAt = expiry;
+      base.accessUntil = addDaysIso(expiry, membershipGraceDays());
       base.providerSubscriptionId =
         subscription?.provider_subscription_id ?? existing?.providerSubscriptionId ?? null;
     } else {
       base.membershipExpiresAt = null;
+      base.accessUntil = null;
       base.providerSubscriptionId = null;
     }
+    // A new paid period starts a fresh reminder cycle.
+    base.renewalReminder = null;
+    base.renewalCancelledAt = null;
 
     if (!memberSnap.exists) {
       tx.set(memberRef, base);
@@ -1952,6 +2070,100 @@ export async function getCreatorBalance(authorization?: string): Promise<Payment
     }));
     const row = balances.find((b: { currency: string }) => b.currency === STRIPE_CURRENCY);
 
+    // "Recent sales" used to be an amount and the word "Sale". Join the ledger rows with the order,
+    // the buyer and what was bought so a creator can tell a product sale from a membership renewal.
+    const ledgerRows = (earningRes.data ?? []) as Array<Record<string, any>>;
+    const orderIds = [...new Set(ledgerRows.map((r: any) => r.order_id).filter(Boolean))];
+    const orderMap = new Map<string, any>();
+    const buyerMap = new Map<string, any>();
+    const productMap = new Map<string, any>();
+
+    if (orderIds.length > 0) {
+      const { data: orders, error: ordersError } = await db
+        .from('orders')
+        .select(
+          'id, buyer_id, seller_id, status, currency, total_cents, fee_cents, seller_cents, kind, target_id, provider, provider_transaction_id, metadata, paid_at, created_at',
+        )
+        .in('id', orderIds);
+      if (ordersError) throw ordersError;
+      for (const order of orders ?? []) orderMap.set(order.id, order);
+
+      const buyerIds = [...new Set((orders ?? []).map((o: any) => o.buyer_id).filter(Boolean))];
+      if (buyerIds.length > 0) {
+        const { data: buyers, error: buyersError } = await db
+          .from('users')
+          .select('id, username, display_name, photo_url')
+          .in('id', buyerIds);
+        if (buyersError) throw buyersError;
+        for (const buyer of buyers ?? []) buyerMap.set(buyer.id, buyer);
+      }
+
+      const productIds = [
+        ...new Set(
+          (orders ?? [])
+            .filter((o: any) => o.kind === 'product' && o.target_id)
+            .map((o: any) => o.target_id),
+        ),
+      ];
+      if (productIds.length > 0) {
+        const { data: products, error: productsError } = await db
+          .from('products')
+          .select('id, title')
+          .in('id', productIds);
+        if (productsError) throw productsError;
+        for (const product of products ?? []) productMap.set(product.id, product);
+      }
+    }
+
+    const titleCache = new Map<string, string>();
+    const targetTitle = async (order: any): Promise<string> => {
+      if (!order) return 'Sale';
+      if (order.kind === 'product') {
+        return productMap.get(order.target_id)?.title ?? 'Product';
+      }
+      if (order.kind === 'community_membership') {
+        const key = `c:${order.target_id}`;
+        if (!titleCache.has(key)) {
+          const snap = await firestoreAdmin().doc(`communities/${order.target_id}`).get().catch(() => null);
+          titleCache.set(key, String(snap?.exists ? snap.data()?.name ?? 'Community' : 'Community'));
+        }
+        return `${titleCache.get(key)} membership`;
+      }
+      if (order.kind === 'event_ticket' || order.kind === 'event_boost') {
+        const key = `e:${order.target_id}`;
+        if (!titleCache.has(key)) {
+          const snap = await firestoreAdmin().doc(`events/${order.target_id}`).get().catch(() => null);
+          titleCache.set(key, String(snap?.exists ? snap.data()?.title ?? 'Event' : 'Event'));
+        }
+        return titleCache.get(key)!;
+      }
+      if (order.kind === 'product_boost') return 'Product promotion';
+      return 'Sale';
+    };
+
+    const earnings = await Promise.all(
+      ledgerRows.map(async earning => {
+        const order = earning.order_id ? orderMap.get(earning.order_id) : null;
+        const buyer = order?.buyer_id ? buyerMap.get(order.buyer_id) : null;
+        return {
+          ...earning,
+          orderId: order?.id ?? earning.order_id ?? null,
+          orderKind: order?.kind ?? null,
+          description: await targetTitle(order),
+          buyerName: buyer?.display_name ?? buyer?.username ?? null,
+          buyerUsername: buyer?.username ?? null,
+          buyerPhotoUrl: buyer?.photo_url ?? null,
+          grossCents: order?.total_cents ?? null,
+          feeCents: order?.fee_cents ?? null,
+          netCents: order?.seller_cents ?? Number(earning.amount_cents ?? 0),
+          paymentStatus: order?.status ?? null,
+          provider: order?.provider ?? null,
+          providerTransactionId: order?.provider_transaction_id ?? null,
+          paidAt: order?.paid_at ?? null,
+        };
+      }),
+    );
+
     return {
       status: 200,
       body: {
@@ -1966,7 +2178,7 @@ export async function getCreatorBalance(authorization?: string): Promise<Payment
         holdDays: payoutHoldDays(),
         minWithdrawalCents: MIN_WITHDRAWAL_CENTS,
         payouts: payoutRes.data ?? [],
-        earnings: earningRes.data ?? [],
+        earnings,
       },
     };
   } catch (e) {

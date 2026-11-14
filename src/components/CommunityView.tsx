@@ -46,6 +46,8 @@ import { joinCommunity, leaveCommunity } from '../services/socialService';
 import { presenceLabel } from '../features/messages/api';
 import { channelTypeInfo } from '../lib/channelTypes';
 import { formatEventPrice, getOrderStatus, isOrderId } from '../lib/payments';
+import { memberAccess } from '../lib/membershipAccess';
+import MembershipRenewalPrompt from './community/MembershipRenewalPrompt';
 
 export default function CommunityView({ communityId }: { communityId: string }) {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -82,6 +84,8 @@ export default function CommunityView({ communityId }: { communityId: string }) 
   const [isMember, setIsMember] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [isOwner, setIsOwner] = useState(false);
+  const [myMember, setMyMember] = useState<any>(null);
+  const access = useMemo(() => memberAccess(myMember), [myMember]);
   const [myPermissions, setMyPermissions] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [pendingRequests, setPendingRequests] = useState<any[]>([]);
@@ -254,6 +258,7 @@ export default function CommunityView({ communityId }: { communityId: string }) 
       unsubscribeMyMember = onSnapshot(doc(db, 'communities', communityId, 'members', auth.currentUser.uid), (docSnap) => {
         if (docSnap.exists()) {
           const myMember = docSnap.data();
+          setMyMember(myMember);
           setIsMember(true);
           setIsOwner(myMember.role === 'owner');
           setIsAdmin(myMember.role === 'admin' || myMember.role === 'owner' || myMember.role === 'moderator' || (myMember.permissions || []).includes('moderate_chat'));
@@ -264,6 +269,7 @@ export default function CommunityView({ communityId }: { communityId: string }) 
           setMutedChannels(myMember.mutedChannels || []);
         } else {
           setIsMember(false);
+          setMyMember(null);
           setIsOwner(false);
           setIsAdmin(false);
           setMyPermissions([]);
@@ -823,15 +829,15 @@ export default function CommunityView({ communityId }: { communityId: string }) 
                   <p className="text-xs text-foreground/50 truncate">{memberTotal} {memberTotal === 1 ? 'member' : 'members'}{onlineCount > 0 && ` · ${onlineCount} online`}</p>
                 </div>
               </div>
-              {isMember ? (
+              {isMember && access.canUseChannels ? (
                 <MoreVertical size={16} className="text-foreground/40 group-hover:text-foreground transition-all" />
               ) : (
                 auth.currentUser && (
                   <button
-                    onClick={e => { e.stopPropagation(); handleJoinLeave(); }}
+                    onClick={e => { e.stopPropagation(); isMember ? setShowDetailsModal(true) : handleJoinLeave(); }}
                     className="shrink-0 px-3 py-1.5 bg-primary text-white rounded-full text-xs font-semibold hover:bg-primary/90 transition-colors"
                   >
-                    Join
+                    {isMember ? 'Renew' : 'Join'}
                   </button>
                 )
               )}
@@ -909,10 +915,12 @@ export default function CommunityView({ communityId }: { communityId: string }) 
               ))}
             </div>
 
-            {activeTab === 'channels' && !isMember && (
-              <p className="pt-4 border-t border-foreground/10 px-3 text-xs text-foreground/50">Channels appear here once you join.</p>
+            {activeTab === 'channels' && !access.canUseChannels && (
+              <p className="pt-4 border-t border-foreground/10 px-3 text-xs text-foreground/50">
+                {isMember ? 'Renew your membership to open the channels.' : 'Channels appear here once you join.'}
+              </p>
             )}
-            {activeTab === 'channels' && isMember && (
+            {activeTab === 'channels' && access.canUseChannels && (
               <div className="pt-4 border-t border-foreground/10">
                 <ChannelSidebar 
                   communityId={communityId}
@@ -1233,6 +1241,12 @@ export default function CommunityView({ communityId }: { communityId: string }) 
                 onAbout={() => setActiveTab('about')}
                 members={members}
               />
+            ) : !access.canUseChannels ? (
+              <LockedMembershipPanel
+                community={community}
+                access={access}
+                onRenew={() => setShowDetailsModal(true)}
+              />
             ) : activeChannel ? (
               activeChannel.type === 'voice' ? (
                 <VoiceChannelView 
@@ -1394,6 +1408,65 @@ export default function CommunityView({ communityId }: { communityId: string }) 
         roles={roles}
         welcomeChannelId={community?.welcomeConfig?.channelId}
       />
+
+      <CommunityDetailsModal
+        isOpen={showDetailsModal}
+        onClose={() => setShowDetailsModal(false)}
+        communityId={communityId}
+        onJoinSuccess={() => {
+          setShowDetailsModal(false);
+          queryClient.invalidateQueries({ queryKey: queryKeys.community(communityId) });
+        }}
+      />
+
+      {community && myMember && (
+        <MembershipRenewalPrompt
+          communityId={communityId}
+          communityName={community.name || 'this community'}
+          member={myMember}
+          onRenew={() => setShowDetailsModal(true)}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Shown in place of channels when a paid membership has lapsed but is still inside grace. */
+function LockedMembershipPanel({
+  community,
+  access,
+  onRenew,
+}: {
+  community: any;
+  access: ReturnType<typeof memberAccess>;
+  onRenew: () => void;
+}) {
+  const fee = feeOf(community);
+  const grace = access.graceDaysLeft;
+  return (
+    <div className="flex-1 overflow-y-auto flex items-center justify-center p-6">
+      <div className="max-w-md w-full text-center">
+        <div className="mx-auto grid h-16 w-16 place-items-center rounded-2xl bg-amber-500/10 text-amber-600">
+          <Lock size={28} />
+        </div>
+        <h2 className="mt-4 text-2xl font-bold">Your membership has ended</h2>
+        <p className="mt-2 text-sm text-foreground/65 leading-relaxed">
+          {access.state === 'grace' && grace !== null
+            ? `Channels are locked. You can still browse this community for ${grace} more ${grace === 1 ? 'day' : 'days'} before access is removed.`
+            : 'Channels are locked. Renew your membership to rejoin the conversation.'}
+        </p>
+        {fee && (
+          <p className="mt-3 text-sm font-medium text-amber-600 dark:text-amber-400">
+            {formatFee(fee)} · billed monthly
+          </p>
+        )}
+        <button
+          onClick={onRenew}
+          className="mt-5 px-6 py-2.5 rounded-full bg-primary text-white text-sm font-semibold hover:bg-primary/90"
+        >
+          Renew membership
+        </button>
+      </div>
     </div>
   );
 }

@@ -129,7 +129,7 @@ export async function leaveCommunity(uid: string, communityId: string): Promise<
   // member would keep paying for a community they can no longer open.
   if (monthly) {
     try {
-      await cancelCommunityMembership(communityId);
+      await cancelCommunityMembership(communityId, 'now');
     } catch (error) {
       // Put the membership back rather than leaving someone billed without access.
       if (memberSnap.exists()) {

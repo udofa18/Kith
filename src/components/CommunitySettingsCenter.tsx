@@ -38,6 +38,7 @@ import SafetySettings from './community/SafetySettings';
 import JoiningFeeSettings from './community/JoiningFeeSettings';
 import InviteSettings from './community/InviteSettings';
 import InsightsSettings from './community/InsightsSettings';
+import PaidMembersPanel from './community/PaidMembersPanel';
 import { useMembership, memberAccess, accessDiffers, queueAudit, RANK_NONE, type Membership } from '../lib/communityRoles';
 import { Reorder } from 'motion/react';
 import { 
@@ -399,7 +400,7 @@ function MembershipSection({ communityId, community, form, setForm, onSave, isSa
     const me = useMembership(communityId);
     const [moderating, setModerating] = useState<any>(null);
     const [openAnswers, setOpenAnswers] = useState<string | null>(null);
-    const [activeSubTab, setActiveSubTab] = useState<'settings' | 'requests' | 'directory' | 'bans'>('settings');
+    const [activeSubTab, setActiveSubTab] = useState<'settings' | 'requests' | 'directory' | 'paid' | 'bans'>('settings');
     const [requests, setRequests] = useState<any[]>([]);
     const [members, setMembers] = useState<any[]>([]);
     const [roles, setRoles] = useState<any[]>([]);
@@ -479,7 +480,7 @@ function MembershipSection({ communityId, community, form, setForm, onSave, isSa
             // Real-money memberships are granted by the payment server after Paystack confirms the
             // charge. Approving only unlocks the applicant's checkout, so nothing is written here
             // and no XP ever moves for a card fee.
-            if (fee && fee.currency === 'usd' && request.userId !== latest?.creatorId) {
+            if (fee && fee.currency === 'ngn' && request.userId !== latest?.creatorId) {
                 await updateDoc(doc(db, 'communities', communityId, 'joinRequests', request.id), { status: 'approved' });
                 try {
                     await addDoc(collection(db, 'notifications'), {
@@ -650,6 +651,14 @@ function MembershipSection({ communityId, community, form, setForm, onSave, isSa
                 >
                     Member Directory
                 </button>
+                {me.isAdmin && (
+                    <button 
+                        onClick={() => setActiveSubTab('paid')}
+                        className={`px-6 py-2.5 rounded-xl text-xs font-semibold transition-all ${activeSubTab === 'paid' ? 'bg-primary text-white shadow-lg' : 'text-foreground/40 hover:text-foreground'}`}
+                    >
+                        Paid subscriptions
+                    </button>
+                )}
                 {me.can('manage_members') && (
                     <button 
                         onClick={() => setActiveSubTab('bans')}
@@ -668,6 +677,10 @@ function MembershipSection({ communityId, community, form, setForm, onSave, isSa
                 ) : activeSubTab === 'bans' ? (
                     <motion.div key="bans" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}>
                         <BansPanel communityId={communityId} me={me} />
+                    </motion.div>
+                ) : activeSubTab === 'paid' ? (
+                    <motion.div key="paid" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}>
+                        <PaidMembersPanel communityId={communityId} />
                     </motion.div>
                 ) : activeSubTab === 'requests' ? (
                     <motion.div 

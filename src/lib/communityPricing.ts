@@ -4,16 +4,18 @@
  * A fee is `{ amount, currency, interval }`, stored on the community as `fee`.
  * - XP one-time fees move XP from the member to the owner in the same Firestore batch that creates
  *   the membership.
- * - USD fees are real money. One-time fees and monthly subscriptions are charged through the shared
+ * - NGN fees are real money. One-time fees and monthly subscriptions are charged through the shared
  *   payment engine (`community_membership` order kind), and the server grants the membership after
  *   Paystack confirms payment.
  *
- * Legacy communities only have `isPaid` + `price`; those prices were always charged in XP.
+ * Legacy communities only have `isPaid` + `price`; those prices were always charged in XP. Older
+ * `usd` fees are read as NGN so they keep using the card path, but the owner should update the
+ * amount in community settings.
  */
 import { doc, getDoc, increment, type WriteBatch } from 'firebase/firestore';
 import { db } from '../firebase';
 
-export type FeeCurrency = 'xp' | 'usd';
+export type FeeCurrency = 'xp' | 'ngn';
 export type FeeInterval = 'once' | 'month';
 
 export interface CommunityFee {
@@ -22,22 +24,25 @@ export interface CommunityFee {
   interval: FeeInterval;
 }
 
-export const AVAILABLE_CURRENCIES: FeeCurrency[] = ['xp', 'usd'];
+export const AVAILABLE_CURRENCIES: FeeCurrency[] = ['xp', 'ngn'];
 export const AVAILABLE_INTERVALS: FeeInterval[] = ['once', 'month'];
 
 export const FEE_LIMITS: Record<FeeCurrency, { min: number; max: number; presets: number[] }> = {
   xp: { min: 5, max: 10_000, presets: [25, 50, 100, 250] },
-  usd: { min: 1, max: 999, presets: [5, 10, 20, 50] },
+  // Whole naira. Paystack charges NGN in kobo (₦1 = 100 kobo).
+  ngn: { min: 100, max: 1_000_000, presets: [500, 1_000, 2_500, 5_000] },
 };
 
 /** The community's fee, or null if it's free. */
 export function feeOf(community: any): CommunityFee | null {
   const f = community?.fee;
   if (f && Number(f.amount) > 0) {
+    // `usd` is the legacy real-money value; community card fees are naira now.
+    const currency: FeeCurrency = f.currency === 'ngn' || f.currency === 'usd' ? 'ngn' : 'xp';
     return {
       amount: Number(f.amount),
-      currency: f.currency === 'usd' ? 'usd' : 'xp',
-      interval: f.currency === 'usd' && f.interval === 'month' ? 'month' : 'once',
+      currency,
+      interval: currency === 'ngn' && f.interval === 'month' ? 'month' : 'once',
     };
   }
   if (community?.isPaid && Number(community.price) > 0) {
@@ -46,11 +51,11 @@ export function feeOf(community: any): CommunityFee | null {
   return null;
 }
 
-/** "50 XP", "$10", "$10/month". */
+/** "50 XP", "₦1,000", "₦1,000/month". */
 export function formatFee(fee: CommunityFee): string {
   const amount =
-    fee.currency === 'usd'
-      ? `$${fee.amount % 1 ? fee.amount.toFixed(2) : fee.amount}`
+    fee.currency === 'ngn'
+      ? `₦${fee.amount.toLocaleString('en-NG')}`
       : `${fee.amount.toLocaleString()} XP`;
   return fee.interval === 'month' ? `${amount}/month` : amount;
 }
@@ -60,17 +65,17 @@ export function feeFields(fee: CommunityFee | null) {
   return fee ? { fee, isPaid: true, price: fee.amount } : { fee: null, isPaid: false, price: 0 };
 }
 
-export function feeIsRealMoney(fee: CommunityFee | null | undefined): fee is CommunityFee & { currency: 'usd' } {
-  return fee?.currency === 'usd';
+export function feeIsRealMoney(fee: CommunityFee | null | undefined): fee is CommunityFee & { currency: 'ngn' } {
+  return fee?.currency === 'ngn';
 }
 
 export function feeIsRecurring(fee: CommunityFee | null | undefined): boolean {
-  return fee?.currency === 'usd' && fee.interval === 'month';
+  return fee?.currency === 'ngn' && fee.interval === 'month';
 }
 
 export function validateFee(fee: CommunityFee): string | null {
   const limits = FEE_LIMITS[fee.currency];
-  if (!AVAILABLE_CURRENCIES.includes(fee.currency)) return 'Choose XP or real money.';
+  if (!AVAILABLE_CURRENCIES.includes(fee.currency)) return 'Choose XP or naira.';
   if (!AVAILABLE_INTERVALS.includes(fee.interval)) return 'Choose one-time or monthly billing.';
   if (fee.currency === 'xp' && fee.interval === 'month') return 'XP fees can only be charged once.';
   if (!Number.isFinite(fee.amount) || fee.amount < limits.min) {
@@ -80,9 +85,7 @@ export function validateFee(fee: CommunityFee): string | null {
     return `The fee can be at most ${formatFee({ ...fee, amount: limits.max })}.`;
   }
   if (fee.currency === 'xp' && !Number.isInteger(fee.amount)) return 'XP fees must be a whole number.';
-  if (fee.currency === 'usd' && !/^\d+(\.\d{1,2})?$/.test(String(fee.amount))) {
-    return 'Real-money fees can have at most two decimal places.';
-  }
+  if (fee.currency === 'ngn' && !Number.isInteger(fee.amount)) return 'Naira fees must be a whole number.';
   return null;
 }
 

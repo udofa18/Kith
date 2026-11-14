@@ -123,14 +123,40 @@ export default function PayoutSettingsPage() {
             {balance!.earnings.map(earning => {
               const cleared = new Date(earning.available_at) <= new Date();
               return (
-                <li key={earning.id} className="flex items-center justify-between gap-4 bg-[var(--ds-surface)] px-4 py-3">
-                  <div>
-                    <p className="text-sm font-semibold">Sale</p>
-                    <p className="text-xs text-[var(--ds-muted-foreground)]">
-                      {new Date(earning.created_at).toLocaleDateString()} · {cleared ? 'Available' : 'On hold'}
-                    </p>
+                <li key={earning.id} className="bg-[var(--ds-surface)] px-4 py-3">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold">{earning.description ?? 'Sale'}</p>
+                      <p className="mt-0.5 text-xs text-[var(--ds-muted-foreground)]">
+                        {earning.buyerName ? `Bought by ${earning.buyerName} · ` : ''}
+                        {new Date(earning.paidAt ?? earning.created_at).toLocaleString()} · {cleared ? 'Available' : 'On hold'}
+                      </p>
+                      {earning.orderId && (
+                        <p className="mt-1 font-mono text-[11px] text-[var(--ds-faint)]">
+                          Ref {earning.orderId.slice(0, 8)}…
+                          {earning.providerTransactionId ? ` · Paystack ${earning.providerTransactionId}` : ''}
+                        </p>
+                      )}
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <p className="text-sm font-semibold">{formatPrice(earning.netCents ?? earning.amount_cents, earning.currency)}</p>
+                      {earning.grossCents != null && (
+                        <p className="text-[11px] text-[var(--ds-faint)]">
+                          {formatPrice(earning.grossCents, earning.currency)} gross
+                          {earning.feeCents != null ? ` · ${formatPrice(earning.feeCents, earning.currency)} fee` : ''}
+                        </p>
+                      )}
+                      {earning.orderId && (
+                        <button
+                          type="button"
+                          onClick={() => navigate(`/billing?receipt=${encodeURIComponent(earning.orderId!)}`)}
+                          className="mt-1 text-[11px] font-semibold text-primary hover:underline"
+                        >
+                          View receipt
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <p className="text-sm font-semibold">{formatPrice(earning.amount_cents, earning.currency)}</p>
                 </li>
               );
             })}

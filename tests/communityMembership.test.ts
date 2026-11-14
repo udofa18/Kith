@@ -45,6 +45,9 @@ function firestoreFake(state: { community: any; member: any; joinRequest?: any; 
         if (/^communities\/[^/]+\/joinRequests\/[^/]+$/.test(path)) return snapshot(state.joinRequest ?? null);
         return snapshot(null);
       },
+      set: async (fields: any) => {
+        state.member = { ...(state.member ?? {}), ...fields };
+      },
     }),
     runTransaction: async (cb: any) =>
       cb({
@@ -70,7 +73,7 @@ function fakeDb(state: any) {
       query.limit = () => query;
       query.maybeSingle = async () => {
         if (table === 'users') return { data: { email: 'buyer@example.com', display_name: 'Buyer' }, error: null };
-        if (table === 'community_subscription_plans') return { data: state.plan, error: null };
+        if (table === 'community_subscription_plans') return { data: state.plan, error: state.planError ?? null };
         if (table === 'community_subscriptions') return { data: state.subscription, error: null };
         return { data: null, error: null };
       };
@@ -116,6 +119,7 @@ describe('community membership payments', () => {
       upserts: [] as Array<{ table: string; row: any }>,
       order: null,
       plan: null,
+      planError: null,
       subscription: null,
       joinRequest: null,
       ban: null,
@@ -123,7 +127,7 @@ describe('community membership payments', () => {
         id: 'community-1',
         name: 'Design Guild',
         creatorId: OWNER,
-        fee: { amount: 10, currency: 'usd', interval: 'once' },
+        fee: { amount: 10, currency: 'ngn', interval: 'once' },
       },
       member: null,
     };
@@ -151,17 +155,23 @@ describe('community membership payments', () => {
   });
 
   describe('parseCommunityFee', () => {
-    it('parses real-money, recurring and legacy XP fees', async () => {
+    it('parses naira, recurring and legacy XP fees', async () => {
       const { __testing } = await import('../api/_lib/payments.js');
 
-      expect(__testing.parseCommunityFee({ fee: { amount: 5, currency: 'usd', interval: 'once' } })).toEqual({
-        amount: 5,
-        currency: 'usd',
+      expect(__testing.parseCommunityFee({ fee: { amount: 5000, currency: 'ngn', interval: 'once' } })).toEqual({
+        amount: 5000,
+        currency: 'ngn',
         interval: 'once',
       });
-      expect(__testing.parseCommunityFee({ fee: { amount: 12.5, currency: 'usd', interval: 'month' } })).toEqual({
-        amount: 12.5,
-        currency: 'usd',
+      expect(__testing.parseCommunityFee({ fee: { amount: 7500, currency: 'ngn', interval: 'month' } })).toEqual({
+        amount: 7500,
+        currency: 'ngn',
+        interval: 'month',
+      });
+      // Old USD fees no longer charge dollars; they keep the card path as naira.
+      expect(__testing.parseCommunityFee({ fee: { amount: 5000, currency: 'usd', interval: 'month' } })).toEqual({
+        amount: 5000,
+        currency: 'ngn',
         interval: 'month',
       });
       // XP can never recur, even if a client writes the field.
@@ -180,14 +190,14 @@ describe('community membership payments', () => {
     });
   });
 
-  it('creates a one-time USD order without a Paystack plan', async () => {
+  it('creates a one-time NGN order without a Paystack plan', async () => {
     const { createCheckout } = await import('../api/_lib/payments.js');
     const result = await createCheckout({ kind: 'community_membership', targetId: 'community-1' }, 'Bearer token');
 
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({
       provider: 'paystack',
-      currency: 'USD',
+      currency: 'NGN',
       amountMinor: 1000,
       authorizationUrl: 'https://checkout.paystack.com/membership',
     });
@@ -200,29 +210,29 @@ describe('community membership payments', () => {
       kind: 'community_membership',
       target_id: 'community-1',
       seller_id: OWNER,
-      currency: 'USD',
+      currency: 'NGN',
       total_cents: 1000,
       status: 'pending',
       funds_held: true,
       metadata: expect.objectContaining({ communityId: 'community-1', memberId: BUYER, interval: 'once' }),
     });
     expect(mocks.initializeTransaction).toHaveBeenCalledWith(
-      expect.objectContaining({ amountMinor: 1000, currency: 'USD', plan: undefined }),
+      expect.objectContaining({ amountMinor: 1000, currency: 'NGN', plan: undefined }),
     );
   });
 
   it('creates a Paystack plan and a pending subscription before monthly checkout', async () => {
-    state.community.fee = { amount: 15, currency: 'usd', interval: 'month' };
+    state.community.fee = { amount: 15, currency: 'ngn', interval: 'month' };
 
     const { createCheckout } = await import('../api/_lib/payments.js');
     const result = await createCheckout({ kind: 'community_membership', targetId: 'community-1' }, 'Bearer token');
 
     expect(result.status).toBe(200);
     expect(mocks.createPlan).toHaveBeenCalledWith(
-      expect.objectContaining({ amountMinor: 1500, currency: 'USD', interval: 'monthly' }),
+      expect.objectContaining({ amountMinor: 1500, currency: 'NGN', interval: 'monthly' }),
     );
     expect(mocks.initializeTransaction).toHaveBeenCalledWith(
-      expect.objectContaining({ amountMinor: 1500, currency: 'USD', plan: 'PLN_monthly123' }),
+      expect.objectContaining({ amountMinor: 1500, currency: 'NGN', plan: 'PLN_monthly123' }),
     );
 
     const order = state.inserts.find((i: any) => i.table === 'orders')?.row;
@@ -236,11 +246,27 @@ describe('community membership payments', () => {
       provider_plan_code: 'PLN_monthly123',
       provider_subscription_id: null,
       amount_cents: 1500,
-      currency: 'USD',
+      currency: 'NGN',
       interval: 'month',
       status: 'pending',
       last_order_id: order.id,
     });
+  });
+
+  it('explains a missing payments migration instead of a generic failure', async () => {
+    state.community.fee = { amount: 15, currency: 'ngn', interval: 'month' };
+    state.planError = {
+      code: 'PGRST205',
+      message: "Could not find the table 'public.community_subscription_plans' in the schema cache",
+    };
+
+    const { createCheckout } = await import('../api/_lib/payments.js');
+    const result = await createCheckout({ kind: 'community_membership', targetId: 'community-1' }, 'Bearer token');
+
+    expect(result.status).toBe(503);
+    expect(String(result.body.error)).toMatch(/20261110000001_community_memberships\.sql/);
+    expect(mocks.createPlan).not.toHaveBeenCalled();
+    expect(state.inserts.filter((i: any) => i.table === 'orders')).toHaveLength(0);
   });
 
   it('rejects card checkout for XP fees, owners and active members', async () => {
@@ -251,7 +277,7 @@ describe('community membership payments', () => {
     expect(xp.status).toBe(400);
     expect(String(xp.body.error)).toMatch(/XP/);
 
-    state.community.fee = { amount: 10, currency: 'usd', interval: 'once' };
+    state.community.fee = { amount: 10, currency: 'ngn', interval: 'once' };
     mocks.uidFromAuthHeader.mockResolvedValue(OWNER);
     const owner = await createCheckout({ kind: 'community_membership', targetId: 'community-1' }, 'Bearer token');
     expect(owner.status).toBe(400);
@@ -267,7 +293,7 @@ describe('community membership payments', () => {
   });
 
   it('lets a lapsed monthly member check out again', async () => {
-    state.community.fee = { amount: 10, currency: 'usd', interval: 'month' };
+    state.community.fee = { amount: 10, currency: 'ngn', interval: 'month' };
     state.member = {
       userId: BUYER,
       subscriptionStatus: 'active',
@@ -337,8 +363,47 @@ describe('community membership payments', () => {
     const result = await cancelCommunityMembership({ communityId: 'community-1' }, 'Bearer token');
 
     expect(result.status).toBe(200);
-    expect(result.body).toEqual({ cancelled: true, accessUntil: '2026-12-01T00:00:00.000Z' });
+    expect(result.body).toEqual({
+      cancelled: true,
+      mode: 'period_end',
+      accessUntil: '2026-12-01T00:00:00.000Z',
+      graceUntil: '2026-12-04T00:00:00.000Z',
+    });
     expect(mocks.disableSubscription).toHaveBeenCalledWith({ code: 'SUB_abc123', token: 'email-token' });
+    expect(state.updates).toContainEqual({
+      table: 'community_subscriptions',
+      row: expect.objectContaining({ status: 'non-renewing' }),
+    });
+    // Cancelling the renewal keeps the paid period, so the member document stays.
+    expect(state.memberDeleted).toBeUndefined();
+    expect(state.member.subscriptionStatus).toBe('non-renewing');
+  });
+
+  it('removes access immediately when the member chooses to leave now', async () => {
+    state.member = { userId: BUYER, role: 'member', paymentInterval: 'month' };
+    state.subscription = {
+      id: 'subscription-row-1',
+      community_id: 'community-1',
+      member_id: BUYER,
+      provider_subscription_id: 'SUB_abc123',
+      provider_email_token: 'email-token',
+      status: 'active',
+      current_period_end: '2026-12-01T00:00:00.000Z',
+    };
+
+    const { cancelCommunityMembership } = await import('../api/_lib/payments.js');
+    const result = await cancelCommunityMembership(
+      { communityId: 'community-1', mode: 'now' },
+      'Bearer token',
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toEqual({
+      cancelled: true,
+      mode: 'now',
+      accessUntil: null,
+      graceUntil: '2026-12-04T00:00:00.000Z',
+    });
     expect(state.updates).toContainEqual({
       table: 'community_subscriptions',
       row: expect.objectContaining({ status: 'cancelled' }),
@@ -372,7 +437,7 @@ describe('community membership payments', () => {
     const result = await cancelCommunityMembership({ communityId: 'community-1' }, 'Bearer token');
 
     expect(result.status).toBe(200);
-    expect(result.body).toEqual({ cancelled: false });
+    expect(result.body).toEqual({ cancelled: false, mode: 'period_end' });
     expect(mocks.disableSubscription).not.toHaveBeenCalled();
   });
 });
@@ -383,20 +448,26 @@ describe('community fee helpers', () => {
       '../src/lib/communityPricing'
     );
 
-    expect(formatFee({ amount: 10, currency: 'usd', interval: 'once' })).toBe('$10');
-    expect(formatFee({ amount: 12.5, currency: 'usd', interval: 'month' })).toBe('$12.50/month');
+    expect(formatFee({ amount: 1000, currency: 'ngn', interval: 'once' })).toBe('₦1,000');
+    expect(formatFee({ amount: 1250, currency: 'ngn', interval: 'month' })).toBe('₦1,250/month');
     expect(formatFee({ amount: 250, currency: 'xp', interval: 'once' })).toBe('250 XP');
 
-    expect(validateFee({ amount: 10, currency: 'usd', interval: 'month' })).toBeNull();
+    expect(validateFee({ amount: 1000, currency: 'ngn', interval: 'month' })).toBeNull();
     expect(validateFee({ amount: 10, currency: 'xp', interval: 'month' })).toMatch(/once/);
-    expect(validateFee({ amount: 0.5, currency: 'usd', interval: 'once' })).toMatch(/at least/);
-    expect(validateFee({ amount: 12.345, currency: 'usd', interval: 'once' })).toMatch(/two decimal/);
+    expect(validateFee({ amount: 50, currency: 'ngn', interval: 'once' })).toMatch(/at least/);
+    expect(validateFee({ amount: 1250.5, currency: 'ngn', interval: 'once' })).toMatch(/whole number/);
     expect(validateFee({ amount: 10.5, currency: 'xp', interval: 'once' })).toMatch(/whole number/);
 
-    const fee = feeOf({ fee: { amount: 9, currency: 'usd', interval: 'month' } });
+    const fee = feeOf({ fee: { amount: 9000, currency: 'ngn', interval: 'month' } });
     expect(fee).not.toBeNull();
     expect(feeIsRealMoney(fee)).toBe(true);
     expect(feeIsRecurring(fee)).toBe(true);
+    // Legacy USD fees are read as naira instead of falling back to the XP path.
+    expect(feeOf({ fee: { amount: 9000, currency: 'usd', interval: 'month' } })).toEqual({
+      amount: 9000,
+      currency: 'ngn',
+      interval: 'month',
+    });
     expect(feeOf({ isPaid: true, price: 25 })).toEqual({ amount: 25, currency: 'xp', interval: 'once' });
   });
 });

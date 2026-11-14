@@ -10,6 +10,7 @@ import { CommunityIcon, communityHue } from './CommunityCard';
 import { categoryLabel, categoryOf } from '../lib/communityCategories';
 import { canAfford, feeIsRealMoney, feeOf, formatFee } from '../lib/communityPricing';
 import { beginCheckout } from '../lib/payments';
+import { memberAccess } from '../lib/membershipAccess';
 
 export default function CommunityDetailsModal({ isOpen, onClose, communityId, onJoinSuccess, inviteCode }: { 
   isOpen: boolean, 
@@ -55,10 +56,13 @@ export default function CommunityDetailsModal({ isOpen, onClose, communityId, on
           
           if (auth.currentUser) {
             const memberDoc = await getDoc(doc(db, 'communities', communityId, 'members', auth.currentUser.uid));
-            setIsMember(memberDoc.exists());
+            // A lapsed paid member still has a document during grace. Treat them as a non-member so
+            // the renew button starts a fresh checkout instead of saying "You're a member".
+            const currentAccess = memberAccess(memberDoc.exists() ? memberDoc.data() : null);
+            setIsMember(memberDoc.exists() && currentAccess.canUseChannels);
 
-            // Check for pending request
-            if (!memberDoc.exists()) {
+            // Check for pending/approved request when this is not a current member.
+            if (!memberDoc.exists() || !currentAccess.canUseChannels) {
                 const requestsRef = collection(db, 'communities', communityId, 'joinRequests');
                 const q = query(requestsRef, where('userId', '==', auth.currentUser.uid), limit(1));
                 const requestSnap = await getDocs(q);
