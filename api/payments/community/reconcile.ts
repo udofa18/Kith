@@ -11,7 +11,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   const secret = process.env.CRON_SECRET;
-  if (secret) {
+  if (!secret) {
+    // Without the shared secret anyone could trigger membership changes. In production that is a
+    // configuration error, not an open endpoint.
+    if (process.env.NODE_ENV === 'production') {
+      return res.status(503).json({ error: 'CRON_SECRET is not configured' });
+    }
+  } else {
     const auth = req.headers.authorization;
     const bearer = typeof auth === 'string' && auth.startsWith('Bearer ') ? auth.slice(7) : null;
     const querySecret = typeof req.query.secret === 'string' ? req.query.secret : null;

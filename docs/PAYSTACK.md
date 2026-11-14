@@ -116,6 +116,17 @@ Membership grants are idempotent per order id and stored on the Firestore member
 `providerSubscriptionId`, `lastOrderId`). Monthly renewals extend from the later of now and the
 current expiry, so a delayed webhook never shortens access.
 
+Access is enforced by Firestore rules through `membershipExpiresAtMs`, a millisecond mirror of
+`membershipExpiresAt` (rules cannot parse an ISO string). When the paid period ends, channels lock
+but the community stays visible for `MEMBERSHIP_GRACE_DAYS` (default 3). The nightly job then removes
+the member document, which ends access entirely until they pay again.
+
+Cancelling has two modes: `period_end` (default) stops future charges and keeps the period already
+paid for; `now` stops charges and removes access immediately. Buyers manage both from `/billing`,
+which also lists every membership payment with the period it covered and a printable receipt. The
+owner sees the same payments, with member, date/time and reference, under Community settings →
+Paid subscriptions.
+
 ### Subscription lifecycle
 
 Paystack sends subscription events to the same webhook. Each is persisted in `payment_events` and
@@ -125,9 +136,9 @@ handled idempotently:
 | --- | --- |
 | `subscription.create` | Links the Paystack subscription code/token to the pending row and marks the member active. |
 | `invoice.update` (paid, success) | Re-verifies the renewal transaction with Paystack, creates a new paid `community_membership` order, credits the creator ledger and extends membership. The initial payment is recognised by its internal order reference and never credited twice. |
-| `invoice.payment_failed` | Marks the subscription `attention`. Paid access ends if a successful order already exists; a later successful charge (including a provider retry) re-grants it. |
+| `invoice.payment_failed` | Marks the subscription `attention`. The paid period is over, so the member enters grace; a successful retry (including a provider retry) re-grants access, otherwise the nightly job removes them when grace ends. |
 | `subscription.not_renew` | Records `non-renewing`; access continues until the paid period ends. |
-| `subscription.disable` | Marks the subscription cancelled/completed and removes the member unless a newer subscription has replaced it. |
+| `subscription.disable` | Marks the subscription `non-renewing` while paid time remains, otherwise `cancelled`/`completed`. Access is never cut short. |
 
 Renewal amounts are checked against the subscription row after verification; a mismatched amount or
 customer email fails the event and leaves the order unpaid. Starting a new subscription disables the
@@ -175,6 +186,12 @@ legacy header for the same request, which prevents downgrade attacks.
 
 Signature verification uses the **raw request body**. Vercel (`bodyParser: false`) and the local
 Express server (`express.raw`) both preserve it. Never re-stringify parsed JSON before verifying.
+
+Set `PAYSTACK_WEBHOOK_SECRET` to the `whsec_...` signing secret shown in the Paystack dashboard
+(comma-separate several values while rotating). Set `CRON_SECRET` too: `vercel.json` runs
+`/api/payments/community/reconcile` daily at 03:00 and Vercel sends that secret as a bearer token.
+Without it the endpoint refuses to run in production. `MEMBERSHIP_GRACE_DAYS` (default 3) controls
+how long a lapsed member keeps read-only community access.
 
 Handler behaviour:
 

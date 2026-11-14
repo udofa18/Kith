@@ -527,18 +527,19 @@ service cloud.firestore {
       return isAdmin() || (isAuthenticated() && exists(/databases/$(database)/documents/communities/$(communityId)/members/$(request.auth.uid)));
     }
 
-    // A paid membership carries `membershipExpiresAt`. Channels require that period to still be
+    // A paid membership carries `membershipExpiresAtMs`. Channels require that period to still be
     // running; a lapsed member keeps the community visible during grace but cannot open channels.
+    // The numeric mirror exists because rules cannot parse the readable ISO date stored alongside
+    // it. A document without the mirror is treated as a free/one-time membership.
     function hasRunningPaidAccess(communityId) {
-      return amMember(communityId) && (
-        myMember(communityId).get('membershipExpiresAt', null) == null ||
-        myMember(communityId).membershipExpiresAt > request.time
-      );
+      let expiresMs = myMember(communityId).get('membershipExpiresAtMs', null);
+      return amMember(communityId) && (expiresMs == null || expiresMs > request.time.toMillis());
     }
 
     function communityHasPaidFee(communityId) {
       let community = get(/databases/$(database)/documents/communities/$(communityId)).data;
-      return community.get('fee', {}).get('amount', 0) > 0 || community.get('isPaid', false) == true;
+      let fee = community.get('fee', {});
+      return (fee is map && fee.get('amount', 0) > 0) || community.get('isPaid', false) == true;
     }
 
     // Public communities stay readable without joining, but a paid community never does: payment is
@@ -636,7 +637,8 @@ service cloud.firestore {
       let ch = get(/databases/$(database)/documents/communities/$(communityId)/channels/$(channelId)).data;
       let actor = get(memberDocPath(communityId, request.auth.uid)).data;
       let roles = actor.get('customRoles', []);
-      let paidOk = actor.get('membershipExpiresAt', null) == null || actor.membershipExpiresAt > request.time;
+      let expiresMs = actor.get('membershipExpiresAtMs', null);
+      let paidOk = expiresMs == null || expiresMs > request.time.toMillis();
       return paidOk &&
         !(actor.get('timeoutUntil', null) != null && actor.timeoutUntil > request.time) && (
         actor.role in ['owner', 'admin', 'moderator'] ||

@@ -35,6 +35,29 @@ export function membershipAccessUntil(periodEnd: string | number | Date): string
   return addDaysIso(periodEnd, membershipGraceDays());
 }
 
+/**
+ * The member document carries readable ISO dates plus millisecond mirrors. Firestore rules cannot
+ * parse an ISO string, so channel access compares the `*Ms` numbers against `request.time`.
+ */
+export function membershipExpiryFields(
+  expiresAt: string | null,
+  accessUntil: string | null,
+): {
+  membershipExpiresAt: string | null;
+  membershipExpiresAtMs: number | null;
+  accessUntil: string | null;
+  accessUntilMs: number | null;
+} {
+  const expiryMs = expiresAt ? Date.parse(expiresAt) : NaN;
+  const accessMs = accessUntil ? Date.parse(accessUntil) : NaN;
+  return {
+    membershipExpiresAt: expiresAt,
+    membershipExpiresAtMs: Number.isFinite(expiryMs) ? expiryMs : null,
+    accessUntil,
+    accessUntilMs: Number.isFinite(accessMs) ? accessMs : null,
+  };
+}
+
 export function addMonthsIso(from: string | number | Date, months: number): string {
   const date = new Date(from);
   const day = date.getUTCDate();
@@ -428,6 +451,22 @@ export async function getReceipt(orderId: string, authorization?: string): Promi
     const seller = order.seller_id ? sellers.get(order.seller_id) : undefined;
     const period = periodFor(order as OrderRow, isoOrNull((order.metadata as any)?.periodEnd));
 
+    // The first membership order is written before Paystack reports the plan period end, so read it
+    // from the subscription row. Only when it plausibly belongs to this payment (within ~a month).
+    if (order.kind === 'community_membership' && order.target_id && !isoOrNull(order.metadata?.periodEnd)) {
+      const { data: sub } = await db
+        .from('community_subscriptions')
+        .select('current_period_end')
+        .eq('community_id', order.target_id)
+        .eq('member_id', order.buyer_id)
+        .maybeSingle();
+      const end = isoOrNull(sub?.current_period_end);
+      const start = period.periodStart ? Date.parse(period.periodStart) : NaN;
+      if (end && Number.isFinite(start) && Date.parse(end) > start && Date.parse(end) - start <= 40 * DAY) {
+        period.periodEnd = end;
+      }
+    }
+
     let title = 'Purchase';
     if (order.kind === 'community_membership' && order.target_id) {
       title = `${await communityName(order.target_id)} membership`;
@@ -717,11 +756,24 @@ export async function reconcileCommunityMemberships(): Promise<BillingResult> {
           accessUntil: addDaysIso(periodEnd, graceDays),
           nonRenewing: status === 'non-renewing' || status === 'cancelled',
         };
+        // A member who chose to leave immediately should not keep receiving renewal nudges.
+        const quiet = status === 'cancelled';
 
         if (endMs > now) {
+          // Backfill and refresh the numeric expiry mirrors the security rules compare. Legacy
+          // member documents only had an ISO string, which rules cannot compare to request.time.
+          await updateMemberBillingFields(
+            sub.community_id,
+            sub.member_id,
+            {
+              subscriptionStatus: status,
+              ...membershipExpiryFields(periodEnd, ctx.accessUntil),
+            },
+            sub.provider_subscription_id,
+          );
           const daysLeft = Math.ceil((endMs - now) / DAY);
           const stage = daysLeft <= 1 ? '1d' : daysLeft <= 3 ? '3d' : daysLeft <= 7 ? '7d' : null;
-          if (stage && (await sendMembershipReminder(ctx, stage))) result.remindersSent += 1;
+          if (!quiet && stage && (await sendMembershipReminder(ctx, stage))) result.remindersSent += 1;
           continue;
         }
 
@@ -735,19 +787,19 @@ export async function reconcileCommunityMemberships(): Promise<BillingResult> {
               .eq('id', sub.id);
             if (updateError) throw updateError;
           }
+          const graceStatus = status === 'active' ? 'attention' : status;
           const updated = await updateMemberBillingFields(
             sub.community_id,
             sub.member_id,
             {
-              subscriptionStatus: 'attention',
-              membershipExpiresAt: periodEnd,
-              accessUntil: ctx.accessUntil,
+              subscriptionStatus: graceStatus,
+              ...membershipExpiryFields(periodEnd, ctx.accessUntil),
             },
             sub.provider_subscription_id,
           );
           if (updated) {
             result.movedToGrace += 1;
-            if (await sendMembershipReminder(ctx, 'expired')) result.remindersSent += 1;
+            if (!quiet && (await sendMembershipReminder(ctx, 'expired'))) result.remindersSent += 1;
           }
           continue;
         }
@@ -765,7 +817,7 @@ export async function reconcileCommunityMemberships(): Promise<BillingResult> {
         if (completeError) throw completeError;
         if (removed) {
           result.removed += 1;
-          if (await sendMembershipReminder(ctx, 'grace_end')) result.remindersSent += 1;
+          if (!quiet && (await sendMembershipReminder(ctx, 'grace_end'))) result.remindersSent += 1;
         }
       } catch (e) {
         result.errors += 1;

@@ -42,7 +42,7 @@ import {
 } from './paymentProviders.js';
 import { isSuccess, isTerminalFailure, validatePaymentResult } from './paymentValidation.js';
 import { computeFee, MoneyError, normalizeCurrency, payoutAvailableAt, toMinorUnits } from './money.js';
-import { addDaysIso, membershipGraceDays } from './communityBilling.js';
+import { addDaysIso, membershipExpiryFields, membershipGraceDays } from './communityBilling.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const KINDS = ['product', 'event_ticket', 'event_boost', 'product_boost', 'community_membership'] as const;
@@ -968,8 +968,7 @@ export async function cancelCommunityMembership(
           {
             subscriptionStatus: 'non-renewing',
             renewalCancelledAt: new Date().toISOString(),
-            membershipExpiresAt: periodEnd!.toISOString(),
-            accessUntil,
+            ...membershipExpiryFields(periodEnd!.toISOString(), accessUntil),
           },
           { merge: true },
         );
@@ -1293,7 +1292,9 @@ async function handlePaystackSubscriptionCreated(data: any): Promise<void> {
   await updateCommunityMemberSubscription(target.community_id, target.member_id, {
     providerSubscriptionId: subscriptionCode,
     subscriptionStatus: 'active',
-    ...(periodEnd ? { membershipExpiresAt: periodEnd } : {}),
+    ...(periodEnd
+      ? membershipExpiryFields(periodEnd, addDaysIso(periodEnd, membershipGraceDays()))
+      : {}),
   });
 }
 
@@ -1473,8 +1474,7 @@ async function handlePaystackSubscriptionFailed(data: any): Promise<void> {
     const endIso = Number.isNaN(periodEnd.getTime()) ? new Date().toISOString() : periodEnd.toISOString();
     await updateCommunityMemberSubscription(subscription.community_id, subscription.member_id, {
       subscriptionStatus: 'attention',
-      membershipExpiresAt: endIso,
-      accessUntil: addDaysIso(endIso, membershipGraceDays()),
+      ...membershipExpiryFields(endIso, addDaysIso(endIso, membershipGraceDays())),
     });
   } else {
     await updateCommunityMemberSubscription(subscription.community_id, subscription.member_id, {
@@ -1538,8 +1538,7 @@ async function handlePaystackSubscriptionDisabled(data: any): Promise<void> {
     const endIso = periodEnd!.toISOString();
     await updateCommunityMemberSubscription(subscription.community_id, subscription.member_id, {
       subscriptionStatus: complete ? 'completed' : 'non-renewing',
-      membershipExpiresAt: endIso,
-      accessUntil: addDaysIso(endIso, membershipGraceDays()),
+      ...membershipExpiryFields(endIso, addDaysIso(endIso, membershipGraceDays())),
     });
   } else {
     // Channels are already locked by the expiry rule; keep the doc for grace + renewal.
@@ -1963,13 +1962,14 @@ async function grantCommunityMembership(order: OrderRow): Promise<void> {
 
     if (interval === 'month') {
       const expiry = nextMembershipExpiry(order, existing);
-      base.membershipExpiresAt = expiry;
-      base.accessUntil = addDaysIso(expiry, membershipGraceDays());
+      Object.assign(
+        base,
+        membershipExpiryFields(expiry, addDaysIso(expiry, membershipGraceDays())),
+      );
       base.providerSubscriptionId =
         subscription?.provider_subscription_id ?? existing?.providerSubscriptionId ?? null;
     } else {
-      base.membershipExpiresAt = null;
-      base.accessUntil = null;
+      Object.assign(base, membershipExpiryFields(null, null));
       base.providerSubscriptionId = null;
     }
     // A new paid period starts a fresh reminder cycle.

@@ -172,6 +172,44 @@ describe('paid community memberships', () => {
     expect(result.status).toBe(403);
   });
 
+  it('returns a receipt with the paid period from the subscription row', async () => {
+    mocks.uidFromAuthHeader.mockResolvedValue(BUYER);
+    const { getReceipt } = await import('../api/_lib/communityBilling.js');
+    const result = await getReceipt('43264100-8746-41bc-a395-5609f3404110', 'Bearer token');
+
+    expect(result.status).toBe(200);
+    const receipt = (result.body as any).receipt;
+    expect(receipt).toMatchObject({
+      title: 'AI Automation membership',
+      amountCents: 500000,
+      providerTransactionId: '6759399311',
+      periodEnd: '2026-12-13T09:16:00.000Z',
+    });
+  });
+
+  it('mirrors the ISO expiry into the numeric fields rules compare', async () => {
+    const store = fakeFirestore({
+      [`communities/${COMMUNITY}`]: { name: 'AI Automation', creatorId: OWNER, memberCount: 2 },
+      [`communities/${COMMUNITY}/members/${BUYER}`]: {
+        role: 'member',
+        paid: true,
+        providerSubscriptionId: 'SUB_1',
+        subscriptionStatus: 'active',
+        // Legacy document: only the readable ISO string, no numeric mirror yet.
+        membershipExpiresAt: '2026-12-13T09:16:00.000Z',
+      },
+    });
+    mocks.firestoreAdmin.mockReturnValue(store.fs);
+
+    const { reconcileCommunityMemberships } = await import('../api/_lib/communityBilling.js');
+    const result = await reconcileCommunityMemberships();
+
+    expect(result.status).toBe(200);
+    const member = store.docs.get(`communities/${COMMUNITY}/members/${BUYER}`);
+    expect(member.membershipExpiresAtMs).toBe(Date.parse('2026-12-13T09:16:00.000Z'));
+    expect(member.accessUntilMs).toBe(Date.parse('2026-12-16T09:16:00.000Z'));
+  });
+
   it('lists a buyer membership and its receipt', async () => {
     mocks.uidFromAuthHeader.mockResolvedValue(BUYER);
     const { getMyMemberships } = await import('../api/_lib/communityBilling.js');

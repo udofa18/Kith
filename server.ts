@@ -261,29 +261,30 @@ async function startServer() {
     const { status, body } = await getReceipt(orderId, req.headers.authorization);
     res.status(status).json(body);
   });
-  app.get('/api/payments/community/reconcile', async (req, res) => {
+  // Vercel Cron sends `Authorization: Bearer <CRON_SECRET>`. Without a configured secret the route
+  // must not be open in production; locally it stays callable for testing.
+  const cronGuard = (req: any): number | null => {
     const secret = process.env.CRON_SECRET;
-    if (secret) {
-      const auth = req.headers.authorization;
-      const bearer = typeof auth === 'string' && auth.startsWith('Bearer ') ? auth.slice(7) : null;
-      const querySecret = typeof req.query.secret === 'string' ? req.query.secret : null;
-      if (bearer !== secret && querySecret !== secret) {
-        res.status(401).json({ error: 'Unauthorized' });
-        return;
-      }
+    if (!secret) return process.env.NODE_ENV === 'production' ? 503 : null;
+    const auth = req.headers.authorization;
+    const bearer = typeof auth === 'string' && auth.startsWith('Bearer ') ? auth.slice(7) : null;
+    const querySecret = typeof req.query.secret === 'string' ? req.query.secret : null;
+    return bearer === secret || querySecret === secret ? null : 401;
+  };
+  app.get('/api/payments/community/reconcile', async (req, res) => {
+    const denied = cronGuard(req);
+    if (denied) {
+      res.status(denied).json({ error: denied === 401 ? 'Unauthorized' : 'CRON_SECRET is not configured' });
+      return;
     }
     const { status, body } = await reconcileCommunityMemberships();
     res.status(status).json(body);
   });
   app.post('/api/payments/community/reconcile', async (req, res) => {
-    const secret = process.env.CRON_SECRET;
-    if (secret) {
-      const auth = req.headers.authorization;
-      const bearer = typeof auth === 'string' && auth.startsWith('Bearer ') ? auth.slice(7) : null;
-      if (bearer !== secret) {
-        res.status(401).json({ error: 'Unauthorized' });
-        return;
-      }
+    const denied = cronGuard(req);
+    if (denied) {
+      res.status(denied).json({ error: denied === 401 ? 'Unauthorized' : 'CRON_SECRET is not configured' });
+      return;
     }
     const { status, body } = await reconcileCommunityMemberships();
     res.status(status).json(body);
