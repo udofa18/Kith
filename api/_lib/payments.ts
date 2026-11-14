@@ -1,5 +1,6 @@
 /**
- * Payments for everything the app sells, shared by api/payments/*.ts (Vercel) and server.ts (local dev).
+ * Payments for everything the app sells, shared by the single Vercel function
+ * (api/_lib/apiApp.ts) and by server.ts in local development.
  *
  * Every paid action is an order with a `kind`. The client sends only { kind, targetId, tierId? }; the
  * server prices it from the database or Firestore. Adding a paid feature means adding a pricing rule

@@ -1,5 +1,6 @@
 /**
- * Secure product downloads, shared by api/payments/download.ts (Vercel) and server.ts (local dev).
+ * Secure product downloads, shared by the single Vercel function (api/_lib/apiApp.ts) and
+ * server.ts in local development.
  *
  * Paid files live in the private Supabase Storage bucket `private_products`, which clients cannot read.
  * This module checks that the caller owns the product or has a completed purchase, then returns a

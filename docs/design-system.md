@@ -204,8 +204,8 @@ The article surfaces are the reference implementation for an editorial slice ins
   render as `<figcaption>` in the reader.
 - **SEO** — the reader emits canonical, robots, Open Graph, Twitter and `BlogPosting` +
   `BreadcrumbList` JSON-LD. The journal index emits `CollectionPage` + `ItemList`. Drafts are
-  `noindex`. `/sitemap.xml` and `/rss.xml` are served by `api/sitemap.ts` and `api/rss.ts` from the
-  published-article feed.
+  `noindex`. `/sitemap.xml` and `/rss.xml` are served by the handlers in
+  `api/_lib/handlers/sitemap.ts` and `api/_lib/handlers/rss.ts` from the published-article feed.
 
 When extending the journal, keep using the shared primitives. The only intentional raw colours are
 inside generated cover illustrations, photo overlays and the code block surface.

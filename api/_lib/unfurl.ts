@@ -1,5 +1,6 @@
 /**
- * Shared link-preview logic for api/unfurl.ts (Vercel) and server.ts (local dev).
+ * Shared link-preview logic for `/api/unfurl`, served by the single Vercel function
+ * (api/_lib/apiApp.ts) and by server.ts in local development.
  *
  * Sites that hide their metadata from crawlers (YouTube, X, TikTok, Vimeo) are read through their
  * public oEmbed endpoints. Everything else is fetched directly: redirects are followed by hand so

@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { fetchPublishedArticles, siteOrigin, xmlEscape } from './_lib/contentFeed';
+import { fetchPublishedArticles, siteOrigin, xmlEscape } from '../contentFeed.js';
 
 function pubDate(value: string) {
   const date = new Date(value);

@@ -4,7 +4,7 @@ import {
   fetchPublishedArticles,
   siteOrigin,
   xmlEscape,
-} from './_lib/contentFeed';
+} from '../contentFeed.js';
 
 function lastmod(value: string) {
   const date = new Date(value);
