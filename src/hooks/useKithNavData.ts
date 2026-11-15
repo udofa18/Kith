@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   collection,
   collectionGroup,
@@ -20,6 +20,7 @@ export function useKithNavData(user: any) {
   const [totalUnreadDMs, setTotalUnreadDMs] = useState(0);
   const [joinedCommunities, setJoinedCommunities] = useState<any[]>([]);
   const [communityUnreads, setCommunityUnreads] = useState<Record<string, number>>({});
+  const [channelUnreads, setChannelUnreads] = useState<Record<string, number>>({});
 
   useEffect(() => {
     if (!user) {
@@ -116,10 +117,94 @@ export function useKithNavData(user: any) {
     };
   }, [user]);
 
+  // Unread chat per circle. The notification feed only produces mentions, so ordinary channel
+  // messages never reach it; derive them from the same per-channel counters the channel sidebar
+  // uses (messageCount minus the member's last read count).
+  const communityIdsKey = useMemo(
+    () => joinedCommunities.map((community) => String(community.id)).sort().join(','),
+    [joinedCommunities],
+  );
+
+  useEffect(() => {
+    if (!user || joinedCommunities.length === 0) {
+      setChannelUnreads({});
+      return;
+    }
+
+    type CommunityUnreadState = { channels: Record<string, number>; stats: Record<string, number> };
+    const state = new Map<string, CommunityUnreadState>();
+    const unsubscribes: Array<() => void> = [];
+
+    const publish = () => {
+      const next: Record<string, number> = {};
+      state.forEach((entry, communityId) => {
+        let total = 0;
+        for (const [channelId, count] of Object.entries(entry.channels)) {
+          total += Math.max(0, count - (entry.stats[channelId] || 0));
+        }
+        next[communityId] = total;
+      });
+      setChannelUnreads(next);
+    };
+
+    joinedCommunities.forEach((community) => {
+      const communityId = String(community.id);
+      state.set(communityId, { channels: {}, stats: {} });
+
+      unsubscribes.push(
+        onSnapshot(
+          collection(db, 'communities', communityId, 'channels'),
+          (snapshot) => {
+            const channels: Record<string, number> = {};
+            snapshot.docs.forEach((d) => {
+              channels[d.id] = Number(d.data().messageCount || 0);
+            });
+            state.get(communityId)!.channels = channels;
+            publish();
+          },
+          (error) => {
+            // Paid members lose channel metadata access outside grace. Leave their badge empty
+            // instead of breaking the whole sidebar.
+            console.warn(`Unread channels unavailable for ${communityId}:`, error);
+          },
+        ),
+      );
+
+      unsubscribes.push(
+        onSnapshot(
+          collection(db, 'communities', communityId, 'members', user.uid, 'channelStats'),
+          (snapshot) => {
+            const stats: Record<string, number> = {};
+            snapshot.docs.forEach((d) => {
+              stats[d.id] = Number(d.data().lastReadCount || 0);
+            });
+            state.get(communityId)!.stats = stats;
+            publish();
+          },
+          (error) => {
+            console.warn(`Channel stats unavailable for ${communityId}:`, error);
+          },
+        ),
+      );
+    });
+
+    return () => unsubscribes.forEach((unsubscribe) => unsubscribe());
+  }, [user, communityIdsKey]);
+
+  // Mentions already arrive as notifications and as unread channel messages. Take the larger of
+  // the two so a mention is not counted twice.
+  const combinedCommunityUnreads = useMemo(() => {
+    const merged: Record<string, number> = { ...communityUnreads };
+    for (const [communityId, count] of Object.entries(channelUnreads)) {
+      merged[communityId] = Math.max(merged[communityId] || 0, count);
+    }
+    return merged;
+  }, [communityUnreads, channelUnreads]);
+
   return {
     unreadNotifications,
     totalUnreadDMs,
     joinedCommunities,
-    communityUnreads,
+    communityUnreads: combinedCommunityUnreads,
   };
 }

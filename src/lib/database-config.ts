@@ -30,7 +30,8 @@ export function shouldReadFromFirestore(): boolean {
 
 /** Per-collection read overrides (Phase C: flip low-risk collections first) */
 const supabaseReadCollections = new Set(
-  (import.meta.env.VITE_SUPABASE_READ_COLLECTIONS || 'notifications,hashtags,user_interests,user_engagement_profiles')
+  // Notifications stay on Firestore until their writers dual-write and the table is backfilled.
+  (import.meta.env.VITE_SUPABASE_READ_COLLECTIONS || 'hashtags,user_interests,user_engagement_profiles')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean)

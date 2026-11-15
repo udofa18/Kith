@@ -67,6 +67,8 @@ export function useNotificationStream(user: any) {
   const hydrated = useRef(false);
   const pathnameRef = useRef(location.pathname);
   pathnameRef.current = location.pathname;
+  const searchRef = useRef(location.search);
+  searchRef.current = location.search;
 
   const onNotificationsPage = location.pathname === '/feed'
     && new URLSearchParams(location.search).get('view') === 'notifications';
@@ -133,10 +135,20 @@ export function useNotificationStream(user: any) {
 
         liveInvites.forEach(dispatchInvite);
 
-        // An open channel already plays its own chime for mentions.
+        // An open channel already plays its own chime for messages from others. For a mention,
+        // chime here only when that channel is not the one currently on screen.
+        const viewingChannel = (channelId?: string) => {
+          if (!channelId) return false;
+          const params = new URLSearchParams(searchRef.current);
+          return params.get('view') === 'community' && params.get('channelId') === channelId;
+        };
+        const mentionElsewhere = incoming.some(
+          (item) => item.type === 'channel_mention' && !viewingChannel(item.channelId),
+        );
         if (
           liveInvites.length > 0
           || incoming.some((item) => item.type !== 'channel_mention')
+          || mentionElsewhere
         ) {
           playNotificationSound();
         }

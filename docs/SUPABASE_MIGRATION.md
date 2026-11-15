@@ -68,8 +68,12 @@ Control migration phase via `VITE_DB_PHASE`:
 During phase B, specific collections can read from Supabase early:
 
 ```
-VITE_SUPABASE_READ_COLLECTIONS=notifications,hashtags,user_interests,user_engagement_profiles
+VITE_SUPABASE_READ_COLLECTIONS=hashtags,user_interests,user_engagement_profiles
 ```
+
+`notifications` is intentionally excluded: notifications are still written Firestore-only, so reading
+the empty Supabase table hid every row from the centre while the Firestore-backed badge counted
+them. Migrate the notification writers to dual-write and backfill the table before adding it here.
 
 Run nightly delta sync during dual-write:
 

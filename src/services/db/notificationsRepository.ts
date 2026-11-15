@@ -8,16 +8,13 @@ import {
   doc,
   deleteDoc,
   writeBatch,
-  getDoc,
   limit,
   Unsubscribe,
 } from 'firebase/firestore';
 import { db } from '../../firebase';
 import { getSupabase } from '../../supabase';
-import { dualWrite, dualRead } from './utils';
-import { supabaseNotificationToApp, firestoreNotificationToRow } from '../../lib/db-mappers';
-import { shouldReadCollectionFromSupabase } from '../../lib/database-config';
-import type { RealtimeChannel } from '@supabase/supabase-js';
+import { dualWrite } from './utils';
+import { firestoreNotificationToRow } from '../../lib/db-mappers';
 
 /** The centre and the badge only need the recent page; older rows load on demand. */
 const NOTIFICATIONS_PAGE_SIZE = 100;
@@ -40,32 +37,24 @@ export interface NotificationRecord {
   mergedCount?: number;
 }
 
+/**
+ * Notifications are still written to Firestore by `createNotification` and the channel-mention
+ * batch (neither dual-writes). The Supabase `notifications` table is empty, so reading it from
+ * here hid every row from the centre while the Firestore-backed badge still counted them. Reads
+ * stay on Firestore until notification writes are migrated and the table is backfilled; mark-read
+ * and delete still dual-write.
+ */
 export class NotificationsRepository {
   async listForUser(userId: string): Promise<NotificationRecord[]> {
-    return dualRead(
-      async () => {
-        const { getDocs } = await import('firebase/firestore');
-        const q = query(
-          collection(db, 'notifications'),
-          where('recipientId', '==', userId),
-          orderBy('createdAt', 'desc'),
-          limit(NOTIFICATIONS_PAGE_SIZE)
-        );
-        const snap = await getDocs(q);
-        return snap.docs.map((d) => ({ id: d.id, ...d.data() } as NotificationRecord));
-      },
-      async () => {
-        const { data, error } = await getSupabase()
-          .from('notifications')
-          .select('*')
-          .eq('recipient_id', userId)
-          .order('created_at', { ascending: false })
-          .limit(NOTIFICATIONS_PAGE_SIZE);
-        if (error) throw error;
-        return (data || []).map((row) => supabaseNotificationToApp(row as Record<string, unknown>) as NotificationRecord);
-      },
-      'notifications'
+    const { getDocs } = await import('firebase/firestore');
+    const q = query(
+      collection(db, 'notifications'),
+      where('recipientId', '==', userId),
+      orderBy('createdAt', 'desc'),
+      limit(NOTIFICATIONS_PAGE_SIZE)
     );
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() } as NotificationRecord));
   }
 
   subscribe(
@@ -73,12 +62,6 @@ export class NotificationsRepository {
     onData: (notifications: NotificationRecord[]) => void,
     onError?: (error: unknown) => void
   ): () => void {
-    const useSupabase = shouldReadCollectionFromSupabase('notifications');
-
-    if (useSupabase) {
-      return this.subscribeSupabase(userId, onData, onError);
-    }
-
     const q = query(
       collection(db, 'notifications'),
       where('recipientId', '==', userId),
@@ -96,45 +79,6 @@ export class NotificationsRepository {
     );
 
     return unsubscribe;
-  }
-
-  private subscribeSupabase(
-    userId: string,
-    onData: (notifications: NotificationRecord[]) => void,
-    onError?: (error: unknown) => void
-  ): () => void {
-    let channel: RealtimeChannel | null = null;
-
-    const fetchInitial = async () => {
-      try {
-        const items = await this.listForUser(userId);
-        onData(items);
-      } catch (err) {
-        onError?.(err);
-      }
-    };
-
-    fetchInitial();
-
-    channel = getSupabase()
-      .channel(`notifications:${userId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'notifications',
-          filter: `recipient_id=eq.${userId}`,
-        },
-        () => {
-          fetchInitial();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      if (channel) getSupabase().removeChannel(channel);
-    };
   }
 
   async markRead(notificationId: string): Promise<void> {
