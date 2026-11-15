@@ -345,7 +345,7 @@ export default function ChannelSidebar({
               {unreadCount > 0 && mentions === 0 && !active && <span className="w-2 h-2 rounded-full bg-primary" aria-label="Unread messages" />}
               {mentions > 0 && (
                 <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[11px] font-semibold flex items-center justify-center" aria-label={`${mentions} mentions`}>
-                  {mentions > 99 ? '99+' : mentions}
+                  @{mentions > 99 ? '99+' : mentions}
                 </span>
               )}
             </span>

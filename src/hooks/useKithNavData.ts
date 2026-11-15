@@ -20,6 +20,7 @@ export function useKithNavData(user: any) {
   const [totalUnreadDMs, setTotalUnreadDMs] = useState(0);
   const [joinedCommunities, setJoinedCommunities] = useState<any[]>([]);
   const [communityUnreads, setCommunityUnreads] = useState<Record<string, number>>({});
+  const [communityMentions, setCommunityMentions] = useState<Record<string, number>>({});
   const [channelUnreads, setChannelUnreads] = useState<Record<string, number>>({});
 
   useEffect(() => {
@@ -28,6 +29,7 @@ export function useKithNavData(user: any) {
       setTotalUnreadDMs(0);
       setJoinedCommunities([]);
       setCommunityUnreads({});
+      setCommunityMentions({});
       return;
     }
 
@@ -64,6 +66,7 @@ export function useKithNavData(user: any) {
         // DMs have their own badge; the bell only counts everything else.
         let bellCount = 0;
         const unreads: Record<string, number> = {};
+        const mentions: Record<string, number> = {};
         notifSnap.docs.forEach((d) => {
           const data = d.data();
           if (!isDirectMessageType(data.type, data.content, data.channelId)) bellCount += 1;
@@ -75,10 +78,14 @@ export function useKithNavData(user: any) {
             ) ? data.relatedId : null);
           if (communityId) {
             unreads[communityId] = (unreads[communityId] || 0) + 1;
+            if (data.type === 'channel_mention') {
+              mentions[communityId] = (mentions[communityId] || 0) + 1;
+            }
           }
         });
         setUnreadNotifications(bellCount);
         setCommunityUnreads(unreads);
+        setCommunityMentions(mentions);
       },
       (error) => {
         handleFirestoreError(error, OperationType.LIST, 'notifications');
@@ -206,5 +213,6 @@ export function useKithNavData(user: any) {
     totalUnreadDMs,
     joinedCommunities,
     communityUnreads: combinedCommunityUnreads,
+    communityMentions,
   };
 }

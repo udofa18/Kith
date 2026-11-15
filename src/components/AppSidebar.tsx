@@ -478,7 +478,7 @@ export default function AppSidebar({ user }: { user: any }) {
 
   const [showProfilePopup, setShowProfilePopup] = useState(false);
   const { theme, toggleTheme } = useKithTheme(user);
-  const { unreadNotifications, totalUnreadDMs, joinedCommunities, communityUnreads } =
+  const { unreadNotifications, totalUnreadDMs, joinedCommunities, communityUnreads, communityMentions } =
     useKithNavData(user);
 
   const profileButtonRef = useRef<HTMLButtonElement>(null);
@@ -832,6 +832,11 @@ export default function AppSidebar({ user }: { user: any }) {
                   <div className="flex flex-col gap-1">
                     {joinedCommunities.map((community) => {
                       const unreadCount = communityUnreads[community.id] || 0;
+                      const mentionCount = communityMentions[community.id] || 0;
+                      const hasMention = mentionCount > 0;
+                      const badgeCount = hasMention ? mentionCount : unreadCount;
+                      const badgeLabel = (cap: number) =>
+                        `${hasMention ? '@' : ''}${badgeCount > cap ? `${cap}+` : badgeCount}`;
                       const selected =
                         searchParams.get('view') === 'community' &&
                         searchParams.get('id') === community.id;
@@ -871,9 +876,12 @@ export default function AppSidebar({ user }: { user: any }) {
                                 className="h-full w-full object-cover"
                               />
                             </span>
-                            {!isExpanded && unreadCount > 0 && (
-                              <span className="absolute -right-1 -top-1 grid h-4 min-w-4 place-items-center rounded-full bg-[#ff6b4a] px-1 text-[8px] font-bold leading-none text-[#1a1210] ring-2 ring-[var(--sb-bg)]">
-                                {unreadCount > 9 ? '9+' : unreadCount}
+                            {!isExpanded && badgeCount > 0 && (
+                              <span
+                                className="absolute -right-1 -top-1 grid h-4 min-w-4 place-items-center rounded-full bg-[#ff6b4a] px-1 text-[8px] font-bold leading-none text-[#1a1210] ring-2 ring-[var(--sb-bg)]"
+                                aria-label={hasMention ? `${mentionCount} mentions` : `${unreadCount} unread messages`}
+                              >
+                                {badgeLabel(9)}
                               </span>
                             )}
                           </span>
@@ -884,9 +892,12 @@ export default function AppSidebar({ user }: { user: any }) {
                             </span>
                           )}
 
-                          {isExpanded && unreadCount > 0 && (
-                            <span className="grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-[#ff6b4a] px-1 text-[9px] font-bold leading-none text-[#1a1210]">
-                              {unreadCount > 99 ? '99+' : unreadCount}
+                          {isExpanded && badgeCount > 0 && (
+                            <span
+                              className="grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-[#ff6b4a] px-1 text-[9px] font-bold leading-none text-[#1a1210]"
+                              aria-label={hasMention ? `${mentionCount} mentions` : `${unreadCount} unread messages`}
+                            >
+                              {badgeLabel(99)}
                             </span>
                           )}
                         </Link>

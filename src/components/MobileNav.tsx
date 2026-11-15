@@ -147,7 +147,7 @@ export default function MobileNav({ user }: { user: any }) {
   const panelRef = useRef<HTMLDivElement>(null);
 
   const { theme, toggleTheme } = useKithTheme(user);
-  const { unreadNotifications, totalUnreadDMs, joinedCommunities, communityUnreads } =
+  const { unreadNotifications, totalUnreadDMs, joinedCommunities, communityUnreads, communityMentions } =
     useKithNavData(user);
 
   const xp = Number(user?.xp) || 0;
@@ -481,6 +481,9 @@ export default function MobileNav({ user }: { user: any }) {
                       <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
                         {joinedCommunities.map((community) => {
                           const unread = communityUnreads[community.id] || 0;
+                          const mentionCount = communityMentions[community.id] || 0;
+                          const hasMention = mentionCount > 0;
+                          const badgeCount = hasMention ? mentionCount : unread;
                           return (
                             <Link
                               key={community.id}
@@ -499,9 +502,12 @@ export default function MobileNav({ user }: { user: any }) {
                                   referrerPolicy="no-referrer"
                                   className="h-9 w-9 rounded-[11px] object-cover"
                                 />
-                                {unread > 0 && (
-                                  <span className="absolute -right-1 -top-1 grid h-4 min-w-4 place-items-center rounded-full bg-[#ff6b4a] px-1 text-[8px] font-bold leading-none text-[#1a1210] ring-2 ring-[var(--mn-bg)]">
-                                    {unread > 9 ? '9+' : unread}
+                                {badgeCount > 0 && (
+                                  <span
+                                    className="absolute -right-1 -top-1 grid h-4 min-w-4 place-items-center rounded-full bg-[#ff6b4a] px-1 text-[8px] font-bold leading-none text-[#1a1210] ring-2 ring-[var(--mn-bg)]"
+                                    aria-label={hasMention ? `${mentionCount} mentions` : `${unread} unread messages`}
+                                  >
+                                    {hasMention ? '@' : ''}{badgeCount > 9 ? '9+' : badgeCount}
                                   </span>
                                 )}
                               </span>
