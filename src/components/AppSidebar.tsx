@@ -851,7 +851,7 @@ export default function AppSidebar({ user }: { user: any }) {
                           }`}
                         >
                           <span
-                            className={`relative block shrink-0 overflow-hidden rounded-[12px] border transition-all ${
+                            className={`relative block shrink-0 rounded-[12px] border transition-all ${
                               isExpanded ? 'h-9 w-9' : 'h-10 w-10'
                             } ${
                               selected
@@ -859,16 +859,18 @@ export default function AppSidebar({ user }: { user: any }) {
                                 : 'border-[var(--sb-border)]'
                             }`}
                           >
-                            <img
-                              src={
-                                community.image && String(community.image).trim() !== ''
-                                  ? community.image
-                                  : `https://picsum.photos/seed/${community.id}/100/100`
-                              }
-                              alt=""
-                              referrerPolicy="no-referrer"
-                              className="h-full w-full object-cover"
-                            />
+                            <span className="block h-full w-full overflow-hidden rounded-[11px]">
+                              <img
+                                src={
+                                  community.image && String(community.image).trim() !== ''
+                                    ? community.image
+                                    : `https://picsum.photos/seed/${community.id}/100/100`
+                                }
+                                alt=""
+                                referrerPolicy="no-referrer"
+                                className="h-full w-full object-cover"
+                              />
+                            </span>
                             {!isExpanded && unreadCount > 0 && (
                               <span className="absolute -right-1 -top-1 grid h-4 min-w-4 place-items-center rounded-full bg-[#ff6b4a] px-1 text-[8px] font-bold leading-none text-[#1a1210] ring-2 ring-[var(--sb-bg)]">
                                 {unreadCount > 9 ? '9+' : unreadCount}
