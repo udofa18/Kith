@@ -528,18 +528,18 @@ export default function ProductEditor() {
                 </div>
                 <div className="flex gap-2">
                   <Button variant={isFree ? 'primary' : 'outline'} size="sm" onClick={() => set({ price: '' })}>Free</Button>
-                  <Button variant={!isFree ? 'primary' : 'outline'} size="sm" onClick={() => set({ price: form.price || '10' })}>Paid</Button>
+                  <Button variant={!isFree ? 'primary' : 'outline'} size="sm" onClick={() => set({ price: form.price || (form.currency === 'NGN' ? '5000' : '10') })}>Paid</Button>
                 </div>
                 {!isFree && (
                   <div className="grid gap-4 sm:grid-cols-2">
                     <div className="space-y-4">
                       <Field label="Price" htmlFor="p-price">
-                        <Input id="p-price" type="number" min={1} step={0.5} value={form.price} onChange={e => set({ price: e.target.value })} placeholder="10" />
+                        <Input id="p-price" type="number" min={1} step={form.currency === 'NGN' ? 100 : 0.5} value={form.price} onChange={e => set({ price: e.target.value })} placeholder={form.currency === 'NGN' ? '5000' : '10'} />
                       </Field>
                       <div className="space-y-2">
                         <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-muted-foreground">Currency</p>
                         <div className="flex gap-2">
-                          {(['USD', 'NGN'] as const).map(code => (
+                          {(['NGN', 'USD'] as const).map(code => (
                             <button
                               key={code}
                               type="button"

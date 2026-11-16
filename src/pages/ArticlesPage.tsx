@@ -335,7 +335,11 @@ export default function ArticlesPage() {
     feedRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
-  const canonical = typeof window !== 'undefined' ? `${window.location.origin}/articles` : '/articles';
+  // This is the signed-in app journal. The indexable journal lives on the
+  // public site at /articles, so canonical points there and this page stays
+  // out of the index.
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  const canonical = `${origin}/articles`;
   const description =
     'Long-form stories from the Kith community: engineering, design, business, money, careers and the craft of making things with other people.';
 
@@ -345,13 +349,13 @@ export default function ArticlesPage() {
     name: 'The Kith Journal',
     description,
     url: canonical,
-    isPartOf: { '@type': 'WebSite', name: 'Kith', url: typeof window !== 'undefined' ? window.location.origin : '' },
+    isPartOf: { '@type': 'WebSite', name: 'Kith', url: origin },
     mainEntity: {
       '@type': 'ItemList',
       itemListElement: filtered.slice(0, 10).map((article, index) => ({
         '@type': 'ListItem',
         position: index + 1,
-        url: `${canonical.replace('/articles', '')}/article/${article.id}`,
+        url: `${origin}/article/${article.id}`,
         name: article.title,
       })),
     },
@@ -366,17 +370,17 @@ export default function ArticlesPage() {
           name="keywords"
           content="Kith journal, articles, essays, technology, design, business, creator economy, community"
         />
-        <meta name="robots" content="index,follow" />
+        <meta name="robots" content="noindex,follow" />
         <link rel="canonical" href={canonical} />
         <meta property="og:type" content="website" />
         <meta property="og:title" content="The Kith Journal" />
         <meta property="og:description" content={description} />
         <meta property="og:url" content={canonical} />
-        <meta property="og:image" content={`${canonical.replace('/articles', '')}/logo.jpg`} />
+        <meta property="og:image" content={`${origin}/logo.jpg`} />
         <meta name="twitter:card" content="summary_large_image" />
         <meta name="twitter:title" content="The Kith Journal" />
         <meta name="twitter:description" content={description} />
-        <meta name="twitter:image" content={`${canonical.replace('/articles', '')}/logo.jpg`} />
+        <meta name="twitter:image" content={`${origin}/logo.jpg`} />
         <script type="application/ld+json">{JSON.stringify(listSchema)}</script>
       </Helmet>
 

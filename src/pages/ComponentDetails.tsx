@@ -437,7 +437,7 @@ export default function ComponentDetails() {
                       <span className="text-xs font-bold text-black/40 dark:text-white/40 uppercase tracking-widest">{product.productType}</span>
                    </div>
                    <div className="text-3xl font-bold text-teal-500">
-                     {Number(product.price) > 0 ? formatPrice(Math.round(Number(product.price) * 100), product.currency || 'USD') : 'Free'}
+                     {Number(product.price) > 0 ? formatPrice(Math.round(Number(product.price) * 100), product.currency || 'NGN') : 'Free'}
                    </div>
                 </div>
 

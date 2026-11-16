@@ -51,6 +51,8 @@ export default function EventDetails() {
   const [isLoaded, setIsLoaded] = useState(false);
   const { eventId } = useParams();
   const navigate = useNavigate();
+  // Signed-in members go back to the app calendar; guests to the public page.
+  const eventsHref = auth.currentUser ? '/app/events' : '/events';
   const [searchParams, setSearchParams] = useSearchParams();
   const [isBoostOpen, setIsBoostOpen] = useState(false);
   const [event, setEvent] = useState<any>(null);
@@ -262,7 +264,7 @@ export default function EventDetails() {
         <p className="mb-8 mt-2 max-w-md text-sm text-muted-foreground">
           The event you’re looking for doesn’t exist or has been removed.
         </p>
-        <Link to="/events" className="rounded-full bg-foreground px-6 py-3 text-sm font-bold text-background">
+        <Link to={eventsHref} className="rounded-full bg-foreground px-6 py-3 text-sm font-bold text-background">
           Back to Events
         </Link>
       </div>
@@ -356,7 +358,7 @@ export default function EventDetails() {
     try {
       await deleteDoc(doc(db, 'events', eventId));
       toast.success('Event deleted successfully');
-      navigate('/events');
+      navigate(eventsHref);
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `events/${eventId}`);
       toast.error('Failed to delete event');
@@ -373,7 +375,7 @@ export default function EventDetails() {
       <div className="mx-auto w-full max-w-[1180px] px-4 pb-28 pt-4 sm:px-8 sm:pt-6">
         {/* Top chrome */}
         <div className="mb-3 flex items-center justify-between">
-          <Link to="/events" className="group inline-flex items-center gap-2 text-[12px] font-semibold text-muted-foreground transition-colors hover:text-foreground">
+          <Link to={eventsHref} className="group inline-flex items-center gap-2 text-[12px] font-semibold text-muted-foreground transition-colors hover:text-foreground">
             <span className="grid h-9 w-9 place-items-center rounded-full border border-border transition-transform group-hover:-translate-x-0.5">
               <ArrowLeft size={15} />
             </span>

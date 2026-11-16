@@ -39,7 +39,7 @@ export default function EventsSection({ settings, update, onNavigate }: SectionP
         title="Event defaults"
         description="What new events look like before you change anything in the event builder."
         action={
-          <Button variant="ghost" size="sm" onClick={() => navigate('/events')}>
+          <Button variant="ghost" size="sm" onClick={() => navigate('/app/events')}>
             Browse events
           </Button>
         }
@@ -198,13 +198,13 @@ export default function EventsSection({ settings, update, onNavigate }: SectionP
               icon: CalendarDays,
               title: 'Create an event',
               body: 'Start from a blank event or duplicate a past one.',
-              action: () => navigate('/events/create'),
+              action: () => navigate('/app/events'),
             },
             {
               icon: Video,
               title: 'Test your setup',
               body: 'Check camera, mic and screen share before going live.',
-              action: () => navigate('/events'),
+              action: () => navigate('/app/events'),
             },
           ].map(({ icon: Icon, title, body, action }) => (
             <button

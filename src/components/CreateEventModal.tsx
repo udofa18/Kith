@@ -30,7 +30,7 @@ const localTz = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
 const blank = (communityId?: string) => ({
   title: '', description: '', category: 'Tech', banner: '',
   hostType: communityId ? 'community' : 'user', selectedCommunityId: communityId || '',
-  visibility: 'public', isPaid: false, price: 0, currency: 'USD' as 'NGN' | 'USD', theme: '',
+  visibility: 'public', isPaid: false, price: 0, currency: 'NGN' as 'NGN' | 'USD', theme: '',
   startDate: '', startTime: '18:00', endDate: '', endTime: '20:00', timezone: localTz(),
   isOffline: false, locationName: '', locationAddress: '', locationCoords: null as { lat: number; lng: number } | null,
   onlineType: 'internal', externalPlatform: 'zoom', externalUrl: '', maxAttendees: 0,
@@ -424,7 +424,7 @@ export default function CreateEventModal({ isOpen, onClose, communityId, eventId
             <div className="mt-3 space-y-2">
               <div className="flex flex-wrap items-center gap-2">
                 <div className="inline-flex rounded-full border border-black/10 p-0.5 dark:border-white/10">
-                  {(['USD', 'NGN'] as const).map(code => (
+                  {(['NGN', 'USD'] as const).map(code => (
                     <button
                       key={code}
                       type="button"

@@ -38,7 +38,7 @@ export default function BillingSection(_props: SectionProps) {
           title="Browse marketplace"
           description="Templates, files, assets and services from other builders."
         >
-          <Button variant="ghost" size="sm" onClick={() => navigate('/marketplace')}>
+          <Button variant="ghost" size="sm" onClick={() => navigate('/app/marketplace')}>
             Open marketplace
           </Button>
         </SettingRow>

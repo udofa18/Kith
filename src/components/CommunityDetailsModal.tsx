@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { auth, db, handleFirestoreError, OperationType } from '../firebase';
 import { doc, getDoc, setDoc, deleteDoc, updateDoc, increment, collection, query, where, getDocs, limit, addDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
 import { motion, AnimatePresence } from 'motion/react';
@@ -27,6 +28,23 @@ export default function CommunityDetailsModal({ isOpen, onClose, communityId, on
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [requestStatus, setRequestStatus] = useState<'none' | 'pending' | 'approved' | 'rejected'>('none');
+  const navigate = useNavigate();
+
+  // The public discovery pages show this modal to signed-out visitors. Esc closes it, and the
+  // page behind it stays put while it's open.
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [isOpen, onClose]);
 
   useEffect(() => {
     if (isOpen && communityId) {
@@ -105,8 +123,11 @@ export default function CommunityDetailsModal({ isOpen, onClose, communityId, on
 
   const handleJoin = async () => {
     if (!auth.currentUser) {
-        toast.error("Please login to join communities", {
-            icon: '🔐',
+        // Public discovery: joining is an account action, so carry the visitor to sign-up instead
+        // of failing inside the modal.
+        onClose();
+        navigate('/login?mode=signup', {
+          state: { from: { pathname: window.location.pathname } },
         });
         return;
     }
@@ -524,13 +545,15 @@ export default function CommunityDetailsModal({ isOpen, onClose, communityId, on
                             ) : (
                                 <>{joining
                                   ? 'Joining…'
-                                  : approvedPayment
-                                    ? `Pay ${formatFee(joinFee!)} & join`
-                                    : joinFee && !needsApproval
-                                      ? `Join · ${formatFee(joinFee)}`
-                                      : needsApproval
-                                        ? 'Request to join'
-                                        : 'Join community'} <UserPlus size={20} /></>
+                                  : !auth.currentUser
+                                    ? needsApproval ? 'Sign in to request' : 'Sign in to join'
+                                    : approvedPayment
+                                      ? `Pay ${formatFee(joinFee!)} & join`
+                                      : joinFee && !needsApproval
+                                        ? `Join · ${formatFee(joinFee)}`
+                                        : needsApproval
+                                          ? 'Request to join'
+                                          : 'Join community'} <UserPlus size={20} /></>
                             )}
                           </button>
                         </div>

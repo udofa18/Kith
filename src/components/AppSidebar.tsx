@@ -745,10 +745,10 @@ export default function AppSidebar({ user }: { user: any }) {
               tone={TONES.communities}
             />
             <NavItem
-              to="/marketplace"
+              to="/app/marketplace"
               icon={Store}
               label="Marketplace"
-              active={isActive('/marketplace')}
+              active={isActive('/app/marketplace')}
               tone={TONES.marketplace}
             />
             {canSeeChallenges(user) && (
@@ -761,17 +761,17 @@ export default function AppSidebar({ user }: { user: any }) {
               />
             )}
             <NavItem
-              to="/articles"
+              to="/app/journal"
               icon={FileText}
               label="Articles"
-              active={isActive('/articles')}
+              active={isActive('/app/journal')}
               tone={TONES.articles}
             />
             <NavItem
-              to="/events"
+              to="/app/events"
               icon={Calendar}
               label="Events"
-              active={isActive('/events')}
+              active={isActive('/app/events')}
               tone={TONES.events}
             />
           </nav>

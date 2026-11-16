@@ -68,6 +68,8 @@ export default function ArticleView() {
   const { articleId } = useParams();
   const navigate = useNavigate();
   const articleRef = useRef<HTMLElement>(null);
+  // Signed-in readers return to the app journal; guests to the public one.
+  const journalHref = auth.currentUser ? '/app/journal' : '/articles';
 
   const [article, setArticle] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -139,15 +141,16 @@ export default function ArticleView() {
       try {
         const docRef = doc(db, 'articles', articleId);
         const snap = await getDoc(docRef);
+        const fallback = auth.currentUser ? '/app/journal' : '/articles';
         if (!snap.exists()) {
-          navigate('/articles', { replace: true });
+          navigate(fallback, { replace: true });
           return;
         }
 
         const data = snap.data();
         const isAuthor = data.authorUid === auth.currentUser?.uid;
         if (data.status !== 'published' && !isAuthor) {
-          navigate('/articles', { replace: true });
+          navigate(fallback, { replace: true });
           return;
         }
         if (cancelled) return;
@@ -510,7 +513,7 @@ export default function ArticleView() {
             size="icon-sm"
             onClick={() => {
               if ((window.history.state?.idx ?? 0) > 0) navigate(-1);
-              else navigate('/articles');
+              else navigate(journalHref);
             }}
             aria-label="Go back"
             className="shrink-0"
@@ -753,7 +756,7 @@ export default function ArticleView() {
                   {article.tags.map((tag: string) => (
                     <Link
                       key={tag}
-                      to="/articles"
+                      to={journalHref}
                       className="rounded-full border border-border bg-surface px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.1em] text-muted-foreground transition-colors hover:border-primary/25 hover:text-primary"
                     >
                       #{tag}
@@ -1003,7 +1006,7 @@ export default function ArticleView() {
                   {article.subcategory || 'A story from the Kith community.'}
                 </p>
                 <Link
-                  to="/articles"
+                  to={journalHref}
                   className="mt-3 inline-flex items-center gap-1 text-[11px] font-semibold text-primary hover:underline"
                 >
                   More like this
@@ -1031,7 +1034,7 @@ export default function ArticleView() {
                 <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-primary">Keep reading</p>
                 <h2 className="mt-0.5 font-display text-xl font-semibold tracking-[-0.04em]">Stories nearby</h2>
               </div>
-              <Link to="/articles" className="text-[11px] font-semibold text-primary hover:underline">
+              <Link to={journalHref} className="text-[11px] font-semibold text-primary hover:underline">
                 All stories
               </Link>
             </div>

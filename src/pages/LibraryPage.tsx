@@ -108,7 +108,7 @@ export default function LibraryPage() {
         <div className="rounded-[var(--ds-radius-lg)] border border-[var(--ds-border)] bg-[var(--ds-surface)] p-10 text-center">
           <BookOpen className="mx-auto mb-4 text-[var(--ds-muted-foreground)]" size={32} />
           <p className="font-semibold">No purchases yet</p>
-          <Link to="/marketplace" className="inline-block mt-4 text-[var(--ds-primary)] font-semibold">
+          <Link to="/app/marketplace" className="inline-block mt-4 text-[var(--ds-primary)] font-semibold">
             Browse the marketplace
           </Link>
         </div>

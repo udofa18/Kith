@@ -123,11 +123,11 @@ export default function Sidebar({ activeType }: SidebarProps) {
       <div className="glass rounded-3xl p-2 flex flex-col">
         <nav className="space-y-2">
           <NavLink to="/feed" icon={Clock} label="Latest" active={isActive('new')} />
-          <NavLink to="/articles" icon={FileText} label="Articles" active={isActive('articles')} />
+          <NavLink to="/app/journal" icon={FileText} label="Articles" active={isActive('app/journal')} />
           {canSeeChallenges(auth.currentUser) && (
             <NavLink to="/challenges" icon={Award} label="Challenges" active={isActive('challenges')} />
           )}
-          <NavLink to="/events" icon={Calendar} label="Events" active={isActive('events')} />
+          <NavLink to="/app/events" icon={Calendar} label="Events" active={isActive('app/events')} />
           <NavLink to="/feed?view=communities" icon={Users} label="Communities" active={activeType === 'communities' || activeType === 'community'} badgeCount={totalUnreadMessages} />
           <NavLink to="/feed?view=notifications" icon={Bell} label="Notifications" active={isActive('notifications')} badgeCount={totalUnreadNotifications} />
           <NavLink to="/feed?view=messages" icon={MessageSquare} label="Direct Messages" active={isActive('messages')} badgeCount={totalUnreadDMs} />

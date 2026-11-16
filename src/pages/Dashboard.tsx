@@ -400,7 +400,7 @@ export default function Dashboard() {
             icon={<Download size={20} />}
             title="Nothing bought yet"
             description="Products you buy from other creators show up here."
-            action={<Link to="/marketplace" className="text-sm font-semibold text-primary hover:underline">Browse the market</Link>}
+            action={<Link to="/app/marketplace" className="text-sm font-semibold text-primary hover:underline">Browse the market</Link>}
           />
         ) : (
           <ul className="space-y-3">

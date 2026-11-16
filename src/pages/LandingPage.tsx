@@ -22,7 +22,6 @@ import {
   Lock,
   MapPin,
   Megaphone,
-  Menu,
   MessageCircle,
   MessagesSquare,
   Mic,
@@ -45,11 +44,12 @@ import {
   Video,
   Volume2,
   Wallet,
-  X,
   Zap,
 } from 'lucide-react';
 import KithLogo from '../components/KithLogo';
 import KithStamp from '../components/KithStamp';
+import CommunityDiscoveryStrip from '../components/public/CommunityDiscoveryStrip';
+import { useCurrentUser } from '../contexts/CurrentUserContext';
 
 type IconType = React.ComponentType<{ size?: number; className?: string; strokeWidth?: number }>;
 
@@ -81,13 +81,6 @@ const faces = [
   'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&crop=faces&w=160&h=160&q=80',
   'https://images.unsplash.com/photo-1531123897727-8f129e1688ce?auto=format&fit=crop&crop=faces&w=160&h=160&q=80',
   'https://images.unsplash.com/photo-1508214751196-bcfd4ca60f91?auto=format&fit=crop&crop=faces&w=160&h=160&q=80',
-];
-
-const navLinks = [
-  { label: 'Communities', to: '/feed?view=communities' },
-  { label: 'Events', to: '/events' },
-  { label: 'Marketplace', to: '/marketplace' },
-  { label: 'Journal', to: '/articles' },
 ];
 
 const marqueeWords = [
@@ -226,104 +219,6 @@ function FaceStack({
         <Face key={face} src={face} size={size} className="ring-2 ring-[#0e0b13]" />
       ))}
     </div>
-  );
-}
-
-function Nav() {
-  const [open, setOpen] = useState(false);
-
-  return (
-    <header className="sticky top-0 z-50 border-b border-[#ffffff0d] bg-[#0e0b13]/82 backdrop-blur-xl">
-      <div className="mx-auto flex h-[72px] max-w-[1240px] items-center gap-8 px-5 md:px-8">
-        <Link to="/" className="flex shrink-0 items-center gap-2.5" onClick={() => setOpen(false)}>
-          <span className="grid h-9 w-9 place-items-center overflow-hidden rounded-[11px] bg-[#f7f2e8]">
-            <KithLogo size={30} />
-          </span>
-          <span className="font-display text-[22px] font-semibold tracking-[-0.05em] text-[#f7f2e8]">
-            kith
-          </span>
-        </Link>
-
-        <nav className="hidden items-center gap-7 md:flex">
-          {navLinks.map((link) => (
-            <Link
-              key={link.label}
-              to={link.to}
-              className="text-sm text-[#f7f2e8]/55 transition-colors hover:text-[#f7f2e8]"
-            >
-              {link.label}
-            </Link>
-          ))}
-        </nav>
-
-        <div className="ml-auto hidden items-center gap-2 md:flex">
-          <Link
-            to="/login"
-            className="rounded-full px-4 py-2 text-sm text-[#f7f2e8]/60 transition-colors hover:text-[#f7f2e8]"
-          >
-            Sign in
-          </Link>
-          <Link
-            to="/login?mode=signup"
-            className="group inline-flex items-center gap-2 rounded-full bg-[#f7f2e8] px-5 py-2.5 text-sm font-semibold text-[#171120] transition-transform hover:-translate-y-0.5"
-          >
-            Join Kith
-            <ArrowUpRight size={15} className="transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
-          </Link>
-        </div>
-
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          aria-label={open ? 'Close menu' : 'Open menu'}
-          aria-expanded={open}
-          className="ml-auto grid h-10 w-10 place-items-center rounded-full border border-[#ffffff14] text-[#f7f2e8] md:hidden"
-        >
-          {open ? <X size={18} /> : <Menu size={18} />}
-        </button>
-      </div>
-
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.28 }}
-            className="overflow-hidden border-t border-[#ffffff0d] md:hidden"
-          >
-            <div className="flex flex-col gap-1 px-5 py-4">
-              {navLinks.map((link) => (
-                <Link
-                  key={link.label}
-                  to={link.to}
-                  onClick={() => setOpen(false)}
-                  className="rounded-xl px-3 py-3 text-sm text-[#f7f2e8]/70 transition-colors hover:bg-[#ffffff08] hover:text-[#f7f2e8]"
-                >
-                  {link.label}
-                </Link>
-              ))}
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                <Link
-                  to="/login"
-                  onClick={() => setOpen(false)}
-                  className="rounded-full border border-[#ffffff16] px-4 py-2.5 text-center text-sm text-[#f7f2e8]/70"
-                >
-                  Sign in
-                </Link>
-                <Link
-                  to="/login?mode=signup"
-                  onClick={() => setOpen(false)}
-                  className="rounded-full bg-[#f7f2e8] px-4 py-2.5 text-center text-sm font-semibold text-[#171120]"
-                >
-                  Join Kith
-                </Link>
-              </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </header>
   );
 }
 
@@ -518,7 +413,7 @@ function HeroApp() {
               <Trophy size={10} /> Open bounty
             </div>
             <p className="mt-1.5 text-[10px] font-semibold leading-tight">Rebrand the library</p>
-            <p className="mt-1 text-[11px] font-extrabold text-[#ff6b4a]">$2,500</p>
+            <p className="mt-1 text-[11px] font-extrabold text-[#ff6b4a]">₦250,000</p>
           </div>
         </aside>
       </div>
@@ -527,6 +422,7 @@ function HeroApp() {
 }
 
 function Hero() {
+  const user = useCurrentUser();
   return (
     <section className="relative overflow-hidden pb-16 pt-10 md:pb-24 md:pt-16">
       <div className="relative mx-auto grid max-w-[1240px] items-center gap-14 px-5 md:px-8 lg:grid-cols-[1.02fr_0.98fr] lg:gap-10">
@@ -567,18 +463,18 @@ function Hero() {
             className="mt-9 flex flex-col gap-3 sm:flex-row"
           >
             <Link
-              to="/feed?view=communities"
+              to={user ? '/feed' : '/login?mode=signup'}
               className="group inline-flex items-center justify-center gap-2 rounded-full bg-[#f7f2e8] px-7 py-3.5 text-base font-semibold text-[#171120] transition-transform hover:-translate-y-0.5"
             >
-              Find your community
+              Open Kith
               <ArrowRight size={18} className="transition-transform group-hover:translate-x-0.5" />
             </Link>
             <Link
-              to="/events"
+              to="/communities"
               className="group inline-flex items-center justify-center gap-2 rounded-full border border-[#ffffff1c] px-7 py-3.5 text-base text-[#f7f2e8]/75 transition-colors hover:border-[#ffffff3d] hover:text-[#f7f2e8]"
             >
-              <Play size={16} />
-              See what&apos;s happening
+              <Compass size={16} />
+              Browse communities
             </Link>
           </motion.div>
 
@@ -638,7 +534,7 @@ function Hero() {
               </span>
               <div>
                 <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-[#f7f2e8]/40">Open bounty</p>
-                <p className="text-sm font-semibold text-[#f7f2e8]">$2,500 prize pool</p>
+                <p className="text-sm font-semibold text-[#f7f2e8]">₦250,000 prize pool</p>
               </div>
             </div>
             <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-[#ffffff0f]">
@@ -880,7 +776,7 @@ function EventMock() {
         </div>
       </div>
       <div className="mt-2 flex flex-wrap gap-1.5">
-        {['This week', 'In person', '$12'].map((chip) => (
+        {['This week', 'In person', '₦5,000'].map((chip) => (
           <span key={chip} className="rounded-full border border-[#ffffff12] px-2 py-0.5 text-[9px] text-[#f7f2e8]/45">
             {chip}
           </span>
@@ -895,7 +791,7 @@ function MarketMock() {
     {
       title: 'The Quiet Web',
       type: 'E-book',
-      price: '$18',
+      price: '₦4,500',
       icon: BookOpen,
       cover: 'from-[#ffb65c] via-[#ff8f62] to-[#ff6b4a]',
       text: 'text-[#2c1810]',
@@ -903,7 +799,7 @@ function MarketMock() {
     {
       title: 'Craft & Commerce',
       type: 'Course',
-      price: '$64',
+      price: '₦18,000',
       icon: Play,
       cover: 'from-[#b69cff] via-[#8d7bdf] to-[#5b4bb5]',
       text: 'text-[#171120]',
@@ -911,7 +807,7 @@ function MarketMock() {
     {
       title: 'Grain & Grid',
       type: 'Assets',
-      price: '$12',
+      price: '₦3,500',
       icon: Layers,
       cover: 'from-[#82e6c8] via-[#57cbb0] to-[#2a9d87]',
       text: 'text-[#102720]',
@@ -1091,7 +987,7 @@ function Bento() {
           eyebrow="Communities & channels"
           title="A home base that feels lived in."
           copy="Chat, posts, announcements, voice rooms and a live stage — arranged the way your people actually talk."
-          link="/feed?view=communities"
+          link="/communities"
           linkLabel="Browse communities"
           accent="#ff6b4a"
           delay={0}
@@ -1119,7 +1015,7 @@ function Bento() {
           eyebrow="Live rooms"
           title="Show up face to face."
           copy="Host a workshop, a listening room or a late-night co-working session. Chat, polls and Q&A are built in."
-          link="/feed?view=communities"
+          link="/communities"
           linkLabel="Explore live rooms"
           accent="#82e6c8"
           delay={0}
@@ -1376,7 +1272,7 @@ function WorkShowcase() {
         </div>
 
         <div className="mt-4 flex items-end gap-3">
-          <p className="text-4xl font-extrabold tracking-[-0.07em]">$8,420</p>
+          <p className="text-4xl font-extrabold tracking-[-0.07em]">₦1,240,000</p>
           <span className="mb-1 flex items-center gap-0.5 rounded-full bg-[#82e6c8]/30 px-1.5 py-0.5 text-[8px] font-bold text-[#1d6b58]">
             <TrendingUp size={8} /> 18%
           </span>
@@ -1400,9 +1296,9 @@ function WorkShowcase() {
 
         <div className="mt-4 space-y-2 border-t border-[#211a28]/10 pt-3">
           {[
-            ['The Quiet Web · ebook', '+$18'],
-            ['Craft & Commerce · course', '+$64'],
-            ['Library rebrand · bounty', '+$2,500'],
+            ['The Quiet Web · ebook', '+₦4,500'],
+            ['Craft & Commerce · course', '+₦18,000'],
+            ['Library rebrand · bounty', '+₦250,000'],
           ].map(([label, value]) => (
             <div key={label} className="flex items-center justify-between text-[9px]">
               <span className="text-[#211a28]/55">{label}</span>
@@ -1418,7 +1314,7 @@ function WorkShowcase() {
         className="absolute -right-4 -top-6 hidden w-[176px] rounded-2xl border border-[#ffffff14] bg-[#171120] p-3 shadow-2xl sm:block"
       >
         <p className="text-[8px] font-bold uppercase tracking-[0.16em] text-[#f7f2e8]/35">Next payout</p>
-        <p className="mt-1 text-lg font-extrabold text-[#f7f2e8]">$3,280</p>
+        <p className="mt-1 text-lg font-extrabold text-[#f7f2e8]">₦480,000</p>
         <p className="text-[8px] text-[#f7f2e8]/40">Friday · to your account</p>
         <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[#ffffff0f]">
           <div className="h-full w-[78%] rounded-full bg-gradient-to-r from-[#82e6c8] to-[#ffb65c]" />
@@ -1436,7 +1332,7 @@ function WorkShowcase() {
           </div>
           <div className="min-w-0">
             <p className="truncate text-[9px] font-semibold text-[#f7f2e8]">The Quiet Web</p>
-            <p className="text-[8px] text-[#f7f2e8]/40">E-book · $18</p>
+            <p className="text-[8px] text-[#f7f2e8]/40">E-book · ₦4,500</p>
             <p className="mt-0.5 flex items-center gap-0.5 text-[8px] text-[#82e6c8]">
               <CheckCircle2 size={8} /> 214 sold
             </p>
@@ -1471,7 +1367,7 @@ function Showcase() {
         'Live stage with chat, polls and Q&A built in',
         'Roles, invites and private spaces for your people',
       ],
-      link: '/feed?view=communities',
+      link: '/communities',
       linkLabel: 'Explore communities',
     },
     work: {
@@ -2026,7 +1922,7 @@ function FinalCta() {
               <ArrowRight size={17} className="transition-transform group-hover:translate-x-0.5" />
             </Link>
             <Link
-              to="/feed?view=communities"
+              to="/communities"
               className="inline-flex items-center justify-center gap-2 rounded-full border border-[#ffffff2b] px-8 py-3.5 text-base text-[#f7f2e8]/80 transition-colors hover:border-[#ffffff55] hover:text-[#f7f2e8]"
             >
               Browse communities
@@ -2049,101 +1945,9 @@ function FinalCta() {
   );
 }
 
-function Footer() {
-  const columns = [
-    {
-      title: 'Explore',
-      links: [
-        { label: 'Communities', to: '/feed?view=communities' },
-        { label: 'Events', to: '/events' },
-        { label: 'Marketplace', to: '/marketplace' },
-        { label: 'Journal', to: '/articles' },
-      ],
-    },
-    {
-      title: 'Your Kith',
-      links: [
-        { label: 'Feed', to: '/feed' },
-        { label: 'Creator profiles', to: '/feed' },
-        { label: 'Messages', to: '/feed?view=messages' },
-        { label: 'Notifications', to: '/feed?view=notifications' },
-      ],
-    },
-    {
-      title: 'Get started',
-      links: [
-        { label: 'Join Kith', to: '/login?mode=signup' },
-        { label: 'Sign in', to: '/login' },
-        { label: 'Create a community', to: '/login?mode=signup' },
-        { label: 'Sell your work', to: '/marketplace' },
-      ],
-    },
-  ];
-
-  return (
-    <footer className="relative z-10 border-t border-[#ffffff0d]">
-      <div className="mx-auto max-w-[1240px] px-5 py-14 md:px-8">
-        <div className="grid gap-10 lg:grid-cols-[1.2fr_2fr]">
-          <div>
-            <Link to="/" className="flex items-center gap-2.5">
-              <span className="grid h-9 w-9 place-items-center overflow-hidden rounded-[11px] bg-[#f7f2e8]">
-                <KithLogo size={30} />
-              </span>
-              <span className="font-display text-[22px] font-semibold tracking-[-0.05em] text-[#f7f2e8]">
-                kith
-              </span>
-            </Link>
-            <p className="mt-4 max-w-xs text-sm leading-relaxed text-[#f7f2e8]/40">
-              A home for communities, conversation, live rooms, events and creative work. Made for
-              people who make room for others.
-            </p>
-            <div className="mt-5 flex items-center gap-3">
-              <FaceStack size={28} count={4} />
-              <p className="text-xs text-[#f7f2e8]/35">People are already here.</p>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-8 sm:grid-cols-3">
-            {columns.map((column) => (
-              <div key={column.title}>
-                <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-[#f7f2e8]/30">
-                  {column.title}
-                </p>
-                <ul className="mt-4 space-y-2.5">
-                  {column.links.map((link) => (
-                    <li key={link.label}>
-                      <Link
-                        to={link.to}
-                        className="text-sm text-[#f7f2e8]/55 transition-colors hover:text-[#f7f2e8]"
-                      >
-                        {link.label}
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="mt-12 flex flex-col gap-3 border-t border-[#ffffff0d] pt-6 text-xs text-[#f7f2e8]/30 sm:flex-row sm:items-center sm:justify-between">
-          <p>© 2026 Kith. Made for the people who make room.</p>
-          <div className="flex items-center gap-4">
-            <span>Built with care</span>
-            <span className="h-1 w-1 rounded-full bg-[#f7f2e8]/20" />
-            <a href="#top" className="transition-colors hover:text-[#f7f2e8]/70">
-              Back to top
-            </a>
-          </div>
-        </div>
-      </div>
-    </footer>
-  );
-}
-
 export default function LandingPage() {
   return (
-    <div id="top" className="landing-page relative min-h-screen overflow-x-hidden">
+    <div className="landing-page relative min-h-screen overflow-x-hidden">
       <div className="landing-grain" />
       <div className="pointer-events-none fixed inset-0 -z-10">
         <div className="absolute -top-40 left-1/2 h-[700px] w-[1000px] -translate-x-1/2 rounded-full bg-[radial-gradient(ellipse_at_top,rgba(255,107,74,0.17),transparent_70%)] blur-3xl" />
@@ -2152,10 +1956,10 @@ export default function LandingPage() {
         <div className="landing-grid absolute inset-0 opacity-40" />
       </div>
 
-      <Nav />
       <main className="relative z-10">
         <Hero />
         <Marquee />
+        <CommunityDiscoveryStrip />
         <Bento />
         <Showcase />
         <EventsSection />
@@ -2165,7 +1969,6 @@ export default function LandingPage() {
         <Faq />
         <FinalCta />
       </main>
-      <Footer />
     </div>
   );
 }

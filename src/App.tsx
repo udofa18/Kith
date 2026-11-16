@@ -18,6 +18,12 @@ import { canSeeChallenges, isAdminUser } from './lib/features';
 
 // Pages
 import LandingPage from './pages/LandingPage';
+import CommunitiesPage from './pages/CommunitiesPage';
+import CreatorsPage from './pages/CreatorsPage';
+import HelpPage from './pages/HelpPage';
+import PublicEventsPage from './pages/PublicEventsPage';
+import PublicMarketplacePage from './pages/PublicMarketplacePage';
+import PublicJournalPage from './pages/PublicJournalPage';
 import MarketplacePage from './pages/MarketplacePage';
 import ProductPage from './pages/ProductPage';
 import CreatorProfile from './pages/CreatorProfile';
@@ -49,6 +55,7 @@ import DesignSystemPage from './pages/DesignSystemPage';
 import AppSidebar from './components/AppSidebar';
 import MobileNav from './components/MobileNav';
 import ComposeFab from './components/ComposeDialog';
+import PublicShell from './components/public/PublicShell';
 
 import { LiveSessionProvider, useLiveSession } from './contexts/LiveSessionContext';
 import { CurrentUserProvider } from './contexts/CurrentUserContext';
@@ -123,28 +130,39 @@ function AppRoutes({ user, onboardingRequired }: { user: any, onboardingRequired
 
   return (
     <Routes>
-      {/* Public */}
+      {/* Public site: always public, for guests and members alike */}
       <Route path="/" element={<LandingPage />} />
       <Route path="/login" element={<AuthPage />} />
       <Route path="/design-system" element={<DesignSystemPage />} />
-      <Route path="/marketplace" element={<MarketplacePage />} />
+      <Route path="/communities" element={<CommunitiesPage />} />
+      <Route path="/events" element={<PublicEventsPage />} />
+      <Route path="/marketplace" element={<PublicMarketplacePage />} />
+      <Route path="/articles" element={<PublicJournalPage />} />
+      <Route path="/creators" element={<CreatorsPage />} />
+      <Route path="/help" element={<HelpPage />} />
+      <Route path="/journal" element={<Navigate to="/articles" replace />} />
       <Route path="/explore" element={<Navigate to="/marketplace" replace />} />
       <Route path="/products/:id" element={<ProductPage />} />
       <Route path="/components/:id" element={<ProductRedirect />} />
       <Route path="/creators/:id" element={<CreatorProfile />} />
       <Route path="/success" element={<Navigate to="/library" replace />} />
-      <Route path="/feed" element={<SocialFeed />} />
-      <Route path="/post/:id" element={<PostDetails />} />
+      <Route path="/feed" element={priv(<SocialFeed />)} />
+      <Route path="/post/:id" element={priv(<PostDetails />)} />
       <Route path="/challenges" element={challenge(<Challenges />)} />
       <Route path="/challenges/:challengeId" element={challenge(<ChallengeDetails />)} />
-      <Route path="/events" element={<EventsPage />} />
       <Route path="/events/:eventId" element={<EventDetails />} />
       <Route path="/live/:eventId" element={<LiveSession />} />
       <Route path="/live/:eventId/console" element={<LiveConsole />} />
-      <Route path="/articles" element={<ArticlesPage />} />
       <Route path="/article/:articleId" element={<ArticleView />} />
       <Route path="/community/:communityId" element={<CommunityRedirect />} />
       <Route path="/join/:inviteCode" element={<JoinRedirect />} />
+
+      {/* App: the live product, signed-in only */}
+      <Route path="/app" element={<Navigate to="/feed" replace />} />
+      <Route path="/app/communities" element={<Navigate to="/feed?view=communities" replace />} />
+      <Route path="/app/events" element={priv(<EventsPage />)} />
+      <Route path="/app/marketplace" element={priv(<MarketplacePage />)} />
+      <Route path="/app/journal" element={priv(<ArticlesPage />)} />
 
       {/* Signed-in only */}
       <Route path="/onboarding" element={priv(<Onboarding user={user} />)} />
@@ -177,14 +195,32 @@ function AppContent({ user, onboardingRequired }: { user: any, onboardingRequire
   const isDesktop = useMediaQuery('(min-width: 768px)');
   useNotificationStream(user);
   
-  const isLandingPage = location.pathname === '/';
   const isLoginPage = location.pathname === '/login';
   const isOnboardingPage = location.pathname === '/onboarding';
   const isLivePage = location.pathname.includes('/live');
 
-  // We only show the sidebar if not on landing/login/onboarding/live.
-  // Public users can still see the sidebar for navigation.
-  const showSidebar = !isLandingPage && !isLoginPage && !isOnboardingPage && !isLivePage;
+  // Marketing and discovery pages get the public header/footer. Detail pages
+  // (an event, a product, an article, a creator) stay on the public surface too,
+  // but keep their own back navigation instead of the full public chrome.
+  const publicChromePaths = new Set([
+    '/',
+    '/communities',
+    '/creators',
+    '/help',
+    '/events',
+    '/marketplace',
+    '/articles',
+    '/journal',
+  ]);
+  const isPublicChrome = publicChromePaths.has(location.pathname);
+  const isPublicSurface =
+    isPublicChrome ||
+    ['/events/', '/products/', '/article/', '/creators/'].some((prefix) =>
+      location.pathname.startsWith(prefix),
+    );
+
+  // The app sidebar belongs to the signed-in product, never to discovery.
+  const showSidebar = !isPublicSurface && !isLoginPage && !isOnboardingPage && !isLivePage;
 
   const queryParams = new URLSearchParams(location.search);
   // The community view keeps the open channel in the URL (?view=community&id=…&channelId=…).
@@ -204,7 +240,13 @@ function AppContent({ user, onboardingRequired }: { user: any, onboardingRequire
       {showSidebar && isDesktop && <AppSidebar user={user} />}
       <main className="min-h-0 flex-1 overflow-hidden transition-all duration-300 relative">
         <div className="h-full overflow-y-auto custom-scrollbar">
-          <AppRoutes user={user} onboardingRequired={onboardingRequired} />
+          {isPublicChrome ? (
+            <PublicShell>
+              <AppRoutes user={user} onboardingRequired={onboardingRequired} />
+            </PublicShell>
+          ) : (
+            <AppRoutes user={user} onboardingRequired={onboardingRequired} />
+          )}
         </div>
       </main>
       {showSidebar && !isDesktop && <MobileNav user={user} />}

@@ -83,7 +83,7 @@ function UpcomingEvents() {
   const upcoming = data?.upcoming ?? [];
 
   return (
-    <RailSection title="Upcoming events" action={{ label: 'All events', to: '/events' }}>
+    <RailSection title="Upcoming events" action={{ label: 'All events', to: '/app/events' }}>
       {isLoading ? <RailSkeleton rows={3} avatar /> : upcoming.length === 0 ? <RailEmpty>No upcoming events.</RailEmpty> : upcoming.map((event: any) => (
         <RailRow key={event.id} to={eventHref(event)}>
           <div className="w-10 shrink-0 text-center rounded-lg bg-primary/10 text-primary py-1">
@@ -142,7 +142,7 @@ function Articles() {
   });
 
   return (
-    <RailSection title="Recent articles" action={{ label: 'All', to: '/articles' }}>
+    <RailSection title="Recent articles" action={{ label: 'All', to: '/app/journal' }}>
       {isLoading ? <RailSkeleton rows={3} /> : articles.length === 0 ? <RailEmpty>No articles yet.</RailEmpty> : articles.map((a: any) => (
         <RailRow key={a.id} to={`/article/${a.id}`}>
           {a.coverImage && (

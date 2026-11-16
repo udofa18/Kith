@@ -104,7 +104,9 @@ export default function CreatorProfile() {
       <div className="max-w-[640px] mx-auto min-h-screen text-black dark:text-white lg:border-x border-black/10 dark:border-white/10">
         <PageHeader title="Profile" />
         <FeedEmpty icon={UserX} title="This account doesn't exist" body="The link may be broken, or the account may have been removed." action={
-          <Link to="/feed" className="px-4 py-2 rounded-full bg-primary text-white text-sm font-semibold hover:bg-primary/90">Back to feed</Link>
+          <Link to={me ? '/feed' : '/communities'} className="px-4 py-2 rounded-full bg-primary text-white text-sm font-semibold hover:bg-primary/90">
+            {me ? 'Back to feed' : 'Explore Kith'}
+          </Link>
         } />
       </div>
     );
@@ -139,10 +141,10 @@ export default function CreatorProfile() {
               : `${name} keeps their profile private. You can still see their work where it appears in communities and events.`}
           </p>
           <Link
-            to="/feed"
+            to={me ? '/feed' : '/communities'}
             className="mt-6 rounded-full bg-primary px-5 py-2 text-sm font-semibold text-white transition-colors hover:bg-primary/90"
           >
-            Back to feed
+            {me ? 'Back to feed' : 'Explore Kith'}
           </Link>
         </div>
       </div>

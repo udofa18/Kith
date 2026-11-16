@@ -3,7 +3,13 @@
  * Single source of truth for color, spacing, radius, shadow, and motion.
  */
 
-:root {
+/*
+ * The public surface (landing + discovery pages) is always warm ink, even when
+ * the signed-in app is set to light. The extra selector keeps the dark palette
+ * scoped to `.public-shell` without duplicating every token below.
+ */
+:root,
+html.light .public-shell {
   /* Brand */
   --ds-brand-ink: #0e0b13;
   --ds-brand-ink-soft: #15101d;

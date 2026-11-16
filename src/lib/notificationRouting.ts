@@ -72,11 +72,11 @@ export function notificationTarget(
 
     case 'purchase':
     case 'payout':
-      return '/marketplace';
+      return '/app/marketplace';
 
     case 'event_invite':
     case 'event_reminder':
-      if (!relatedId) return '/events';
+      if (!relatedId) return '/app/events';
       // Instant-session invites ("is live now") open the room. Scheduled event
       // invites keep their public details page.
       return /live now|live session|instant session/i.test(content)

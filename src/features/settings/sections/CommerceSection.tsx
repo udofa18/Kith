@@ -25,7 +25,7 @@ export default function CommerceSection({ settings, update, onNavigate }: Sectio
         title="Storefront"
         description="How your products show up across the marketplace and your profile."
         action={
-          <Button variant="ghost" size="sm" onClick={() => navigate('/marketplace')}>
+          <Button variant="ghost" size="sm" onClick={() => navigate('/app/marketplace')}>
             Marketplace
           </Button>
         }

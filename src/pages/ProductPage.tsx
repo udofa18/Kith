@@ -47,6 +47,8 @@ export default function ProductPage() {
   const { id = '' } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
+  // Signed-in members go back to the app marketplace; guests to the public page.
+  const marketHref = auth.currentUser ? '/app/marketplace' : '/marketplace';
 
   const [uid, setUid] = useState<string | null>(auth.currentUser?.uid ?? null);
   const [product, setProduct] = useState<ProductDetail | null>(null);
@@ -152,7 +154,7 @@ export default function ProductPage() {
           title="Product not found"
           description="It may have been removed or is not published yet."
           action={
-            <Link to="/marketplace" className="text-sm font-semibold text-primary hover:underline">
+            <Link to={marketHref} className="text-sm font-semibold text-primary hover:underline">
               Back to the market
             </Link>
           }

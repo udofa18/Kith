@@ -423,8 +423,8 @@ export async function downloadProduct(productId: string): Promise<void> {
   link.remove();
 }
 
-/** Default currency for new listings. Sellers can choose NGN or USD explicitly. */
-export const PAYMENT_CURRENCY: CheckoutCurrency = 'USD';
+/** Default currency for new listings. Kith prices in naira; USD remains available per listing. */
+export const PAYMENT_CURRENCY: CheckoutCurrency = 'NGN';
 export const DEFAULT_CURRENCY = PAYMENT_CURRENCY;
 
 /**
@@ -453,14 +453,14 @@ export function formatPrice(minor: number, currency?: string | null): string {
       : PAYMENT_CURRENCY;
   const amount = (Number.isFinite(minor) ? minor : 0) / 100;
   try {
-    return new Intl.NumberFormat('en-US', { style: 'currency', currency: code }).format(amount);
+    return new Intl.NumberFormat('en-NG', { style: 'currency', currency: code }).format(amount);
   } catch {
     return `${code} ${amount.toFixed(2)}`;
   }
 }
 
-/** Events store their price in major units (e.g. 10 = 10 naira). Returns 'Free' for free events. */
+/** Events store their price in major units (e.g. 5000 = ₦5,000). Returns 'Free' for free events. */
 export function formatEventPrice(event: { isPaid?: boolean; price?: number; currency?: string }): string {
   if (!event.isPaid || !(Number(event.price) > 0)) return 'Free';
-  return formatPrice(Math.round(Number(event.price) * 100), event.currency === 'NGN' ? 'NGN' : 'USD');
+  return formatPrice(Math.round(Number(event.price) * 100), event.currency === 'USD' ? 'USD' : 'NGN');
 }

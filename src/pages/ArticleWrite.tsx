@@ -120,7 +120,7 @@ export default function ArticleWrite() {
         const data = snap.data();
         if (data.authorUid !== auth.currentUser?.uid) {
           toast.error('You can only edit your own stories');
-          navigate('/articles', { replace: true });
+          navigate('/app/journal', { replace: true });
           return;
         }
         setTitle(data.title || '');
@@ -382,7 +382,7 @@ export default function ArticleWrite() {
       {/* Studio header */}
       <div className="sticky top-0 z-40 border-b border-border bg-background/85 backdrop-blur-md">
         <div className="mx-auto flex max-w-[1200px] items-center gap-2 px-3 py-2 sm:px-6">
-          <Button variant="ghost" size="icon-sm" onClick={() => navigate('/articles')} aria-label="Back to journal">
+          <Button variant="ghost" size="icon-sm" onClick={() => navigate('/app/journal')} aria-label="Back to journal">
             <ArrowLeft size={18} />
           </Button>
 

@@ -161,7 +161,7 @@ export default function MobileNav({ user }: { user: any }) {
   const isCircles =
     location.pathname === '/feed' && (view === 'communities' || view === 'community');
   const isMessages = location.pathname === '/feed' && view === 'messages';
-  const isMarket = location.pathname === '/marketplace' || location.pathname.startsWith('/products/');
+  const isMarket = location.pathname === '/app/marketplace' || location.pathname.startsWith('/products/');
   const isMoreSection = !isFeedHome && !isCircles && !isMessages && !isMarket;
 
   const closeMore = () => setMoreOpen(false);
@@ -233,14 +233,14 @@ export default function MobileNav({ user }: { user: any }) {
         ]
       : []),
     {
-      to: '/articles',
+      to: '/app/journal',
       icon: FileText,
       label: 'Articles',
       hint: 'Ideas and craft',
       tone: TONES.articles,
     },
     {
-      to: '/events',
+      to: '/app/events',
       icon: Calendar,
       label: 'Events',
       hint: 'Meet in real time',
@@ -293,7 +293,7 @@ export default function MobileNav({ user }: { user: any }) {
             tone={TONES.circles}
           />
           <Tab
-            to="/marketplace"
+            to="/app/marketplace"
             icon={Store}
             label="Market"
             active={isMarket}
