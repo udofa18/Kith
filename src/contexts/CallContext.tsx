@@ -9,6 +9,9 @@ import React, { createContext, useCallback, useContext, useEffect, useRef, useSt
 import { addDoc, collection, doc, onSnapshot, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
 import { auth, db } from '../firebase';
 import { logCall } from '../features/messages/api';
+import {
+  closeBrowserNotifications, requestBrowserNotifications, showBrowserNotification,
+} from '../lib/browserNotifications';
 
 export type CallType = 'one-to-one' | 'group';
 export type MediaMode = 'voice' | 'video';
@@ -110,11 +113,14 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   // Incoming calls.
   useEffect(() => {
     if (!uid) { setIncomingCall(null); return; }
-    const q = query(collection(db, 'callSessions'), where('status', '==', 'ringing'), where('participantIds', 'array-contains', uid));
+    // Only array-contains here: adding an equality filter or an orderBy would require a
+    // composite index, and a missing index silently broke ringing on some deployments.
+    const q = query(collection(db, 'callSessions'), where('participantIds', 'array-contains', uid));
     return onSnapshot(q, snap => {
       const now = Date.now();
       const ringing = snap.docs
         .map(d => ({ id: d.id, ...d.data() } as CallSession))
+        .filter(c => c.status === 'ringing')
         .find(c => c.callerId !== uid && c.participants[uid]?.status === 'ringing' && now - (toMillis(c.createdAt) ?? now) < STALE_RING_MS);
 
       // Already on a call: tell the new caller we're busy instead of ringing over it.
@@ -185,9 +191,35 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     return () => { clearInterval(t); document.title = original; };
   }, [incomingCall?.id]);
 
+  // A browser notification reaches someone who is in another tab or app.
+  useEffect(() => {
+    if (!incomingCall) return;
+    const tag = `call-${incomingCall.id}`;
+    const kind = incomingCall.media === 'video' ? 'Video' : 'Voice';
+    const notify = () => {
+      if (!document.hidden) return;
+      void showBrowserNotification({
+        title: `${incomingCall.callerName || 'Someone'} is calling`,
+        body: `Incoming ${kind.toLowerCase()} call on Kith`,
+        tag,
+        icon: incomingCall.callerPhoto || undefined,
+        url: `/feed?view=messages&c=${incomingCall.chatId}`,
+        requireInteraction: true,
+      });
+    };
+    notify();
+    document.addEventListener('visibilitychange', notify);
+    return () => {
+      document.removeEventListener('visibilitychange', notify);
+      void closeBrowserNotifications(tag);
+    };
+  }, [incomingCall?.id]);
+
   const initiateCall: CallContextType['initiateCall'] = async (chatId, participantIds, type, media, callerMetadata, recipientsMetadata) => {
     const me = auth.currentUser?.uid;
     if (!me || activeRef.current) return;
+    // Called from a click, so this is a good moment to ask for notification access.
+    void requestBrowserNotifications();
 
     const participants: Record<string, CallParticipant> = {};
     for (const id of participantIds) {
@@ -215,6 +247,8 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     const me = auth.currentUser?.uid;
     if (!incomingCall || !me) return;
     const call = incomingCall;
+    // An accept click can ask for notifications too (Safari requires a gesture).
+    void requestBrowserNotifications();
     setIncomingCall(null);
     await updateDoc(doc(db, 'callSessions', call.id), {
       status: 'active',

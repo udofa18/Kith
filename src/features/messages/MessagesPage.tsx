@@ -9,6 +9,7 @@ import { nameOf, photoOf } from './format';
 import Inbox from './Inbox';
 import ChatView from './ChatView';
 import NewMessageDialog from './NewMessageDialog';
+import { requestBrowserNotifications } from '../../lib/browserNotifications';
 
 /**
  * Direct messages. The open chat lives in the URL (`?view=messages&c=<id>`), so the back button
@@ -35,6 +36,20 @@ export default function MessagesPage() {
   useEffect(() => {
     if (!uid) return;
     return subscribeConversations(uid, convs => { setConversations(convs); setLoading(false); setError(false); }, () => { setLoading(false); setError(true); });
+  }, [uid]);
+
+  // Calls show a browser notification while Kith is in another tab, so ask for
+  // permission where calls start. Browsers ignore this once it has been answered.
+  useEffect(() => {
+    if (!uid) return;
+    try {
+      if (sessionStorage.getItem('kith:call-notify-asked') === '1') return;
+      sessionStorage.setItem('kith:call-notify-asked', '1');
+    } catch {
+      /* private mode can block sessionStorage; asking again is harmless */
+    }
+    const timer = setTimeout(() => { void requestBrowserNotifications(); }, 1200);
+    return () => clearTimeout(timer);
   }, [uid]);
 
   const openId = params.get('c');

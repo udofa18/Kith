@@ -120,7 +120,7 @@ function Row({ conv, me, selected, onSelect }: { conv: ConversationData; me: str
       </span>
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-1.5">
-          <span className={`truncate ${unread ? 'font-bold' : 'font-semibold'}`}>{nameOf(other)}</span>
+          <span className={`truncate text-sm ${unread ? 'font-bold' : 'font-semibold'}`}>{nameOf(other)}</span>
           <VerifiedBadge verified={!!other?.verified} />
           {pinned && <Pin size={12} className="shrink-0 text-black/40 dark:text-white/40 rotate-45" />}
           {muted && <BellOff size={12} className="shrink-0 text-black/40 dark:text-white/40" />}

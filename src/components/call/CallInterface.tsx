@@ -46,40 +46,123 @@ function useTimer(from: any) {
   return mmss(s);
 }
 
+/** Turn a media / connection error into something a person can act on. */
+function friendlyCallError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error ?? '');
+  const text = raw.toLowerCase();
+  if (text.includes('permission') || text.includes('notallowed')) {
+    return 'Allow microphone and camera access in your browser to join the call.';
+  }
+  if (text.includes('notfound') || text.includes('device')) {
+    return 'No microphone or camera was found. Check your device and try again.';
+  }
+  if (text.includes('secure') || text.includes('https')) {
+    return 'Calls need a secure (HTTPS) connection. Open Kith over HTTPS and try again.';
+  }
+  if (text.includes('token') || text.includes('unauthor')) {
+    return 'Your call session expired. Try the call again.';
+  }
+  return 'Couldn’t connect the call. Check your connection and try again.';
+}
+
+const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 /** Global call UI: incoming call, the call screen (full or minimised), and the end-of-call notice. */
 export default function CallInterface() {
   const { activeCall, incomingCall, outcome, acceptCall, declineCall, endCall, isMinimized, setIsMinimized } = useCall();
   const me = auth.currentUser?.uid;
   const [token, setToken] = useState<string | null>(null);
   const [tokenError, setTokenError] = useState<string | null>(null);
+  const [connectError, setConnectError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  // Set while the error screen is showing so tearing down LiveKit doesn't also end the call.
+  const connectionFailed = useRef(false);
 
   useLoop(RINGTONE, !!incomingCall && !activeCall);
   useLoop(DIALTONE, activeCall?.status === 'ringing' && activeCall.callerId === me);
 
-  // Fetch a room token once the call is answered.
+  // Fetch a room token once the call is answered. A proxy or a cold server can answer
+  // with HTML instead of JSON; parsing text first keeps Safari from showing its cryptic
+  // "The string did not match the expected pattern" error, and transient failures retry.
   useEffect(() => {
     setToken(null);
     setTokenError(null);
+    setConnectError(null);
+    connectionFailed.current = false;
     if (!activeCall || activeCall.status !== 'active' || !auth.currentUser) return;
     if (!LIVEKIT_URL) { setTokenError("Calls aren't set up on this site yet."); return; }
+    if (typeof window !== 'undefined' && !window.isSecureContext) {
+      setTokenError('Calls need a secure (HTTPS) connection. Open Kith over HTTPS and try again.');
+      return;
+    }
+
     let cancelled = false;
+    const callId = activeCall.id;
+
     (async () => {
-      try {
-        const user = auth.currentUser!;
-        const res = await fetch('/api/livekit-token', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await user.getIdToken()}` },
-          body: JSON.stringify({ eventId: `call_${activeCall.id}`, username: user.displayName || 'Member', photoURL: user.photoURL || '' }),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Could not connect');
-        if (!cancelled) setToken(data.token);
-      } catch (err: any) {
-        if (!cancelled) setTokenError(err.message || 'Could not connect');
+      let lastError = 'Could not connect the call';
+      for (let tryIndex = 0; tryIndex < 3 && !cancelled; tryIndex += 1) {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 15_000);
+        try {
+          const user = auth.currentUser!;
+          const res = await fetch('/api/livekit-token', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${await user.getIdToken(tryIndex > 0)}`,
+            },
+            body: JSON.stringify({ eventId: `call_${callId}`, username: user.displayName || 'Member', photoURL: user.photoURL || '' }),
+            signal: controller.signal,
+          });
+
+          const raw = await res.text();
+          let data: { token?: string; error?: string } | null = null;
+          try {
+            data = raw ? JSON.parse(raw) : null;
+          } catch {
+            data = null;
+          }
+
+          if (!res.ok) {
+            lastError = typeof data?.error === 'string' ? data.error : 'Could not connect the call';
+            const worthRetrying = res.status >= 500 || res.status === 429 || (res.status === 404 && !data);
+            if (worthRetrying) {
+              await wait(600 * (tryIndex + 1));
+              continue;
+            }
+            if (!cancelled) setTokenError(lastError);
+            return;
+          }
+
+          if (data?.token) {
+            if (!cancelled) setToken(data.token);
+            return;
+          }
+          lastError = 'Could not connect the call';
+          await wait(600 * (tryIndex + 1));
+        } catch (err: any) {
+          lastError = err?.name === 'AbortError'
+            ? 'The call service took too long to respond. Check your connection and try again.'
+            : 'Couldn’t reach the call service. Check your connection and try again.';
+          await wait(600 * (tryIndex + 1));
+        } finally {
+          clearTimeout(timeout);
+        }
       }
+      if (!cancelled) setTokenError(lastError);
     })();
+
     return () => { cancelled = true; };
-  }, [activeCall?.id, activeCall?.status]);
+  }, [activeCall?.id, activeCall?.status, attempt]);
+
+  const retryConnection = () => {
+    connectionFailed.current = false;
+    setToken(null);
+    setTokenError(null);
+    setConnectError(null);
+    setAttempt(value => value + 1);
+  };
 
   return createPortal(
     <div className="keep-dark">
@@ -96,6 +179,10 @@ export default function CallInterface() {
               ? <MiniBar call={activeCall} label="Calling…" onExpand={() => setIsMinimized(false)} onEnd={endCall} />
               : <Ringing call={activeCall} onEnd={endCall} onMinimize={() => setIsMinimized(true)} />}
           </Shell>
+        ) : connectError ? (
+          <Shell minimized={false}>
+            <Connecting call={activeCall} error={connectError} onEnd={endCall} onRetry={retryConnection} />
+          </Shell>
         ) : token && LIVEKIT_URL ? (
           <LiveKitRoom
             serverUrl={LIVEKIT_URL}
@@ -103,7 +190,12 @@ export default function CallInterface() {
             audio
             video={activeCall.media === 'video'}
             connect
-            onDisconnected={() => endCall()}
+            onDisconnected={() => { if (!connectionFailed.current) endCall(); }}
+            onError={error => {
+              console.warn('Call connection failed', error);
+              connectionFailed.current = true;
+              setConnectError(friendlyCallError(error));
+            }}
             onMediaDeviceFailure={() => toast.error(`Allow ${activeCall.media === 'video' ? 'camera and microphone' : 'microphone'} access in your browser to talk.`)}
             className="contents"
           >
@@ -116,7 +208,7 @@ export default function CallInterface() {
           </LiveKitRoom>
         ) : (
           <Shell minimized={false}>
-            <Connecting call={activeCall} error={tokenError} onEnd={endCall} />
+            <Connecting call={activeCall} error={tokenError} onEnd={endCall} onRetry={retryConnection} />
           </Shell>
         )
       )}
@@ -277,7 +369,7 @@ function Ringing({ call, onEnd, onMinimize }: { call: CallSession; onEnd: () => 
   );
 }
 
-function Connecting({ call, error, onEnd }: { call: CallSession; error: string | null; onEnd: () => void }) {
+function Connecting({ call, error, onEnd, onRetry }: { call: CallSession; error: string | null; onEnd: () => void; onRetry?: () => void }) {
   const other = otherPartyOf(call, auth.currentUser?.uid);
   return (
     <>
@@ -286,7 +378,17 @@ function Connecting({ call, error, onEnd }: { call: CallSession; error: string |
         <Avatar src={other.photo} seed={other.id} size={112} />
         <p className="mt-6 text-2xl font-bold">{other.name}</p>
         {error ? (
-          <p className="mt-2 text-red-300 max-w-xs">{error}</p>
+          <>
+            <p className="mt-2 max-w-xs text-red-300">{error}</p>
+            {onRetry && (
+              <button
+                onClick={onRetry}
+                className="mt-5 rounded-full bg-white/15 px-5 py-2 text-sm font-semibold text-white transition-colors hover:bg-white/25"
+              >
+                Try again
+              </button>
+            )}
+          </>
         ) : (
           <p className="mt-2 text-white/70 flex items-center gap-2"><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Connecting…</p>
         )}
