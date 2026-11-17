@@ -29,6 +29,7 @@ import { usersRepository } from '../services/db/usersRepository';
 import { followUser, unfollowUser } from '../services/socialService';
 import { trackEngagement } from '../features/feed/signals/tracker';
 import { queryKeys } from '../lib/queryClient';
+import { postCharLimit } from '../lib/postLimits';
 
 /** Swap a dead avatar URL (expired provider photos are common) for a generated one, once. */
 const avatarFallback = (seed: string) => (e: React.SyntheticEvent<HTMLImageElement>) => {
@@ -111,6 +112,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
     staleTime: 1000 * 60 * 10,
   });
   const currentUserProfile = useCurrentUser();
+  const editCharLimit = postCharLimit(!!currentUserProfile?.isPremium);
   const liveEvent = useLiveStatus().liveFor(post.authorUid);
 
   // Defer per-card reads and live updates until the card is actually on screen.
@@ -435,10 +437,11 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
     if (!auth.currentUser || post.authorUid !== auth.currentUser.uid) return;
     try {
       const hashtags = mergeTags(post.hashtags || [], extractHashtags(editContent));
+      const trimmedContent = editContent.slice(0, editCharLimit);
       await updateDoc(doc(db, collectionName, post.id), {
-        content: editContent,
+        content: trimmedContent,
         hashtags,
-        searchTokens: buildSearchTokens([editContent, post.project, post.authorName, post.authorUsername, ...hashtags.map(t => `#${normalizeTag(t)}`)]),
+        searchTokens: buildSearchTokens([trimmedContent, post.project, post.authorName, post.authorUsername, ...hashtags.map(t => `#${normalizeTag(t)}`)]),
         updatedAt: serverTimestamp()
       });
       setIsEditing(false);
@@ -751,8 +754,8 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
                   Live
                 </LivePeek>
               )}
-              <span className="text-black/30 dark:text-white/30" aria-hidden>·</span>
-              <span className="text-black/50 dark:text-white/50 whitespace-nowrap">{formatPostDate(post.createdAt)}</span>
+              <span className="hidden text-black/30 sm:inline dark:text-white/30" aria-hidden>·</span>
+              <span className="hidden whitespace-nowrap text-black/50 sm:inline dark:text-white/50">{formatPostDate(post.createdAt)}</span>
               {auth.currentUser && auth.currentUser.uid !== post.authorUid && !isFollowing && (
                 <>
                   <span className="text-black/30 dark:text-white/30" aria-hidden>·</span>
@@ -761,6 +764,8 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
                   </button>
                 </>
               )}
+              {/* Phones drop the timestamp to its own line so the name has room. */}
+              <span className="mt-0.5 w-full text-xs text-black/45 sm:hidden dark:text-white/45">{formatPostDate(post.createdAt)}</span>
             </div>
             <div className="flex items-center shrink-0 -mt-1 -mr-2">
               {auth.currentUser && (
@@ -844,6 +849,8 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
               )}
             </div>
           </div>
+          {/* On phones the body runs full width under the avatar; on larger screens it stays in the content column. */}
+          <div className={`${compact ? '-ml-12' : '-ml-[52px]'} mt-2 sm:ml-0 sm:mt-0`}>
           {(post.kind === 'shiplog' || post.kind === 'feedback') && (
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs font-medium">
               {post.kind === 'shiplog' ? (
@@ -862,10 +869,14 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
             <div className="mt-2 space-y-2">
               <textarea
                 value={editContent}
+                maxLength={editCharLimit}
                 onChange={(e) => setEditContent(e.target.value)}
                 className="w-full bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-xl p-3 text-sm text-black dark:text-white outline-none focus:border-primary min-h-[100px]"
               />
-              <div className="flex justify-end gap-2">
+              <div className="flex items-center justify-end gap-2">
+                <span className="mr-auto text-[11px] tabular-nums text-black/40 dark:text-white/40">
+                  {editContent.length}/{editCharLimit}
+                </span>
                 <button 
                   onClick={() => setIsEditing(false)}
                   className="px-3 py-1.5 text-sm font-medium text-black/50 dark:text-white/50 hover:text-black dark:hover:text-white"
@@ -1108,6 +1119,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
             >
               <span className="p-1.5 sm:p-2 rounded-full group-hover/act:bg-amber-500/10 transition-colors"><Gift size={18} /></span>
             </button>
+          </div>
           </div>
         </div>
       </div>

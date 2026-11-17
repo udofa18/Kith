@@ -37,9 +37,9 @@ async function prefixQuery(field: string, prefix: string, max: number) {
   return snap.docs;
 }
 
-export async function searchPeople(raw: string, max = 8): Promise<PersonResult[]> {
+export async function searchPeople(raw: string, max = 8, minLength = 2): Promise<PersonResult[]> {
   const q = raw.trim().replace(/^@/, '');
-  if (q.length < 2) return [];
+  if (q.length < minLength) return [];
 
   const lower = q.toLowerCase();
   const attempts = [

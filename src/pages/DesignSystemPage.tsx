@@ -31,6 +31,7 @@ import {
   Textarea,
 } from '../components/ui';
 import KithStamp from '../components/KithStamp';
+import KithoShowcase from '../components/mascot/KithoShowcase';
 
 /* -------------------------------------------------------------------------- */
 
@@ -120,6 +121,7 @@ const navItems = [
   { href: '#color', label: 'Color' },
   { href: '#type', label: 'Type' },
   { href: '#components', label: 'Components' },
+  { href: '#mascot', label: 'Mascot' },
   { href: '#patterns', label: 'Patterns' },
 ];
 
@@ -516,10 +518,43 @@ export default function DesignSystemPage() {
             </div>
           </Section>
 
+          {/* Mascot */}
+          <Section
+            id="mascot"
+            eyebrow="05 · Mascot"
+            title="Kitho, in motion."
+            description="An original Kith character built in Rive. A view model drives four resting moods and four one-shot actions, so the same file can react to anything the product already knows."
+          >
+            <KithoShowcase />
+            <div className="mt-3 grid gap-3 sm:grid-cols-3">
+              {[
+                {
+                  title: 'Mood is state',
+                  body: 'mood 0–3 blends between idle, happy, thinking and sleeping, each with its own breathing loop.',
+                },
+                {
+                  title: 'Actions are one-shot',
+                  body: 'wave, celebrate, surprise and encourage play as a layer over the mood, then release back to it.',
+                },
+                {
+                  title: 'Calm by default',
+                  body: 'A static frame stands in for reduced-motion visitors, slow connections and load failures.',
+                },
+              ].map((note) => (
+                <Card key={note.title} variant="outline" className="p-4">
+                  <p className="font-display text-sm font-semibold tracking-[-0.02em] text-foreground">
+                    {note.title}
+                  </p>
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{note.body}</p>
+                </Card>
+              ))}
+            </div>
+          </Section>
+
           {/* Patterns */}
           <Section
             id="patterns"
-            eyebrow="05 · Patterns"
+            eyebrow="06 · Patterns"
             title="How the pieces go together."
             description="Use these recipes when a surface needs to feel native without inventing new chrome."
           >
