@@ -4,7 +4,7 @@ import { auth, db, handleFirestoreError, OperationType } from '../firebase';
 import { collection, addDoc, serverTimestamp, doc, updateDoc, increment, getDoc, getDocs, writeBatch, setDoc, onSnapshot, query, orderBy } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL } from '../lib/storage';
 import { motion, AnimatePresence } from 'motion/react';
-import { Code, Globe, Image as ImageIcon, Link as LinkIcon, Lock, Send, Sparkles, X, BarChart2, Film, Plus, Smile, Hash, Repeat, TrendingUp, MessageCircleQuestion, PenLine } from 'lucide-react';
+import { Code, Globe, Image as ImageIcon, Link as LinkIcon, Lock, Send, Sparkles, X, BarChart2, Film, Plus, Smile, Hash, Repeat, TrendingUp, MessageCircleQuestion, PenLine, AtSign, Loader2, Check, ChevronDown } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { atomDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -16,6 +16,10 @@ import { createNotification } from '../lib/notifications';
 import { useCurrentUser } from '../contexts/CurrentUserContext';
 import { advanceStreak, recordShipLog } from '../features/shiplog/streak';
 import { buildSearchTokens, extractHashtags, mergeTags, normalizeTag } from '../features/search/tokens';
+import { searchPeople, type PersonResult } from '../features/search/api';
+import { postCharLimit } from '../lib/postLimits';
+import Avatar from './ui/Avatar';
+import VerifiedBadge from './VerifiedBadge';
 
 export type PostKind = 'post' | 'shiplog' | 'feedback';
 
@@ -24,6 +28,11 @@ const KINDS: { id: PostKind; label: string; icon: typeof PenLine; placeholder: s
   // Stored as 'shiplog' for compatibility; shown as a daily progress update.
   { id: 'shiplog', label: 'Progress update', icon: TrendingUp, placeholder: 'What did you move forward today? Big or small, it counts.' },
   { id: 'feedback', label: 'Ask for feedback', icon: MessageCircleQuestion, placeholder: 'What would you like feedback on? Add a photo or link.' },
+];
+
+const AUDIENCES = [
+  { value: 'public' as const, label: 'Public', hint: 'Anyone can see this post', icon: Globe },
+  { value: 'followers' as const, label: 'Followers', hint: 'Only people who follow you', icon: Lock },
 ];
 
 export default function PostEditor({ onPostCreated, communityId, channelId, quotedPostId, onCancelQuote, initialKind, variant = 'inline', autoFocus = false, onDirtyChange }: {
@@ -40,6 +49,8 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
   onDirtyChange?: (dirty: boolean) => void,
 }) {
   const currentUserProfile = useCurrentUser();
+  // Premium members will get a larger allowance once that flag ships on profiles.
+  const charLimit = postCharLimit(!!currentUserProfile?.isPremium);
   // Progress updates and feedback requests are feed features; community channels only post plain messages.
   const canChooseKind = !communityId && !quotedPostId;
   const preferredVisibility = currentUserProfile?.settings?.audience?.posts === 'followers' ? 'followers' : 'public';
@@ -51,6 +62,7 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
   const [project, setProject] = useState('');
   useEffect(() => { if (initialKind) setKind(initialKind); }, [initialKind]);
   const activeKind = KINDS.find(k => k.id === (canChooseKind ? kind : 'post'))!;
+  const activeAudience = AUDIENCES.find(option => option.value === visibility) ?? AUDIENCES[0];
   const [content, setContent] = useState('');
   const [code, setCode] = useState('');
   const [language, setLanguage] = useState('javascript');
@@ -60,6 +72,8 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
   const [suggesting, setSuggesting] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const emojiPickerRef = useRef<HTMLDivElement>(null);
+  const [isFocused, setIsFocused] = useState(false);
+  const editorRootRef = useRef<HTMLDivElement>(null);
   const [quotedPost, setQuotedPost] = useState<any>(null);
   const [loadingQuoted, setLoadingQuoted] = useState(false);
 
@@ -90,18 +104,34 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
   const [pollQuestion, setPollQuestion] = useState('');
   const [pollOptions, setPollOptions] = useState(['', '']);
 
+  // Post type / audience live in compact menus so they take one row instead of two.
+  const [openPostMenu, setOpenPostMenu] = useState<'kind' | 'audience' | null>(null);
+  const optionsMenuRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
+    const handleClickOutside = (event: MouseEvent | TouchEvent) => {
       if (emojiPickerRef.current && !emojiPickerRef.current.contains(event.target as Node)) {
         setShowEmojiPicker(false);
       }
+      if (optionsMenuRef.current && !optionsMenuRef.current.contains(event.target as Node)) {
+        setOpenPostMenu(null);
+      }
+      // Focus can't be trusted on touch (relatedTarget is often null), so treat a
+      // press outside the composer as the only way to make it inactive.
+      if (editorRootRef.current && !editorRootRef.current.contains(event.target as Node)) {
+        setIsFocused(false);
+      }
     };
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener('touchstart', handleClickOutside, { passive: true });
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
+    };
   }, []);
 
   const onEmojiClick = (emojiData: any) => {
-    setContent(prev => prev + emojiData.emoji);
+    setContent(prev => (prev + emojiData.emoji).slice(0, charLimit));
   };
 
   const handleSuggestHashtags = async () => {
@@ -151,6 +181,10 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
 
   const handleSubmit = async () => {
     if (!auth.currentUser || (!content.trim() && mediaFiles.length === 0 && !pollQuestion)) return;
+    if (content.length > charLimit) {
+      toast.error(`Posts can be up to ${charLimit} characters.`);
+      return;
+    }
     setLoading(true);
     try {
       // Get user profile for the post metadata
@@ -171,13 +205,20 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
 
       // Tags typed in the text count too, not just the suggested ones.
       const allTags = mergeTags(hashtags, extractHashtags(content));
+      // Only notify people whose @mention is still in the final text.
+      const typedHandles = new Set(
+        (content.match(/(^|[\s(])@([\w.-]+)/g) || []).map(handle => handle.replace(/^[\s(]*@/, '').toLowerCase())
+      );
+      const mentionedUsers = taggedUsers.filter(
+        (person) => person.username && typedHandles.has(person.username.toLowerCase())
+      );
       const postData: any = {
         authorUid: auth.currentUser.uid,
         authorName: displayName,
         authorUsername: username,
         authorPhoto: auth.currentUser.photoURL,
         authorXp: userXp,
-        content,
+        content: content.slice(0, charLimit),
         codeSnippet: code,
         language,
         hashtags: allTags,
@@ -242,6 +283,19 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
               relatedId: postRef.id
             });
         }
+
+        // Let people tagged in the post know they were mentioned.
+        await Promise.all(mentionedUsers.map(person => createNotification({
+          recipientId: person.id,
+          senderId: auth.currentUser!.uid,
+          senderName: displayName,
+          senderUsername: username,
+          senderPhoto: auth.currentUser!.photoURL || '',
+          type: 'mention',
+          content: 'mentioned you in a post',
+          relatedId: postRef.id,
+          communityId
+        }).catch(console.error)));
 
         // Update trending hashtags tracker
         if (allTags.length > 0) {
@@ -346,6 +400,9 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
       setPollOptions(['', '']);
       setKind('post');
       setProject('');
+      setOpenPostMenu(null);
+      setTaggedUsers([]);
+      setMention(null);
       if (onPostCreated) onPostCreated();
     } catch (error) {
       console.error("Error creating post:", error);
@@ -360,7 +417,7 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
     if (autoFocus) textareaRef.current?.focus();
   }, [autoFocus]);
 
-  const dirty = !!content.trim() || !!code.trim() || mediaFiles.length > 0 || !!pollQuestion.trim();
+  const dirty = !!content.trim() || !!code.trim() || mediaFiles.length > 0 || !!pollQuestion.trim() || !!project.trim();
   useEffect(() => { onDirtyChange?.(dirty); }, [dirty]);
 
   useEffect(() => {
@@ -370,11 +427,13 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
     }
   }, [content]);
 
-  const [isFocused, setIsFocused] = useState(false);
-  const [showChannelSuggestions, setShowChannelSuggestions] = useState(false);
   const [channels, setChannels] = useState<any[]>([]);
-  const [mentionFilter, setMentionFilter] = useState('');
-  const [mentionCursorPos, setMentionCursorPos] = useState(0);
+  /** The @user or #channel mention currently being typed, if any. */
+  const [mention, setMention] = useState<{ type: 'user' | 'channel'; query: string; start: number } | null>(null);
+  const [people, setPeople] = useState<PersonResult[]>([]);
+  const [searchingPeople, setSearchingPeople] = useState(false);
+  /** People picked from the tag menu, used to notify them after posting. */
+  const [taggedUsers, setTaggedUsers] = useState<PersonResult[]>([]);
 
   useEffect(() => {
     if (!communityId) return;
@@ -386,29 +445,71 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
   }, [communityId]);
 
   const filteredChannels = useMemo(() => {
-    const filter = mentionFilter.toLowerCase();
+    const filter = (mention?.type === 'channel' ? mention.query : '').toLowerCase();
     return channels
       .filter(c => c.name.toLowerCase().includes(filter))
       .slice(0, 5);
-  }, [channels, mentionFilter]);
+  }, [channels, mention]);
 
-  const insertChannelMention = (channelName: string) => {
-    const before = content.slice(0, mentionCursorPos);
-    const after = content.slice(textareaRef.current?.selectionStart || mentionCursorPos);
-    
-    const spaceIndex = content.indexOf(' ', mentionCursorPos);
-    const sliceEnd = spaceIndex === -1 ? content.length : spaceIndex;
-    const finalAfter = content.slice(sliceEnd);
+  // Look people up only while an @mention is being typed, and only once there is
+  // enough of a name to search on.
+  useEffect(() => {
+    if (mention?.type !== 'user' || mention.query.length < 1) {
+      setPeople([]);
+      setSearchingPeople(false);
+      return;
+    }
+    let active = true;
+    setSearchingPeople(true);
+    const timer = setTimeout(async () => {
+      try {
+        const results = await searchPeople(mention.query, 5, 1);
+        if (active) setPeople(results.filter(p => p.id !== auth.currentUser?.uid));
+      } catch {
+        if (active) setPeople([]);
+      } finally {
+        if (active) setSearchingPeople(false);
+      }
+    }, 200);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [mention?.type, mention?.query]);
 
-    const insertedText = `#${channelName} `;
-    const updatedContent = `${before}${insertedText}${finalAfter}`;
+  const detectMention = (value: string, cursor: number) => {
+    const match = value.slice(0, cursor).match(/(^|[\s(])([@#])([\w.-]*)$/);
+    if (!match) {
+      setMention(null);
+      return;
+    }
+    const type = match[2] === '@' ? 'user' : 'channel';
+    // Channels only exist inside communities; the main feed only tags people.
+    if (type === 'channel' && !communityId) {
+      setMention(null);
+      return;
+    }
+    setMention({ type, query: match[3], start: cursor - match[3].length - 1 });
+  };
+
+  const insertMention = (insertedText: string, person?: PersonResult) => {
+    if (!mention) return;
+    const cursor = textareaRef.current?.selectionStart ?? mention.start + mention.query.length + 1;
+    const before = content.slice(0, mention.start);
+    const after = content.slice(cursor);
+    const separator = after.startsWith(' ') ? '' : ' ';
+    const updatedContent = `${before}${insertedText}${separator}${after}`.slice(0, charLimit);
+
     setContent(updatedContent);
-    setShowChannelSuggestions(false);
-    
+    if (person) {
+      setTaggedUsers(prev => (prev.some(p => p.id === person.id) ? prev : [...prev, person]));
+    }
+    setMention(null);
+
     setTimeout(() => {
       if (textareaRef.current) {
         textareaRef.current.focus();
-        const cursorPosition = before.length + insertedText.length;
+        const cursorPosition = before.length + insertedText.length + separator.length;
         textareaRef.current.setSelectionRange(cursorPosition, cursorPosition);
       }
     }, 0);
@@ -416,14 +517,9 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
 
   return (
     <div 
+      ref={editorRootRef}
       className={`relative transition-colors ${variant === 'dialog' ? 'px-4 pt-2 pb-3' : `px-5 py-4 border-b border-black/10 dark:border-white/10 ${isFocused ? 'bg-black/[0.02] dark:bg-white/[0.02]' : ''}`} ${showEmojiPicker ? 'z-50' : 'z-10'}`}
       onFocus={() => setIsFocused(true)}
-      onBlur={(e) => {
-        // Only blur if clicking completely outside the editor
-        if (!e.currentTarget.contains(e.relatedTarget)) {
-          setIsFocused(false);
-        }
-      }}
     >
       <div className="flex gap-3">
         <div className="w-10 h-10 rounded-full overflow-hidden flex-shrink-0 bg-black/5 dark:bg-white/10">
@@ -435,88 +531,79 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
           />
         </div>
         <div className="flex-1 min-w-0 space-y-3">
-          {canChooseKind && (
-            <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="Post type">
-              {KINDS.map(k => (
-                <button
-                  key={k.id}
-                  type="button"
-                  role="radio"
-                  aria-checked={kind === k.id}
-                  onClick={() => setKind(k.id)}
-                  className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[13px] font-medium border transition-colors ${
-                    kind === k.id
-                      ? 'bg-primary/10 border-primary/30 text-primary'
-                      : 'border-black/10 dark:border-white/10 text-black/60 dark:text-white/60 hover:text-black dark:hover:text-white'
-                  }`}
-                >
-                  <k.icon size={13} /> {k.label}
-                </button>
-              ))}
-            </div>
-          )}
-          {!communityId && (
-            <div className="flex items-center gap-1.5" role="radiogroup" aria-label="Post audience">
-              {[
-                { value: 'public' as const, label: 'Public', hint: 'Anyone can see this post', icon: Globe },
-                { value: 'followers' as const, label: 'Followers', hint: 'Only people who follow you', icon: Lock },
-              ].map(({ value, label, hint, icon: Icon }) => (
-                <button
-                  key={value}
-                  type="button"
-                  role="radio"
-                  aria-checked={visibility === value}
-                  title={hint}
-                  onClick={() => setVisibility(value)}
-                  className={`flex items-center gap-1.5 rounded-pill border px-2.5 py-1 text-[11px] font-semibold transition-colors ${
-                    visibility === value
-                      ? 'border-primary/35 bg-primary/10 text-primary'
-                      : 'border-black/10 text-black/50 hover:text-black dark:border-white/10 dark:text-white/50 dark:hover:text-white'
-                  }`}
-                >
-                  <Icon size={11} /> {label}
-                </button>
-              ))}
-            </div>
-          )}
-          {canChooseKind && kind === 'shiplog' && (
-            <input
-              value={project}
-              onChange={e => setProject(e.target.value)}
-              maxLength={80}
-              placeholder="What are you working on? (optional)"
-              className="w-full bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary"
-            />
-          )}
           <div className="relative">
             <AnimatePresence>
-              {showChannelSuggestions && filteredChannels.length > 0 && (
+              {mention && (mention.type === 'channel' ? filteredChannels.length > 0 : people.length > 0 || searchingPeople) && (
                 <motion.div
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: 10 }}
-                  className="absolute bottom-full left-0 mb-2 w-64 bg-background border border-black/10 dark:border-white/10 rounded-lg shadow-none z-50 overflow-hidden backdrop-blur-xl"
+                  className="absolute bottom-full left-0 mb-2 w-72 max-w-[calc(100vw-2rem)] bg-background border border-black/10 dark:border-white/10 rounded-lg shadow-none z-50 overflow-hidden backdrop-blur-xl"
                 >
-                  <div className="p-2 border-b border-black/5 dark:border-white/5 bg-black/5 dark:bg-white/5">
-                    <p className="text-xs font-medium text-black/50 dark:text-white/50 px-2">Mention a channel</p>
+                  <div className="flex items-center gap-1.5 p-2 border-b border-black/5 dark:border-white/5 bg-black/5 dark:bg-white/5">
+                    {mention.type === 'channel'
+                      ? <Hash size={12} className="text-primary" />
+                      : <AtSign size={12} className="text-primary" />}
+                    <p className="text-xs font-medium text-black/50 dark:text-white/50 px-1">
+                      {mention.type === 'channel' ? 'Mention a channel' : 'Tag a person'}
+                    </p>
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => setMention(null)}
+                      aria-label="Close suggestions"
+                      title="Close suggestions"
+                      className="ml-auto p-1 rounded-full text-black/40 dark:text-white/40 hover:bg-black/10 dark:hover:bg-white/10 hover:text-black dark:hover:text-white transition-colors"
+                    >
+                      <X size={12} />
+                    </button>
                   </div>
-                  <div className="max-h-48 overflow-y-auto p-1">
-                    {filteredChannels.map((c) => (
-                      <button
-                        key={c.id}
-                        type="button"
-                        onClick={() => insertChannelMention(c.name)}
-                        className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-primary/10 text-left transition-all group"
-                      >
-                        <Hash size={14} className="text-primary shrink-0" />
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium text-black dark:text-white group-hover:text-primary transition-colors truncate">
-                            #{c.name}
-                          </p>
-                          {c.description && <p className="text-[10px] text-black/40 dark:text-white/40 truncate">{c.description}</p>}
-                        </div>
-                      </button>
-                    ))}
+                  <div className="max-h-56 overflow-y-auto p-1">
+                    {mention.type === 'channel' ? (
+                      filteredChannels.map((c) => (
+                        <button
+                          key={c.id}
+                          type="button"
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => insertMention(`#${c.name}`)}
+                          className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-primary/10 text-left transition-all group"
+                        >
+                          <Hash size={14} className="text-primary shrink-0" />
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium text-black dark:text-white group-hover:text-primary transition-colors truncate">
+                              #{c.name}
+                            </p>
+                            {c.description && <p className="text-[10px] text-black/40 dark:text-white/40 truncate">{c.description}</p>}
+                          </div>
+                        </button>
+                      ))
+                    ) : searchingPeople && people.length === 0 ? (
+                      <div className="flex items-center justify-center gap-2 px-3 py-4 text-xs text-black/40 dark:text-white/40">
+                        <Loader2 size={14} className="animate-spin" /> Searching people…
+                      </div>
+                    ) : (
+                      people.map((person) => (
+                        <button
+                          key={person.id}
+                          type="button"
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => insertMention(`@${person.username}`, person)}
+                          disabled={!person.username}
+                          className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-primary/10 text-left transition-all disabled:opacity-40"
+                        >
+                          <Avatar src={person.photo} seed={person.id} size={28} />
+                          <span className="min-w-0 flex-1">
+                            <span className="flex items-center text-sm font-medium text-black dark:text-white truncate">
+                              {person.displayName}
+                              <VerifiedBadge verified={person.verified} />
+                            </span>
+                            {person.username && (
+                              <span className="block text-[11px] text-black/40 dark:text-white/40 truncate">@{person.username}</span>
+                            )}
+                          </span>
+                        </button>
+                      ))
+                    )}
                   </div>
                 </motion.div>
               )}
@@ -524,33 +611,26 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
             <textarea
               ref={textareaRef}
               value={content}
+              maxLength={charLimit}
               onChange={(e) => {
-                const value = e.target.value;
-                const cursor = e.target.selectionStart || 0;
+                const value = e.target.value.slice(0, charLimit);
+                const cursor = Math.min(e.target.selectionStart || 0, value.length);
                 setContent(value);
-
-                // Channel mention detection
-                const lastHash = value.lastIndexOf('#', cursor - 1);
-                if (lastHash !== -1) {
-                  const textAfterHash = value.slice(lastHash + 1, cursor);
-                  const charBeforeHash = lastHash === 0 ? '' : value[lastHash - 1];
-                  const isValidTrigger = !charBeforeHash || /\s/.test(charBeforeHash);
-
-                  if (isValidTrigger && !/\s/.test(textAfterHash)) {
-                    setMentionFilter(textAfterHash);
-                    setMentionCursorPos(lastHash);
-                    setShowChannelSuggestions(true);
-                    return;
-                  }
-                }
-                setShowChannelSuggestions(false);
+                detectMention(value, cursor);
               }}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && showChannelSuggestions && filteredChannels.length > 0) {
+                if (!mention) return;
+                if (e.key === 'Escape') {
                   e.preventDefault();
-                  insertChannelMention(filteredChannels[0].name);
-                } else if (e.key === 'Escape' && showChannelSuggestions) {
-                  setShowChannelSuggestions(false);
+                  setMention(null);
+                } else if (e.key === 'Enter') {
+                  if (mention.type === 'channel' && filteredChannels.length > 0) {
+                    e.preventDefault();
+                    insertMention(`#${filteredChannels[0].name}`);
+                  } else if (mention.type === 'user' && people.length > 0) {
+                    e.preventDefault();
+                    insertMention(`@${people[0].username}`, people[0]);
+                  }
                 }
               }}
               placeholder={activeKind.placeholder}
@@ -707,30 +787,146 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
             </div>
           )}
 
+          {(isFocused || dirty) && (canChooseKind || !communityId) && (
+            <div ref={optionsMenuRef} className="relative flex flex-wrap items-center gap-2">
+              {canChooseKind && (
+                <div className="relative">
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setOpenPostMenu(openPostMenu === 'kind' ? null : 'kind')}
+                    aria-haspopup="menu"
+                    aria-expanded={openPostMenu === 'kind'}
+                    className="flex items-center gap-1.5 rounded-full border border-black/10 px-2.5 py-1.5 text-[12px] font-semibold text-black/65 transition-colors hover:border-primary/40 hover:text-primary dark:border-white/10 dark:text-white/65 dark:hover:text-primary"
+                  >
+                    <activeKind.icon size={13} />
+                    {activeKind.label}
+                    <ChevronDown size={12} className={`transition-transform ${openPostMenu === 'kind' ? 'rotate-180' : ''}`} />
+                  </button>
+                  <AnimatePresence>
+                    {openPostMenu === 'kind' && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: 4 }}
+                        role="menu"
+                        aria-label="Post type"
+                        className="absolute bottom-full left-0 z-50 mb-1 w-60 overflow-hidden rounded-xl border border-black/10 bg-background shadow-xl dark:border-white/10"
+                      >
+                        {KINDS.map(option => {
+                          const Icon = option.icon;
+                          return (
+                            <button
+                              key={option.id}
+                              type="button"
+                              role="menuitemradio"
+                              aria-checked={kind === option.id}
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => { setKind(option.id); setOpenPostMenu(null); }}
+                              className={`flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm transition-colors ${
+                                kind === option.id ? 'bg-primary/10 text-primary' : 'hover:bg-black/5 dark:hover:bg-white/5'
+                              }`}
+                            >
+                              <Icon size={15} className="shrink-0" />
+                              <span className="min-w-0 flex-1 truncate font-medium">{option.label}</span>
+                              {kind === option.id && <Check size={14} className="shrink-0" />}
+                            </button>
+                          );
+                        })}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+              )}
+              {!communityId && (
+                <div className="relative">
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setOpenPostMenu(openPostMenu === 'audience' ? null : 'audience')}
+                    aria-haspopup="menu"
+                    aria-expanded={openPostMenu === 'audience'}
+                    title={activeAudience.hint}
+                    className="flex items-center gap-1.5 rounded-full border border-black/10 px-2.5 py-1.5 text-[12px] font-semibold text-black/65 transition-colors hover:border-primary/40 hover:text-primary dark:border-white/10 dark:text-white/65 dark:hover:text-primary"
+                  >
+                    <activeAudience.icon size={13} />
+                    {activeAudience.label}
+                    <ChevronDown size={12} className={`transition-transform ${openPostMenu === 'audience' ? 'rotate-180' : ''}`} />
+                  </button>
+                  <AnimatePresence>
+                    {openPostMenu === 'audience' && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: 4 }}
+                        role="menu"
+                        aria-label="Post audience"
+                        className="absolute bottom-full left-0 z-50 mb-1 w-60 overflow-hidden rounded-xl border border-black/10 bg-background shadow-xl dark:border-white/10"
+                      >
+                        {AUDIENCES.map(option => {
+                          const Icon = option.icon;
+                          return (
+                            <button
+                              key={option.value}
+                              type="button"
+                              role="menuitemradio"
+                              aria-checked={visibility === option.value}
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => { setVisibility(option.value); setOpenPostMenu(null); }}
+                              className={`flex w-full items-start gap-2 px-3 py-2.5 text-left text-sm transition-colors ${
+                                visibility === option.value ? 'bg-primary/10 text-primary' : 'hover:bg-black/5 dark:hover:bg-white/5'
+                              }`}
+                            >
+                              <Icon size={15} className="mt-0.5 shrink-0" />
+                              <span className="min-w-0 flex-1">
+                                <span className="block font-medium">{option.label}</span>
+                                <span className="block text-[11px] text-black/45 dark:text-white/45">{option.hint}</span>
+                              </span>
+                              {visibility === option.value && <Check size={14} className="mt-0.5 shrink-0" />}
+                            </button>
+                          );
+                        })}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+              )}
+              {canChooseKind && kind === 'shiplog' && (
+                <input
+                  value={project}
+                  onChange={e => setProject(e.target.value)}
+                  maxLength={80}
+                  placeholder="What are you working on? (optional)"
+                  className="w-full rounded-lg border border-black/10 bg-black/5 px-3 py-2 text-sm outline-none focus:border-primary dark:border-white/10 dark:bg-white/5"
+                />
+              )}
+            </div>
+          )}
+
           <div className="flex items-center justify-between pt-3 border-t border-black/5 dark:border-white/5">
             <div className="flex items-center gap-1">
-              <button 
+              <button
                 onClick={() => setShowCode(!showCode)}
                 className={`p-2 rounded-full transition-colors ${showCode ? 'bg-primary/10 text-primary' : 'hover:bg-primary/10 text-black/50 dark:text-white/50 hover:text-primary'}`}
                 title="Add Code Snippet"
               >
                 <Code size={18} />
               </button>
-              <button 
+              <button
                 onClick={() => fileInputRef.current?.click()}
                 className="p-2 rounded-full hover:bg-primary/10 text-black/50 dark:text-white/50 hover:text-primary transition-colors"
                 title="Add Media"
               >
                 <ImageIcon size={18} />
               </button>
-              <button 
+              <button
                 onClick={() => setShowPoll(!showPoll)}
                 className={`p-2 rounded-full transition-colors ${showPoll ? 'bg-primary/10 text-primary' : 'hover:bg-primary/10 text-black/50 dark:text-white/50 hover:text-primary'}`}
                 title="Add Poll"
               >
                 <BarChart2 size={18} />
               </button>
-              <button 
+              <button
                 onClick={() => setShowEmojiPicker(!showEmojiPicker)}
                 className={`p-2 rounded-full transition-colors ${showEmojiPicker ? 'bg-primary/10 text-primary' : 'hover:bg-primary/10 text-black/50 dark:text-white/50 hover:text-primary'}`}
                 title="Add Emoji"
@@ -739,8 +935,8 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
               </button>
               {showEmojiPicker && (
                 <div ref={emojiPickerRef} className="absolute top-full left-0 mt-2 z-[100] origin-top-left scale-75 shadow-none border border-black/10 dark:border-white/10">
-                  <EmojiPicker 
-                    theme={document.documentElement.classList.contains('light') ? Theme.LIGHT : Theme.DARK} 
+                  <EmojiPicker
+                    theme={document.documentElement.classList.contains('light') ? Theme.LIGHT : Theme.DARK}
                     onEmojiClick={onEmojiClick}
                     width={320}
                     height={400}
@@ -749,7 +945,7 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
                   />
                 </div>
               )}
-              <button 
+              <button
                 onClick={handleSuggestHashtags}
                 disabled={suggesting || (!content && !code)}
                 className="p-2 rounded-full hover:bg-primary/10 text-black/50 dark:text-white/50 hover:text-primary transition-colors disabled:opacity-30"
@@ -757,22 +953,38 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
               >
                 <Sparkles size={18} className={suggesting ? 'animate-pulse text-primary' : ''} />
               </button>
-              <input 
-                type="file" 
-                ref={fileInputRef} 
-                onChange={handleFileSelect} 
-                multiple 
-                accept="image/*,video/*" 
-                className="hidden" 
+              <input
+                type="file"
+                ref={fileInputRef}
+                onChange={handleFileSelect}
+                multiple
+                accept="image/*,video/*"
+                className="hidden"
               />
             </div>
-            <button
-              onClick={handleSubmit}
-              disabled={loading || (!content.trim() && mediaFiles.length === 0 && !pollQuestion)}
-              className="px-5 py-2 bg-primary hover:bg-primary/90 text-white rounded-full font-semibold text-sm flex items-center gap-2 disabled:opacity-40 transition-colors"
-            >
-              {loading ? 'Posting…' : kind === 'shiplog' && canChooseKind ? 'Share' : kind === 'feedback' && canChooseKind ? 'Ask' : 'Post'} <Send size={14} />
-            </button>
+            <div className="flex items-center gap-3">
+              {content.length >= charLimit * 0.8 && (
+                <span
+                  title={`${charLimit - content.length} characters left`}
+                  className={`text-[11px] font-medium tabular-nums ${
+                    content.length >= charLimit
+                      ? 'text-red-500'
+                      : content.length >= charLimit * 0.9
+                        ? 'text-amber-500'
+                        : 'text-black/40 dark:text-white/40'
+                  }`}
+                >
+                  {content.length}/{charLimit}
+                </span>
+              )}
+              <button
+                onClick={handleSubmit}
+                disabled={loading || (!content.trim() && mediaFiles.length === 0 && !pollQuestion)}
+                className="px-5 py-2 bg-primary hover:bg-primary/90 text-white rounded-full font-semibold text-sm flex items-center gap-2 disabled:opacity-40 transition-colors"
+              >
+                {loading ? 'Posting…' : kind === 'shiplog' && canChooseKind ? 'Share' : kind === 'feedback' && canChooseKind ? 'Ask' : 'Post'} <Send size={14} />
+              </button>
+            </div>
           </div>
         </div>
       </div>

@@ -5,13 +5,14 @@ import {
   serverTimestamp, setDoc, startAfter, updateDoc, where, type QueryDocumentSnapshot,
 } from 'firebase/firestore';
 import { formatDistanceToNowStrict } from 'date-fns';
-import { CheckCircle2, Heart, Loader2, MoreHorizontal, Send, Trash2, X } from 'lucide-react';
+import { AtSign, CheckCircle2, Heart, Loader2, MoreHorizontal, Send, Trash2, X } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { auth, db, handleFirestoreError, OperationType } from '../../firebase';
 import { createNotification } from '../../lib/notifications';
 import { updateDailyStats } from '../../lib/stats';
 import { useCurrentUser } from '../../contexts/CurrentUserContext';
 import { trackEngagement } from '../../features/feed/signals/tracker';
+import { searchPeople, type PersonResult } from '../../features/search/api';
 import UserHoverCard from '../UserHoverCard';
 import VerifiedBadge from '../VerifiedBadge';
 import ConfirmModal from '../ConfirmModal';
@@ -69,6 +70,13 @@ export default function CommentThread({ post, collectionName, autoFocus = false 
   const [deleting, setDeleting] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
+  // @mention state. Comments only tag people (channels live in the post composer).
+  const [mention, setMention] = useState<{ query: string; start: number } | null>(null);
+  const [people, setPeople] = useState<PersonResult[]>([]);
+  const [searchingPeople, setSearchingPeople] = useState(false);
+  /** People picked from the tag menu, used to notify them after commenting. */
+  const [taggedUsers, setTaggedUsers] = useState<PersonResult[]>([]);
+
   // Top-level comments, newest first. Readable by everyone, signed in or not.
   useEffect(() => {
     const q = query(commentsRef, where('replyToId', '==', null), orderBy('createdAt', 'desc'), limit(PAGE_SIZE));
@@ -96,6 +104,31 @@ export default function CommentThread({ post, collectionName, autoFocus = false 
   useEffect(() => {
     if (autoFocus) inputRef.current?.focus();
   }, [autoFocus]);
+
+  // Look people up while an @mention is being typed, starting at the first letter.
+  useEffect(() => {
+    if (!mention || mention.query.length < 1) {
+      setPeople([]);
+      setSearchingPeople(false);
+      return;
+    }
+    let active = true;
+    setSearchingPeople(true);
+    const timer = setTimeout(async () => {
+      try {
+        const results = await searchPeople(mention.query, 5, 1);
+        if (active) setPeople(results.filter(p => p.id !== auth.currentUser?.uid));
+      } catch {
+        if (active) setPeople([]);
+      } finally {
+        if (active) setSearchingPeople(false);
+      }
+    }, 200);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [mention?.query]);
 
   // Grow the composer with its content.
   useLayoutEffect(() => {
@@ -152,6 +185,36 @@ export default function CommentThread({ post, collectionName, autoFocus = false 
     }, 50);
   };
 
+  const detectMention = (value: string, cursor: number) => {
+    const match = value.slice(0, cursor).match(/(^|[\s(])@([\w.-]*)$/);
+    if (!match) {
+      setMention(null);
+      return;
+    }
+    setMention({ query: match[2], start: cursor - match[2].length - 1 });
+  };
+
+  const insertMention = (person: PersonResult) => {
+    if (!mention) return;
+    const cursor = inputRef.current?.selectionStart ?? mention.start + mention.query.length + 1;
+    const before = text.slice(0, mention.start);
+    const after = text.slice(cursor);
+    const separator = after.startsWith(' ') ? '' : ' ';
+    const inserted = `@${person.username}`;
+
+    setText(`${before}${inserted}${separator}${after}`);
+    setTaggedUsers(prev => (prev.some(p => p.id === person.id) ? prev : [...prev, person]));
+    setMention(null);
+
+    setTimeout(() => {
+      if (inputRef.current) {
+        inputRef.current.focus();
+        const cursorPosition = before.length + inserted.length + separator.length;
+        inputRef.current.setSelectionRange(cursorPosition, cursorPosition);
+      }
+    }, 0);
+  };
+
   const submit = async () => {
     if (!auth.currentUser || !uid) return toast.error('Sign in to comment');
     const content = text.trim();
@@ -183,6 +246,20 @@ export default function CommentThread({ post, collectionName, autoFocus = false 
           type: 'comment', content: replyTo ? 'replied to your comment' : 'commented on your post', relatedId: post.id,
         }).catch(console.error);
       }
+
+      // Only notify people whose @mention is still in the final comment, and skip
+      // whoever already got the comment notification above.
+      const typedHandles = new Set(
+        (content.match(/(^|[\s(])@([\w.-]+)/g) || []).map(handle => handle.replace(/^[\s(]*@/, '').toLowerCase())
+      );
+      taggedUsers
+        .filter(person => person.username && typedHandles.has(person.username.toLowerCase()) && person.id !== recipientId)
+        .forEach(person => {
+          createNotification({
+            recipientId: person.id, senderId: uid, senderName: authorName, senderUsername: authorUsername, senderPhoto: authorPhoto,
+            type: 'mention', content: replyTo ? 'mentioned you in a reply' : 'mentioned you in a comment', relatedId: post.id,
+          }).catch(console.error);
+        });
       updateDoc(doc(db, 'users', uid), { xp: increment(1) }).catch(console.error);
       if (post.communityId) {
         updateDailyStats(post.communityId, 'xpAwarded', 1).catch(console.error);
@@ -192,6 +269,8 @@ export default function CommentThread({ post, collectionName, autoFocus = false 
 
       setText('');
       setReplyTo(null);
+      setTaggedUsers([]);
+      setMention(null);
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, `${collectionName}/${post.id}/comments`);
     } finally {
@@ -295,29 +374,89 @@ export default function CommentThread({ post, collectionName, autoFocus = false 
                 </button>
               </div>
             )}
-            <div className="flex items-end gap-2 rounded-2xl bg-black/[0.04] dark:bg-white/[0.06] border border-transparent focus-within:border-primary/60 focus-within:bg-transparent transition-colors pl-4 pr-1.5 py-1.5">
-              <textarea
-                ref={inputRef}
-                value={text}
-                onChange={e => setText(e.target.value)}
-                onKeyDown={e => {
-                  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
-                  if (e.key === 'Escape' && replyTo) { setReplyTo(null); setText(''); }
-                }}
-                rows={1}
-                maxLength={2000}
-                placeholder={replyTo ? 'Write a reply…' : isFeedback ? 'Share your feedback…' : 'Add a comment…'}
-                aria-label="Write a comment"
-                className="flex-1 bg-transparent outline-none resize-none text-[15px] leading-relaxed py-1 max-h-40 placeholder:text-black/40 dark:placeholder:text-white/40"
-              />
-              <button
-                onClick={submit}
-                disabled={!text.trim() || sending}
-                aria-label="Send"
-                className="shrink-0 w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center disabled:opacity-30 transition-opacity"
-              >
-                {sending ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
-              </button>
+            <div className="relative">
+              {mention && (people.length > 0 || searchingPeople) && (
+                <div className="absolute bottom-full left-0 z-50 mb-1 w-72 max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border border-black/10 bg-background dark:border-white/10">
+                  <div className="flex items-center gap-1.5 border-b border-black/5 bg-black/5 p-2 dark:border-white/5 dark:bg-white/5">
+                    <AtSign size={12} className="text-primary" />
+                    <p className="px-1 text-xs font-medium text-black/50 dark:text-white/50">Tag a person</p>
+                    <button
+                      type="button"
+                      onMouseDown={e => e.preventDefault()}
+                      onClick={() => setMention(null)}
+                      aria-label="Close suggestions"
+                      title="Close suggestions"
+                      className="ml-auto rounded-full p-1 text-black/40 transition-colors hover:bg-black/10 hover:text-black dark:text-white/40 dark:hover:bg-white/10 dark:hover:text-white"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                  <div className="max-h-56 overflow-y-auto p-1">
+                    {searchingPeople && people.length === 0 ? (
+                      <div className="flex items-center justify-center gap-2 px-3 py-4 text-xs text-black/40 dark:text-white/40">
+                        <Loader2 size={14} className="animate-spin" /> Searching people…
+                      </div>
+                    ) : (
+                      people.map(person => (
+                        <button
+                          key={person.id}
+                          type="button"
+                          onMouseDown={e => e.preventDefault()}
+                          onClick={() => insertMention(person)}
+                          disabled={!person.username}
+                          className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-all hover:bg-primary/10 disabled:opacity-40"
+                        >
+                          <Avatar src={person.photo} seed={person.id} size={28} />
+                          <span className="min-w-0 flex-1">
+                            <span className="flex items-center truncate text-sm font-medium text-black dark:text-white">
+                              {person.displayName}
+                              <VerifiedBadge verified={person.verified} />
+                            </span>
+                            {person.username && (
+                              <span className="block truncate text-[11px] text-black/40 dark:text-white/40">@{person.username}</span>
+                            )}
+                          </span>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+              <div className="flex items-end gap-2 rounded-2xl bg-black/[0.04] dark:bg-white/[0.06] border border-transparent focus-within:border-primary/60 focus-within:bg-transparent transition-colors pl-4 pr-1.5 py-1.5">
+                <textarea
+                  ref={inputRef}
+                  value={text}
+                  onChange={e => {
+                    setText(e.target.value);
+                    detectMention(e.target.value, Math.min(e.target.selectionStart || 0, e.target.value.length));
+                  }}
+                  onKeyDown={e => {
+                    if (mention) {
+                      if (e.key === 'Escape') { e.preventDefault(); setMention(null); return; }
+                      if (e.key === 'Enter' && !e.shiftKey && people.length > 0) {
+                        e.preventDefault();
+                        insertMention(people[0]);
+                        return;
+                      }
+                    }
+                    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
+                    if (e.key === 'Escape' && replyTo) { setReplyTo(null); setText(''); }
+                  }}
+                  rows={1}
+                  maxLength={2000}
+                  placeholder={replyTo ? 'Write a reply…' : isFeedback ? 'Share your feedback…' : 'Add a comment…'}
+                  aria-label="Write a comment"
+                  className="flex-1 bg-transparent outline-none resize-none text-[15px] leading-relaxed py-1 max-h-40 placeholder:text-black/40 dark:placeholder:text-white/40"
+                />
+                <button
+                  onClick={submit}
+                  disabled={!text.trim() || sending}
+                  aria-label="Send"
+                  className="shrink-0 w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center disabled:opacity-30 transition-opacity"
+                >
+                  {sending ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+                </button>
+              </div>
             </div>
           </div>
         </div>
