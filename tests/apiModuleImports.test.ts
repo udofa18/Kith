@@ -33,4 +33,11 @@ describe('api module imports', () => {
     }
     expect(offenders).toEqual([]);
   });
+
+  it('uses import attributes instead of the removed assert syntax', () => {
+    const offenders = apiSources().filter((file) =>
+      /from\s+['"][^'"]+['"]\s+assert\s*\{/.test(readFileSync(file, 'utf8')),
+    );
+    expect(offenders.map((file) => relative(process.cwd(), file))).toEqual([]);
+  });
 });

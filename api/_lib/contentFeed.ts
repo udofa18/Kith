@@ -1,4 +1,4 @@
-import firebaseConfig from '../../firebase-applet-config.json' assert { type: 'json' };
+import firebaseConfig from '../../firebase-applet-config.json' with { type: 'json' };
 
 export interface FeedArticle {
   id: string;
