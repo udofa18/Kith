@@ -8,7 +8,7 @@
  * than a wall.
  */
 import { RoomServiceClient } from 'livekit-server-sdk';
-import { firestoreAdmin, uidFromAuthHeader } from './firebaseApp';
+import { firestoreAdmin, uidFromAuthHeader } from './firebaseApp.js';
 import {
   LIVE_ID_PATTERN,
   livePhase,
@@ -16,8 +16,8 @@ import {
   toMillis,
   type LivePhase,
   type PublicEventInfo,
-} from './liveEventInfo';
-import { eventJoinError } from './livekitToken';
+} from './liveEventInfo.js';
+import { eventJoinError } from './livekitToken.js';
 
 export interface LiveSessionInfoResult {
   status: number;

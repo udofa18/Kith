@@ -6,7 +6,7 @@
  * a second device, or a client with stale state can't leave the room running.
  */
 import { RoomServiceClient } from 'livekit-server-sdk';
-import { firestoreAdmin, uidFromAuthHeader } from './firebaseApp';
+import { firestoreAdmin, uidFromAuthHeader } from './firebaseApp.js';
 
 export interface EndSessionResult {
   status: number;

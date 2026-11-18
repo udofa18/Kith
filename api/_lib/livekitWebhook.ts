@@ -6,8 +6,8 @@
  * client. Only rooms that map to an existing event are written to.
  */
 import { RoomServiceClient, WebhookReceiver } from 'livekit-server-sdk';
-import { firestoreAdmin } from './firebaseApp';
-import { LIVE_ID_PATTERN } from './liveEventInfo';
+import { firestoreAdmin } from './firebaseApp.js';
+import { LIVE_ID_PATTERN } from './liveEventInfo.js';
 
 export interface LivekitWebhookResult {
   status: number;

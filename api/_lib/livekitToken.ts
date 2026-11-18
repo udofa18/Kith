@@ -10,8 +10,8 @@
  */
 import admin from 'firebase-admin';
 import { AccessToken, TrackSource } from 'livekit-server-sdk';
-import { firestoreAdmin } from './firebaseApp';
-import { publicEventInfo, toMillis } from './liveEventInfo';
+import { firestoreAdmin } from './firebaseApp.js';
+import { publicEventInfo, toMillis } from './liveEventInfo.js';
 
 const PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'gen-lang-client-0475896362';
 const DATABASE_ID = process.env.FIRESTORE_DATABASE_ID || 'ai-studio-a6c9e366-2e98-4fcd-bf9b-04eac80f64b4';
