@@ -30,6 +30,8 @@ import { followUser, unfollowUser } from '../services/socialService';
 import { trackEngagement } from '../features/feed/signals/tracker';
 import { queryKeys } from '../lib/queryClient';
 import { postCharLimit } from '../lib/postLimits';
+import { renderRichText } from '../lib/richText';
+import RichComposer from './ui/RichComposer';
 
 /** Swap a dead avatar URL (expired provider photos are common) for a generated one, once. */
 const avatarFallback = (seed: string) => (e: React.SyntheticEvent<HTMLImageElement>) => {
@@ -65,6 +67,8 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
   const [showPostMenu, setShowPostMenu] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState(post.content);
+  /** Visible characters in the edit box, ignoring formatting markers. */
+  const [editCharCount, setEditCharCount] = useState(0);
   const [showDeletePostConfirm, setShowDeletePostConfirm] = useState(false);
   const [showReportModal, setShowReportModal] = useState(false);
   const [showRepostMenu, setShowRepostMenu] = useState(false);
@@ -88,8 +92,9 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
   const TRUNCATE_LIMIT = 280;
   const previewUrl = firstUrl(post.content || post.description || '');
   const content = post.content || post.description || '';
+  // Truncate the rendered text, never the stored markers: slicing markdown at 280
+  // characters can leave a half-finished `**` visible in the feed.
   const shouldTruncate = !isDetailView && content.length > TRUNCATE_LIMIT;
-  const displayContent = shouldTruncate ? content.slice(0, TRUNCATE_LIMIT) + '...' : content;
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -435,9 +440,13 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
 
   const handleEditPost = async () => {
     if (!auth.currentUser || post.authorUid !== auth.currentUser.uid) return;
+    if (editCharCount > editCharLimit) {
+      toast.error(`Posts can be up to ${editCharLimit} characters.`);
+      return;
+    }
     try {
       const hashtags = mergeTags(post.hashtags || [], extractHashtags(editContent));
-      const trimmedContent = editContent.slice(0, editCharLimit);
+      const trimmedContent = editContent;
       await updateDoc(doc(db, collectionName, post.id), {
         content: trimmedContent,
         hashtags,
@@ -596,54 +605,44 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
 
   const isHighlighted = searchParams.get('postId') === post.id;
 
-  const renderContent = (content: string) => {
-    return content.split(/(@\w+|#\w+)/g).map((part: string, i: number) => {
-      if (part.startsWith('@')) {
-        return (
-          <span key={i} className="text-primary font-medium hover:underline cursor-pointer" onClick={(e) => { e.stopPropagation(); navigate(`/creators/${part.slice(1)}`); }}>{part}</span>
-        );
-      } else if (part.startsWith('#')) {
-        const channelName = part.slice(1).toLowerCase();
-        const linkedChannel = channelsList.find(c => c.name.toLowerCase() === channelName);
+  const renderContent = (content: string) => renderRichText(content, {
+    mention: (username, key) => (
+      <span key={key} className="text-primary font-medium hover:underline cursor-pointer" onClick={(e) => { e.stopPropagation(); navigate(`/creators/${username}`); }}>@{username}</span>
+    ),
+    hashtag: (tag, key) => {
+      const linkedChannel = channelsList.find(c => c.name.toLowerCase() === tag.toLowerCase());
 
-        if (linkedChannel) {
-          return (
-            <span 
-              key={i} 
-              className="text-primary font-bold hover:underline cursor-pointer px-1 rounded transition-colors bg-primary/5 inline-flex items-center gap-0.5" 
-              onClick={(e) => { 
-                e.stopPropagation(); 
-                if (post.communityId) {
-                  navigate(`/feed?view=community&id=${post.communityId}&channelId=${linkedChannel.id}`);
-                }
-              }}
-            >
-              <Hash size={12} className="inline shrink-0" />{part.slice(1)}
-            </span>
-          );
-        }
-
+      if (linkedChannel) {
         return (
-          <span 
-            key={i} 
-            className="text-primary font-bold hover:underline cursor-pointer px-0.5 rounded transition-colors hover:bg-primary/10" 
-            onClick={(e) => { 
-              e.stopPropagation(); 
-              navigate(`/feed?hashtag=${encodeURIComponent(part.slice(1))}`);
+          <span
+            key={key}
+            className="text-primary font-bold hover:underline cursor-pointer px-1 rounded transition-colors bg-primary/5 inline-flex items-center gap-0.5"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (post.communityId) {
+                navigate(`/feed?view=community&id=${post.communityId}&channelId=${linkedChannel.id}`);
+              }
             }}
           >
-            {part}
+            <Hash size={12} className="inline shrink-0" />{tag}
           </span>
         );
-      } else {
-        return part.split(/(https?:\/\/[^\s]+)/g).map((subPart: string, j: number) => 
-          subPart.match(/^https?:\/\//) ? (
-            <a key={`${i}-${j}`} href={subPart} target="_blank" rel="noopener noreferrer" className="text-cyan-600 dark:text-cyan-400 hover:underline transition-colors font-medium" onClick={(e) => e.stopPropagation()}>{subPart}</a>
-          ) : subPart
-        );
       }
-    });
-  };
+
+      return (
+        <span
+          key={key}
+          className="text-primary font-bold hover:underline cursor-pointer px-0.5 rounded transition-colors hover:bg-primary/10"
+          onClick={(e) => {
+            e.stopPropagation();
+            navigate(`/feed?hashtag=${encodeURIComponent(tag)}`);
+          }}
+        >
+          #{tag}
+        </span>
+      );
+    },
+  });
 
   return (
     <div ref={cardRef} className="space-y-1">
@@ -788,7 +787,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
                         {auth.currentUser.uid === post.authorUid ? (
                           <>
                             <button 
-                              onClick={() => { setIsEditing(true); setShowPostMenu(false); }}
+                              onClick={() => { setEditContent(post.content); setEditCharCount(0); setIsEditing(true); setShowPostMenu(false); }}
                               className="w-full flex items-center gap-2 px-4 py-3 text-xs font-bold text-black/70 dark:text-white/70 hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
                             >
                               <Edit2 size={14} /> Edit Post
@@ -867,15 +866,19 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
           )}
           {isEditing ? (
             <div className="mt-2 space-y-2">
-              <textarea
+              <RichComposer
                 value={editContent}
-                maxLength={editCharLimit}
-                onChange={(e) => setEditContent(e.target.value)}
-                className="w-full bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-xl p-3 text-sm text-black dark:text-white outline-none focus:border-primary min-h-[100px]"
+                onChange={markdown => setEditContent(markdown)}
+                onCountChange={setEditCharCount}
+                placeholder="Edit your post"
+                limit={editCharLimit}
+                autoFocus
+                className="rounded-xl border border-black/10 bg-black/5 px-3 py-2 dark:border-white/10 dark:bg-white/5 focus-within:border-primary"
+                editorClassName="min-h-[88px] text-sm text-black dark:text-white"
               />
               <div className="flex items-center justify-end gap-2">
                 <span className="mr-auto text-[11px] tabular-nums text-black/40 dark:text-white/40">
-                  {editContent.length}/{editCharLimit}
+                  {editCharCount}/{editCharLimit}
                 </span>
                 <button 
                   onClick={() => setIsEditing(false)}
@@ -892,7 +895,7 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
               </div>
             </div>
           ) : (
-            <div className={`mt-1 ${compact ? 'text-sm' : 'text-[15px]'} leading-[1.5] text-black/90 dark:text-white/90 whitespace-pre-wrap break-words`}>
+            <div className={`mt-1 ${compact ? 'text-sm' : 'text-[15px]'} leading-[1.5] text-black/90 dark:text-white/90 break-words`}>
               {isDetailView ? (
                 renderContent(content)
               ) : (
@@ -900,7 +903,9 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
                   onClick={() => openPost(post)}
                   className="block hover:opacity-80 transition-opacity cursor-pointer"
                 >
-                  {renderContent(displayContent)}
+                  <div className={shouldTruncate ? 'line-clamp-5' : undefined}>
+                    {renderContent(content)}
+                  </div>
                   {shouldTruncate && (
                     <span className="text-primary hover:underline ml-1 font-medium">
                       Show more

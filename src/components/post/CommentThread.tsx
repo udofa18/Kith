@@ -17,6 +17,7 @@ import UserHoverCard from '../UserHoverCard';
 import VerifiedBadge from '../VerifiedBadge';
 import ConfirmModal from '../ConfirmModal';
 import Avatar from '../ui/Avatar';
+import { renderRichText } from '../../lib/richText';
 
 const PAGE_SIZE = 10;
 const HELPFUL_XP = 15;
@@ -575,11 +576,12 @@ function CommentRow({ comment, isReply, isAuthor, isMine, liked, canMarkHelpful,
           )}
         </div>
 
-        <p className="mt-0.5 text-[15px] leading-relaxed text-black/85 dark:text-white/85 whitespace-pre-wrap break-words">
-          {comment.content.split(/(@[\w.]+)/g).map((part, i) =>
-            part.startsWith('@') ? <span key={i} className="text-primary">{part}</span> : part
-          )}
-        </p>
+        <div className="mt-0.5 text-[15px] leading-relaxed text-black/85 dark:text-white/85 break-words">
+          {renderRichText(comment.content, {
+            mention: (username, key) => <span key={key} className="text-primary">@{username}</span>,
+            hashtag: (tag, key) => <span key={key} className="text-primary">#{tag}</span>,
+          })}
+        </div>
 
         <div className="mt-1 flex items-center gap-4 text-[13px] text-black/50 dark:text-white/50">
           <button

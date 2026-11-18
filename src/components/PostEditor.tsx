@@ -20,6 +20,7 @@ import { searchPeople, type PersonResult } from '../features/search/api';
 import { postCharLimit } from '../lib/postLimits';
 import Avatar from './ui/Avatar';
 import VerifiedBadge from './VerifiedBadge';
+import RichComposer, { type RichComposerHandle } from './ui/RichComposer';
 
 export type PostKind = 'post' | 'shiplog' | 'feedback';
 
@@ -64,6 +65,10 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
   const activeKind = KINDS.find(k => k.id === (canChooseKind ? kind : 'post'))!;
   const activeAudience = AUDIENCES.find(option => option.value === visibility) ?? AUDIENCES[0];
   const [content, setContent] = useState('');
+  /** The same text without formatting markers, used for counts, tags and search. */
+  const [plainContent, setPlainContent] = useState('');
+  const [charCount, setCharCount] = useState(0);
+  const composerRef = useRef<RichComposerHandle>(null);
   const [code, setCode] = useState('');
   const [language, setLanguage] = useState('javascript');
   const [showCode, setShowCode] = useState(false);
@@ -120,6 +125,7 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
       // press outside the composer as the only way to make it inactive.
       if (editorRootRef.current && !editorRootRef.current.contains(event.target as Node)) {
         setIsFocused(false);
+        setMention(null);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -131,13 +137,13 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
   }, []);
 
   const onEmojiClick = (emojiData: any) => {
-    setContent(prev => (prev + emojiData.emoji).slice(0, charLimit));
+    composerRef.current?.insertText(emojiData.emoji);
   };
 
   const handleSuggestHashtags = async () => {
-    if (!content && !code) return;
+    if (!plainContent && !code) return;
     setSuggesting(true);
-    const suggested = await suggestHashtags(content, code);
+    const suggested = await suggestHashtags(plainContent, code);
     setHashtags(suggested);
     
     if (code) {
@@ -181,7 +187,7 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
 
   const handleSubmit = async () => {
     if (!auth.currentUser || (!content.trim() && mediaFiles.length === 0 && !pollQuestion)) return;
-    if (content.length > charLimit) {
+    if (charCount > charLimit) {
       toast.error(`Posts can be up to ${charLimit} characters.`);
       return;
     }
@@ -204,10 +210,10 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
       }
 
       // Tags typed in the text count too, not just the suggested ones.
-      const allTags = mergeTags(hashtags, extractHashtags(content));
+      const allTags = mergeTags(hashtags, extractHashtags(plainContent));
       // Only notify people whose @mention is still in the final text.
       const typedHandles = new Set(
-        (content.match(/(^|[\s(])@([\w.-]+)/g) || []).map(handle => handle.replace(/^[\s(]*@/, '').toLowerCase())
+        (plainContent.match(/(^|[\s(])@([\w.-]+)/g) || []).map(handle => handle.replace(/^[\s(]*@/, '').toLowerCase())
       );
       const mentionedUsers = taggedUsers.filter(
         (person) => person.username && typedHandles.has(person.username.toLowerCase())
@@ -218,11 +224,11 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
         authorUsername: username,
         authorPhoto: auth.currentUser.photoURL,
         authorXp: userXp,
-        content: content.slice(0, charLimit),
+        content: content,
         codeSnippet: code,
         language,
         hashtags: allTags,
-        searchTokens: buildSearchTokens([content, project, displayName, username, ...allTags.map(t => `#${normalizeTag(t)}`)]),
+        searchTokens: buildSearchTokens([plainContent, project, displayName, username, ...allTags.map(t => `#${normalizeTag(t)}`)]),
         media: uploadedMedia,
         likesCount: 0,
         commentsCount: 0,
@@ -391,6 +397,8 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
 
       // Reset
       setContent('');
+      setPlainContent('');
+      setCharCount(0);
       setCode('');
       setHashtags([]);
       setShowCode(false);
@@ -411,25 +419,12 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
     }
   };
 
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-
-  useEffect(() => {
-    if (autoFocus) textareaRef.current?.focus();
-  }, [autoFocus]);
-
   const dirty = !!content.trim() || !!code.trim() || mediaFiles.length > 0 || !!pollQuestion.trim() || !!project.trim();
   useEffect(() => { onDirtyChange?.(dirty); }, [dirty]);
 
-  useEffect(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
-    }
-  }, [content]);
-
   const [channels, setChannels] = useState<any[]>([]);
   /** The @user or #channel mention currently being typed, if any. */
-  const [mention, setMention] = useState<{ type: 'user' | 'channel'; query: string; start: number } | null>(null);
+  const [mention, setMention] = useState<{ type: 'user' | 'channel'; query: string } | null>(null);
   const [people, setPeople] = useState<PersonResult[]>([]);
   const [searchingPeople, setSearchingPeople] = useState(false);
   /** People picked from the tag menu, used to notify them after posting. */
@@ -477,8 +472,8 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
     };
   }, [mention?.type, mention?.query]);
 
-  const detectMention = (value: string, cursor: number) => {
-    const match = value.slice(0, cursor).match(/(^|[\s(])([@#])([\w.-]*)$/);
+  const detectMention = (beforeCursor: string) => {
+    const match = beforeCursor.match(/(^|[\s(])([@#])([\w.-]*)$/);
     if (!match) {
       setMention(null);
       return;
@@ -489,30 +484,35 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
       setMention(null);
       return;
     }
-    setMention({ type, query: match[3], start: cursor - match[3].length - 1 });
+    setMention({ type, query: match[3] });
   };
 
   const insertMention = (insertedText: string, person?: PersonResult) => {
-    if (!mention) return;
-    const cursor = textareaRef.current?.selectionStart ?? mention.start + mention.query.length + 1;
-    const before = content.slice(0, mention.start);
-    const after = content.slice(cursor);
-    const separator = after.startsWith(' ') ? '' : ' ';
-    const updatedContent = `${before}${insertedText}${separator}${after}`.slice(0, charLimit);
-
-    setContent(updatedContent);
+    composerRef.current?.insertMention(insertedText);
     if (person) {
       setTaggedUsers(prev => (prev.some(p => p.id === person.id) ? prev : [...prev, person]));
     }
     setMention(null);
+  };
 
-    setTimeout(() => {
-      if (textareaRef.current) {
-        textareaRef.current.focus();
-        const cursorPosition = before.length + insertedText.length + separator.length;
-        textareaRef.current.setSelectionRange(cursorPosition, cursorPosition);
+  /** Enter picks the top suggestion; Escape closes the list. */
+  const onComposerKeyDown = (event: KeyboardEvent) => {
+    if (!mention) return false;
+    if (event.key === 'Escape') {
+      setMention(null);
+      return true;
+    }
+    if (event.key === 'Enter') {
+      if (mention.type === 'channel' && filteredChannels.length > 0) {
+        insertMention(`#${filteredChannels[0].name}`);
+        return true;
       }
-    }, 0);
+      if (mention.type === 'user' && people.length > 0) {
+        insertMention(`@${people[0].username}`, people[0]);
+        return true;
+      }
+    }
+    return false;
   };
 
   return (
@@ -608,33 +608,21 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
                 </motion.div>
               )}
             </AnimatePresence>
-            <textarea
-              ref={textareaRef}
+            <RichComposer
+              ref={composerRef}
               value={content}
-              maxLength={charLimit}
-              onChange={(e) => {
-                const value = e.target.value.slice(0, charLimit);
-                const cursor = Math.min(e.target.selectionStart || 0, value.length);
-                setContent(value);
-                detectMention(value, cursor);
+              onChange={(markdown, text) => {
+                setContent(markdown);
+                setPlainContent(text);
               }}
-              onKeyDown={(e) => {
-                if (!mention) return;
-                if (e.key === 'Escape') {
-                  e.preventDefault();
-                  setMention(null);
-                } else if (e.key === 'Enter') {
-                  if (mention.type === 'channel' && filteredChannels.length > 0) {
-                    e.preventDefault();
-                    insertMention(`#${filteredChannels[0].name}`);
-                  } else if (mention.type === 'user' && people.length > 0) {
-                    e.preventDefault();
-                    insertMention(`@${people[0].username}`, people[0]);
-                  }
-                }
-              }}
+              onCountChange={setCharCount}
+              onCaretText={detectMention}
+              onKeyDown={onComposerKeyDown}
               placeholder={activeKind.placeholder}
-              className="w-full bg-transparent border-none outline-none text-[17px] leading-relaxed resize-none min-h-[72px] text-black dark:text-white placeholder:text-black/40 dark:placeholder:text-white/40 overflow-hidden pt-1"
+              limit={charLimit}
+              autoFocus={autoFocus}
+              className="pt-1"
+              editorClassName="min-h-[72px] text-[17px] leading-relaxed text-black dark:text-white"
             />
 
             {/* Quoted Post Preview */}
@@ -963,18 +951,18 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
               />
             </div>
             <div className="flex items-center gap-3">
-              {content.length >= charLimit * 0.8 && (
+              {(isFocused || charCount > 0) && (
                 <span
-                  title={`${charLimit - content.length} characters left`}
+                  title={`${Math.max(0, charLimit - charCount)} characters left`}
                   className={`text-[11px] font-medium tabular-nums ${
-                    content.length >= charLimit
+                    charCount >= charLimit
                       ? 'text-red-500'
-                      : content.length >= charLimit * 0.9
+                      : charCount >= charLimit * 0.9
                         ? 'text-amber-500'
                         : 'text-black/40 dark:text-white/40'
                   }`}
                 >
-                  {content.length}/{charLimit}
+                  {charCount}/{charLimit}
                 </span>
               )}
               <button

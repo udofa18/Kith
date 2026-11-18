@@ -28,6 +28,9 @@ import { playNotificationSound } from '../lib/sounds';
 import { CHANNEL_TYPES } from '../lib/channelTypes';
 import PollCard from './chat/PollCard';
 import { createNotification } from '../lib/notifications';
+import { renderRichText } from '../lib/richText';
+import { markdownToPlainText } from '../lib/richTextDoc';
+import RichComposer, { type RichComposerHandle } from './ui/RichComposer';
 
 import { updateDailyStats } from '../lib/stats';
 
@@ -108,7 +111,7 @@ export default function ChannelView({
   const [uploading, setUploading] = useState(false);
   const [attachments, setAttachments] = useState<any[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const composerRef = useRef<RichComposerHandle>(null);
   const emojiPickerRef = useRef<HTMLDivElement>(null);
   const actionsMenuRef = useRef<HTMLDivElement>(null);
 
@@ -154,67 +157,56 @@ export default function ChannelView({
 
 
 
-  const autosize = (el: HTMLTextAreaElement | null) => {
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  const onComposerChange = (markdown: string) => {
+    setNewMessage(markdown);
   };
 
-  const onComposerChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const value = e.target.value;
-    const cursor = e.target.selectionStart || 0;
-    setNewMessage(value);
-    autosize(e.target);
-
-    // @person / #channel suggestions for the word being typed
-    const lastAt = value.lastIndexOf('@', cursor - 1);
-    const lastHash = value.lastIndexOf('#', cursor - 1);
-    const trigger = (pos: number) => (pos === 0 || /\s/.test(value[pos - 1])) && !/\s/.test(value.slice(pos + 1, cursor));
-    if (lastAt !== -1 && lastAt > lastHash && trigger(lastAt)) {
-      setMentionFilter(value.slice(lastAt + 1, cursor));
-      setMentionCursorPos(lastAt);
-      setShowMentionSuggestions(true);
+  /** Show @people / #channel suggestions for the token being typed. */
+  const onComposerCaret = (beforeCursor: string) => {
+    const match = beforeCursor.match(/(^|[\s(])([@#])([^\s@#]*)$/);
+    if (!match) {
+      setShowMentionSuggestions(false);
       setShowChannelSuggestions(false);
       return;
     }
-    if (lastHash !== -1 && lastHash > lastAt && trigger(lastHash)) {
-      setMentionFilter(value.slice(lastHash + 1, cursor));
-      setMentionCursorPos(lastHash);
+    setMentionFilter(match[3]);
+    if (match[2] === '@') {
+      setShowMentionSuggestions(true);
+      setShowChannelSuggestions(false);
+    } else {
       setShowChannelSuggestions(true);
       setShowMentionSuggestions(false);
-      return;
     }
-    setShowMentionSuggestions(false);
-    setShowChannelSuggestions(false);
   };
 
-  const onComposerKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Escape') {
-      if (showMentionSuggestions || showChannelSuggestions) { setShowMentionSuggestions(false); setShowChannelSuggestions(false); }
-      else if (replyTo) setReplyTo(null);
-      return;
+  const onComposerKeyDown = (event: KeyboardEvent): boolean => {
+    if (event.key === 'Escape') {
+      if (showMentionSuggestions || showChannelSuggestions) {
+        setShowMentionSuggestions(false);
+        setShowChannelSuggestions(false);
+        return true;
+      }
+      if (replyTo) {
+        setReplyTo(null);
+        return true;
+      }
+      return false;
     }
-    if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return;
+    if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return false;
     if (showMentionSuggestions && filteredMentions.length > 0) {
-      e.preventDefault();
       insertMention(filteredMentions[0].user?.username || 'user');
-    } else if (showChannelSuggestions && filteredChannels.length > 0) {
-      e.preventDefault();
+      return true;
+    }
+    if (showChannelSuggestions && filteredChannels.length > 0) {
       insertChannelMention(filteredChannels[0].name);
-    } else if (!window.matchMedia('(pointer: coarse)').matches) {
-      // Enter sends on desktop; on phones it adds a new line.
-      e.preventDefault();
+      return true;
+    }
+    // Enter sends on desktop; on phones it adds a new line.
+    if (!window.matchMedia('(pointer: coarse)').matches) {
       handleSendMessage();
-      requestAnimationFrame(() => autosize(inputRef.current));
+      return true;
     }
-  };
-
-  const onComposerPaste = (e: React.ClipboardEvent) => {
-    const images = [...e.clipboardData.files].filter(f => f.type.startsWith('image/'));
-    if (images.length) {
-      e.preventDefault();
-      uploadFiles(images);
-    }
+    return false;
   };
 
   const removeAttachment = (index: number) => {
@@ -238,7 +230,6 @@ export default function ChannelView({
   const [showChannelSuggestions, setShowChannelSuggestions] = useState(false);
   const [channelsList, setChannelsList] = useState<any[]>([]);
   const [mentionFilter, setMentionFilter] = useState('');
-  const [mentionCursorPos, setMentionCursorPos] = useState(0);
 
   useEffect(() => {
     if (!communityId) return;
@@ -292,60 +283,18 @@ export default function ChannelView({
   }, [channelsList, mentionFilter, isAdmin, myCustomRoles]);
 
   const insertMention = (username: string) => {
-    const before = newMessage.slice(0, mentionCursorPos);
-    const after = newMessage.slice(inputRef.current?.selectionStart || mentionCursorPos);
-    
-    // Find where the mention part ends (next space or end of string)
-    const spaceIndex = newMessage.indexOf(' ', mentionCursorPos);
-    const sliceEnd = spaceIndex === -1 ? newMessage.length : spaceIndex;
-    const finalAfter = newMessage.slice(sliceEnd);
-
-    const insertedText = `@${username} `;
-    const updatedMessage = `${before}${insertedText}${finalAfter}`;
-    setNewMessage(updatedMessage);
+    composerRef.current?.insertMention(`@${username}`);
     setShowMentionSuggestions(false);
-    
-    // Focus back and set cursor position
-    setTimeout(() => {
-      if (inputRef.current) {
-        inputRef.current.focus();
-        const cursorPosition = before.length + insertedText.length;
-        inputRef.current.setSelectionRange(cursorPosition, cursorPosition);
-        inputRef.current.style.height = 'auto';
-        inputRef.current.style.height = `${inputRef.current.scrollHeight}px`;
-      }
-    }, 0);
   };
 
   const insertChannelMention = (channelName: string) => {
-    const before = newMessage.slice(0, mentionCursorPos);
-    const after = newMessage.slice(inputRef.current?.selectionStart || mentionCursorPos);
-    
-    // Find where the mention part ends (next space or end of string)
-    const spaceIndex = newMessage.indexOf(' ', mentionCursorPos);
-    const sliceEnd = spaceIndex === -1 ? newMessage.length : spaceIndex;
-    const finalAfter = newMessage.slice(sliceEnd);
-
-    const insertedText = `#${channelName} `;
-    const updatedMessage = `${before}${insertedText}${finalAfter}`;
-    setNewMessage(updatedMessage);
+    composerRef.current?.insertMention(`#${channelName}`);
     setShowChannelSuggestions(false);
-    
-    // Focus back and set cursor position
-    setTimeout(() => {
-      if (inputRef.current) {
-        inputRef.current.focus();
-        const cursorPosition = before.length + insertedText.length;
-        inputRef.current.setSelectionRange(cursorPosition, cursorPosition);
-        inputRef.current.style.height = 'auto';
-        inputRef.current.style.height = `${inputRef.current.scrollHeight}px`;
-      }
-    }, 0);
   };
 
   const renderMessageContent = (content: string) => {
     if (!content) return null;
-    
+
     // Check for solo emoji first
     const solo = isSoloEmoji(content);
     if (solo) {
@@ -359,15 +308,13 @@ export default function ChannelView({
       return <span className="text-4xl leading-relaxed py-2 block">{solo.value}</span>;
     }
 
-    const parts = content.split(/(@[a-zA-Z0-9_-]+|#[a-zA-Z0-9_-]+)/g);
-    return parts.map((part, index) => {
-      if (part.startsWith('@')) {
-        const username = part.slice(1);
+    return renderRichText(content, {
+      mention: (username, key) => {
         const lowerUsername = username.toLowerCase();
 
         if (lowerUsername === 'everyone' || lowerUsername === 'admin') {
           return (
-            <span key={index} className="text-primary font-bold bg-primary/10 px-1 rounded-md transition-all hover:bg-primary/20 cursor-default">
+            <span key={key} className="text-primary font-bold bg-primary/10 px-1 rounded-md transition-all hover:bg-primary/20 cursor-default">
               @{username}
             </span>
           );
@@ -377,7 +324,7 @@ export default function ChannelView({
         const mentionedRole = !member && roles.find((r: any) => roleSlug(r) === lowerUsername);
         if (mentionedRole) {
           return (
-            <span key={index} className="font-semibold px-1 rounded-md cursor-default" style={{ color: mentionedRole.color || undefined, backgroundColor: `${mentionedRole.color || '#7C3AED'}1f` }}>
+            <span key={key} className="font-semibold px-1 rounded-md cursor-default" style={{ color: mentionedRole.color || undefined, backgroundColor: `${mentionedRole.color || '#7C3AED'}1f` }}>
               @{mentionedRole.name}
             </span>
           );
@@ -385,24 +332,24 @@ export default function ChannelView({
 
         if (member) {
           return (
-            <UserHoverCard key={index} userId={member?.id || ''}>
+            <UserHoverCard key={key} userId={member?.id || ''}>
               <span className="text-primary font-bold hover:underline cursor-pointer">
                 @{member.user?.username || username}
               </span>
             </UserHoverCard>
           );
         }
-      }
 
-      if (part.startsWith('#')) {
-        const channelName = part.slice(1).toLowerCase();
-        const linkedChannel = channelsList.find(c => c.name.toLowerCase() === channelName && canSeeChannel(c));
+        return <span key={key} className="text-primary font-medium">@{username}</span>;
+      },
+      hashtag: (tag, key) => {
+        const linkedChannel = channelsList.find(c => c.name.toLowerCase() === tag.toLowerCase() && canSeeChannel(c));
         // Only real, visible channels become links; "#1" or "#blessed" stay plain text.
         if (linkedChannel) {
           const TypeIcon = (CHANNEL_TYPES.find(t => t.id === linkedChannel.type) ?? CHANNEL_TYPES[0]).icon;
           return (
             <button
-              key={index}
+              key={key}
               type="button"
               onClick={() => onOpenChannel ? onOpenChannel(linkedChannel.id) : navigate(`/feed?view=community&id=${communityId}&channelId=${linkedChannel.id}`)}
               title={linkedChannel.description || `Open #${linkedChannel.name}`}
@@ -412,31 +359,21 @@ export default function ChannelView({
             </button>
           );
         }
-      }
-
-      // Detect and style links within the text part
-      const urlRegex = /(https?:\/\/[^\s]+)/g;
-      const subParts = part.split(urlRegex);
-      
-      const contentWithLinks = subParts.map((subPart, subIndex) => {
-        if (subPart.match(urlRegex)) {
-          return (
-            <a 
-              key={`link-${index}-${subIndex}`} 
-              href={subPart} 
-              target="_blank" 
-              rel="noopener noreferrer" 
-              className="text-violet-600 dark:text-violet-400 hover:underline transition-colors font-medium underline decoration-violet-500/30 underline-offset-2"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {subPart}
-            </a>
-          );
-        }
-        return <AnimatedEmojiRenderer key={`text-${index}-${subIndex}`} content={subPart} />;
-      });
-
-      return <span key={index}>{contentWithLinks}</span>;
+        return <span key={key} className="text-primary font-medium">#{tag}</span>;
+      },
+      link: (url, key) => (
+        <a
+          key={key}
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-violet-600 dark:text-violet-400 hover:underline transition-colors font-medium underline decoration-violet-500/30 underline-offset-2"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {url}
+        </a>
+      ),
+      text: (text, key) => <AnimatedEmojiRenderer key={key} content={text} />,
     });
   };
 
@@ -571,7 +508,7 @@ export default function ChannelView({
   // Focus input on channel change
   useEffect(() => {
     if (!loading) {
-      setTimeout(() => inputRef.current?.focus(), 500);
+      setTimeout(() => composerRef.current?.focus(), 500);
       scrollToBottom('smooth'); // Scroll to bottom on initial load
     }
   }, [channel.id]);
@@ -1119,7 +1056,7 @@ export default function ChannelView({
     setReplyTo(msg);
     setActiveMessageMenu(null);
     setShowReactionMenu(null);
-    inputRef.current?.focus();
+    composerRef.current?.focus();
   };
 
   const jumpTo = (id: string) => {
@@ -1225,22 +1162,29 @@ export default function ChannelView({
             <button onClick={() => jumpTo(msg.replyTo.id)} className="mt-1 mb-0.5 flex items-center gap-1.5 max-w-full text-xs text-foreground/55 hover:text-foreground/80 text-left">
               <Reply size={12} className="shrink-0 -scale-x-100" />
               <span className="font-semibold shrink-0">{msg.replyTo.authorName}</span>
-              <span className="truncate">{msg.replyTo.content || 'Attachment'}</span>
+              <span className="truncate">{msg.replyTo.content ? markdownToPlainText(msg.replyTo.content) : 'Attachment'}</span>
             </button>
           )}
 
           {isEditing ? (
-            <div className="mt-1">
-              <textarea
+            <div className="mt-1 rounded-xl bg-foreground/5 border border-foreground/15 px-3 py-2 focus-within:border-primary">
+              <RichComposer
                 value={editContent}
-                onChange={e => setEditContent(e.target.value)}
-                onKeyDown={e => {
-                  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleEditMessage(msg.id); }
-                  else if (e.key === 'Escape') setEditingMessageId(null);
+                onChange={setEditContent}
+                onKeyDown={event => {
+                  if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+                    handleEditMessage(msg.id);
+                    return true;
+                  }
+                  if (event.key === 'Escape') {
+                    setEditingMessageId(null);
+                    return true;
+                  }
+                  return false;
                 }}
-                rows={2}
+                placeholder="Edit message"
                 autoFocus
-                className="w-full px-3 py-2 rounded-xl bg-foreground/5 border border-foreground/15 focus:border-primary outline-none text-[15px] resize-none"
+                editorClassName="text-[15px] leading-relaxed"
               />
               <p className="mt-1 text-xs text-foreground/45">
                 Enter to <button onClick={() => handleEditMessage(msg.id)} className="text-primary hover:underline">save</button> · Esc to <button onClick={() => setEditingMessageId(null)} className="text-primary hover:underline">cancel</button>
@@ -1415,7 +1359,7 @@ export default function ChannelView({
                   <p className="px-3 pb-1 text-xs font-semibold text-foreground/45">{suggestions === 'people' ? 'People and roles' : 'Channels'}</p>
                   {suggestions === 'people'
                     ? filteredMentions.map((m: any) => (
-                      <button key={m.id} type="button" onClick={() => insertMention(m.user?.username || 'user')} className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-foreground/5">
+                      <button key={m.id} type="button" onMouseDown={e => e.preventDefault()} onClick={() => insertMention(m.user?.username || 'user')} className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-foreground/5">
                         {m.role
                           ? <span className="w-7 h-7 rounded-full flex items-center justify-center" style={{ backgroundColor: `${m.role.color || '#7C3AED'}26`, color: m.role.color || undefined }}><span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: m.role.color || '#7C3AED' }} /></span>
                           : m.id === 'everyone' || m.id === 'admin'
@@ -1428,7 +1372,7 @@ export default function ChannelView({
                       </button>
                     ))
                     : filteredChannels.map((c: any) => (
-                      <button key={c.id} type="button" onClick={() => insertChannelMention(c.name)} className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-foreground/5">
+                      <button key={c.id} type="button" onMouseDown={e => e.preventDefault()} onClick={() => insertChannelMention(c.name)} className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-foreground/5">
                         {(() => { const I = (CHANNEL_TYPES.find(t => t.id === c.type) ?? CHANNEL_TYPES[0]).icon; return <I size={16} className="text-foreground/50 shrink-0" />; })()}
                         <span className="min-w-0">
                           <span className="block text-sm font-medium truncate">{c.name}</span>
@@ -1443,7 +1387,7 @@ export default function ChannelView({
                 <div className="flex items-center gap-2 mx-2 mt-2 pl-3 pr-1 py-1.5 rounded-xl bg-background/60 border-l-2 border-primary">
                   <span className="min-w-0 flex-1 text-sm">
                     <span className="block text-xs font-semibold text-primary">Replying to {replyTo.authorName}</span>
-                    <span className="block truncate text-foreground/60">{replyTo.content || 'Attachment'}</span>
+                    <span className="block truncate text-foreground/60">{replyTo.content ? markdownToPlainText(replyTo.content) : 'Attachment'}</span>
                   </span>
                   <button type="button" onClick={() => setReplyTo(null)} aria-label="Cancel reply" className="p-1.5 rounded-full hover:bg-foreground/10"><X size={15} /></button>
                 </div>
@@ -1484,16 +1428,22 @@ export default function ChannelView({
                   )}
                 </div>
 
-                <textarea
+                <RichComposer
+                  ref={composerRef}
                   value={newMessage}
-                  ref={inputRef}
                   onChange={onComposerChange}
+                  onCaretText={onComposerCaret}
                   onKeyDown={onComposerKeyDown}
-                  onPaste={onComposerPaste}
+                  onPasteFiles={uploadFiles}
+                  onFocusChange={focused => {
+                    if (!focused) {
+                      setShowMentionSuggestions(false);
+                      setShowChannelSuggestions(false);
+                    }
+                  }}
                   placeholder={`Message #${channel.name}`}
-                  aria-label={`Message #${channel.name}`}
-                  rows={1}
-                  className="flex-1 min-w-0 bg-transparent py-2 text-[15px] leading-snug outline-none resize-none max-h-40 placeholder:text-foreground/40"
+                  className="flex-1 min-w-0"
+                  editorClassName="py-2 text-[15px] leading-snug max-h-40 overflow-y-auto"
                 />
 
                 <button type="button" onClick={() => setShowEmojiPicker(!showEmojiPicker)} aria-label="Emoji" className={`w-9 h-9 rounded-full flex items-center justify-center transition-colors ${showEmojiPicker ? 'text-primary' : 'text-foreground/55 hover:bg-foreground/10'}`}>
@@ -1508,7 +1458,7 @@ export default function ChannelView({
                 <div ref={emojiPickerRef} className="absolute bottom-full right-0 mb-2 z-40">
                   <EmojiPicker
                     theme={document.documentElement.classList.contains('light') ? Theme.LIGHT : Theme.DARK}
-                    onEmojiClick={d => { setNewMessage(prev => prev + d.emoji); inputRef.current?.focus(); }}
+                    onEmojiClick={d => { composerRef.current?.insertText(d.emoji); }}
                     lazyLoadEmojis
                     width={320}
                     height={380}
