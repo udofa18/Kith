@@ -2,10 +2,11 @@
  * Every HTTP endpoint lives in this one Express application.
  *
  * The local dev server (`server.ts`) mounts it directly, and the Vercel deployment exposes it
- * through the single catch-all function `api/[...route].ts`. Keeping one function matters on the
- * Hobby plan, which allows at most 12 Serverless Functions per deployment: one file per endpoint
- * (32 at the time of writing) fails the build with "No more than 12 Serverless Functions can be
- * added to a Deployment on the Hobby plan".
+ * through a handful of thin entrypoints under `api/`, one per path depth (Vercel expands a single
+ * dynamic segment per directory). Keeping few functions matters on the Hobby plan, which allows at
+ * most 12 Serverless Functions per deployment: one file per endpoint (32 at the time of writing)
+ * fails the build with "No more than 12 Serverless Functions can be added to a Deployment on the
+ * Hobby plan".
  */
 import express, { type Request, type Response } from 'express';
 import multer from 'multer';
