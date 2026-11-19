@@ -21,6 +21,7 @@ import { postCharLimit } from '../lib/postLimits';
 import Avatar from './ui/Avatar';
 import VerifiedBadge from './VerifiedBadge';
 import RichComposer, { type RichComposerHandle } from './ui/RichComposer';
+import QuotedPost from './post/QuotedPost';
 import { uploadFeedImage, attachFeedMediaToPost, readImageDimensions } from '../lib/media/client';
 import { validateFeedImageBatch, validateFeedImageDimensions } from '../lib/media/validate';
 
@@ -753,24 +754,15 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
                 {loadingQuoted ? (
                   <div className="h-32 bg-black/5 dark:bg-white/5 rounded-2xl animate-pulse border border-black/10 dark:border-white/10" />
                 ) : quotedPost ? (
-                  <div className="border border-black/20 dark:border-white/10 rounded-2xl p-4 bg-black/5 dark:bg-white/5 group relative">
-                    <button 
+                  <div className="group relative">
+                    <button
                       onClick={onCancelQuote}
+                      aria-label="Remove quoted post"
                       className="absolute -top-2 -right-2 w-6 h-6 bg-red-500 text-white rounded-full flex items-center justify-center hover:scale-110 active:scale-95 transition-transform shadow-lg z-10"
                     >
                       <X size={14} />
                     </button>
-                    <div className="flex items-center gap-2 mb-2">
-                       <img 
-                        src={quotedPost.authorPhoto || `https://api.dicebear.com/7.x/avataaars/svg?seed=${quotedPost.authorUid}`} 
-                        alt="Author" 
-                        className="w-5 h-5 rounded-full object-cover" 
-                      />
-                      <span className="text-xs font-bold text-black dark:text-white">{quotedPost.authorName}</span>
-                    </div>
-                    <p className="text-sm text-black/60 dark:text-white/60 line-clamp-3 italic">
-                      {quotedPost.content || quotedPost.description || 'View original post'}
-                    </p>
+                    <QuotedPost post={quotedPost} />
                   </div>
                 ) : (
                   <p className="text-xs italic text-black/30">Original post not found or deleted.</p>

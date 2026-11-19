@@ -33,6 +33,7 @@ import { postCharLimit } from '../lib/postLimits';
 import { renderRichText } from '../lib/richText';
 import { feedMediaFromRecord, retryFeedMedia } from '../lib/media/client';
 import type { FeedPostImage, FeedPostMedia } from '../lib/media/types';
+import QuotedPost from './post/QuotedPost';
 import RichComposer from './ui/RichComposer';
 
 /** Swap a dead avatar URL (expired provider photos are common) for a generated one, once. */
@@ -946,28 +947,11 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
                   {loadingOriginal ? (
                     <div className="h-24 bg-black/5 dark:bg-white/5 rounded-2xl animate-pulse border border-black/10 dark:border-white/10" />
                   ) : originalPost ? (
-                    <div 
-                      onClick={(e) => { e.stopPropagation(); openPost(originalPost); }}
-                      className="border border-black/20 dark:border-white/10 rounded-2xl p-4 hover:bg-black/5 dark:hover:bg-white/5 transition-all group/quote cursor-pointer bg-black/5 dark:bg-white/5"
-                    >
-                      <div className="flex items-center gap-2 mb-2">
-                        <div className="w-5 h-5 rounded-full overflow-hidden shrink-0">
-                          <img 
-                            src={originalPost.authorPhoto || `https://api.dicebear.com/7.x/avataaars/svg?seed=${originalPost.authorUid}`} 
-                            alt={originalPost.authorName} 
-                            className="w-full h-full object-cover" 
-                          />
-                        </div>
-                        <span className="text-[12px] font-bold text-black dark:text-white truncate flex items-center gap-1">
-                          <span>{originalPost.authorName}</span>
-                          <VerifiedBadge userId={originalPost.authorUid} />
-                        </span>
-                        <span className="text-[11px] text-black/40 dark:text-white/40">{originalPost.createdAt ? formatPostDate(originalPost.createdAt) : ''}</span>
-                      </div>
-                      <p className="text-[14px] text-black/70 dark:text-white/70 line-clamp-2 break-words">
-                        {originalPost.content}
-                      </p>
-                    </div>
+                    <QuotedPost
+                      post={originalPost}
+                      active={inView}
+                      onOpenPost={() => openPost(originalPost)}
+                    />
                   ) : (
                     <div className="border border-dashed border-black/10 dark:border-white/10 rounded-2xl p-4 text-sm text-black/40 dark:text-white/40">
                       Original post unavailable

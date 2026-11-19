@@ -232,7 +232,9 @@ aspect ratio (square stays square, portrait stays tall and uncropped). Legacy po
 stored dimensions use a temporary 16:9 box while loading, then switch to the real ratio once
 the browser has them, so they never get stuck letterboxed. Single videos reserve 16:9 until
 metadata arrives and then use the video's own ratio inside a black, `object-contain` player.
-Two-to-four image galleries still crop into the tiled grid, as X does.
+Two-to-four image galleries still crop into the tiled grid, as X does. Quoted posts use the
+same media renderer inside their bordered card (`QuotedPost`), so a quoted image or video is
+visible in the feed and in the composer preview, not just the quoted text.
 
 `FeedImage` renders a native `<img>` with `sizes`, `loading="lazy"` (or eager +
 `fetchPriority="high"` for above-the-fold posts), `decoding="async"`, the placeholder as a
@@ -332,7 +334,7 @@ Executed on the final working tree:
 
 | Command | Result |
 | --- | --- |
-| `npx vitest run` | **21 test files, 154 tests passed** |
+| `npx vitest run` | **22 test files, 157 tests passed** |
 | `npx tsc --noEmit` | Passed, no diagnostics |
 | `npm run build` | Succeeded (existing Firebase dynamic-import and chunk-size warnings only) |
 

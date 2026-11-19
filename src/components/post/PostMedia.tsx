@@ -16,7 +16,7 @@ import type { FeedPostImage, FeedPostMedia } from '../../lib/media/types';
  * - Broken images become a quiet placeholder instead of alt text.
  * - Videos only play while the card is on screen (`active`).
  */
-export default function PostMedia({ media, active, onOpenImage, priority = false, canRetry = false, onRetryImage }: {
+export default function PostMedia({ media, active, onOpenImage, priority = false, canRetry = false, onRetryImage, embedded = false }: {
   media: FeedPostMedia[];
   active: boolean;
   onOpenImage: (url: string) => void;
@@ -25,6 +25,8 @@ export default function PostMedia({ media, active, onOpenImage, priority = false
   /** Only the post author can regenerate failed variants. */
   canRetry?: boolean;
   onRetryImage?: (image: FeedPostImage) => void;
+  /** Inside a quoted-post card: drop the outer margin/border so it reads as one card. */
+  embedded?: boolean;
 }) {
   const items = (media || []).filter(
     (m) => m?.url || (m && 'variants' in m && m.variants && Object.keys(m.variants).length > 0),
@@ -34,7 +36,11 @@ export default function PostMedia({ media, active, onOpenImage, priority = false
   if (items.length === 1) {
     return (
       <div
-        className="relative mt-3 overflow-hidden rounded-2xl border border-black/10 bg-black/5 dark:border-white/10 dark:bg-white/5"
+        className={`relative overflow-hidden ${
+          embedded
+            ? 'rounded-xl bg-black/5 dark:bg-white/5'
+            : 'mt-3 rounded-2xl border border-black/10 bg-black/5 dark:border-white/10 dark:bg-white/5'
+        }`}
         onClick={(e) => e.stopPropagation()}
       >
         <Tile
@@ -60,7 +66,11 @@ export default function PostMedia({ media, active, onOpenImage, priority = false
 
   return (
     <div
-      className={`mt-3 grid gap-0.5 rounded-2xl overflow-hidden border border-black/10 dark:border-white/10 ${layout}`}
+      className={`grid gap-0.5 overflow-hidden ${
+        embedded
+          ? 'rounded-xl'
+          : 'mt-3 rounded-2xl border border-black/10 dark:border-white/10'
+      } ${layout}`}
       onClick={(e) => e.stopPropagation()}
     >
       {shown.map((item, i) => (
