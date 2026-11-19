@@ -3,8 +3,17 @@
     {
       "path": "/api/payments/community/reconcile",
       "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/media/feed/cleanup",
+      "schedule": "30 4 * * *"
     }
   ],
+  "functions": {
+    "api/media/feed/[action].ts": {
+      "maxDuration": 60
+    }
+  },
   "rewrites": [
     {
       "source": "/sitemap.xml",

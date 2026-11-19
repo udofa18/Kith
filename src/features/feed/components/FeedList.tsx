@@ -61,7 +61,7 @@ export default function FeedList({
 
   return (
     <div>
-      {items.map(item => (
+      {items.map((item, index) => (
         <div key={`${item.type}-${item.id}`}>
           {item.reason && (
             <p className="px-6 pt-4 -mb-2 flex items-center gap-1.5 text-xs text-black/40 dark:text-white/40">
@@ -71,6 +71,7 @@ export default function FeedList({
           <PostCard
             post={item.data}
             isDetailView={false}
+            priority={index < 2}
             feedActions={tunable ? {
               onWhy: () => setWhyItem(withReasons(item)),
               onNotInterested: () => actions.notInterested(item),

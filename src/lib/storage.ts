@@ -58,6 +58,12 @@ export interface UploadTask {
   done: Promise<StorageRef>;
 }
 
+export interface UploadMetadata {
+  contentType?: string;
+  /** Defaults to the historical one-hour cache. Variant paths are safe to cache for a year. */
+  cacheControl?: string;
+}
+
 /** Split a legacy `folder/<uid>/file` path into bucket + key. */
 export function ref(_storage: unknown, path: string): StorageRef {
   const fullPath = path.replace(/^\/+/, '');
@@ -94,7 +100,12 @@ async function accessToken(): Promise<string> {
 
 const pendingUploads = new WeakMap<StorageRef, Promise<StorageRef>>();
 
-function startUpload(storageRef: StorageRef, file: File, contentType?: string): UploadTask {
+function startUpload(
+  storageRef: StorageRef,
+  file: File,
+  contentType?: string,
+  cacheControl?: string,
+): UploadTask {
   let progressHandler: ((snapshot: UploadSnapshot) => void) | null = null;
   let errorHandler: ((error: Error) => void) | null = null;
   let completeHandler: (() => void) | null = null;
@@ -141,7 +152,7 @@ function startUpload(storageRef: StorageRef, file: File, contentType?: string): 
       request.open('POST', storageUrl(storageRef.bucket, storageRef.path), true);
       request.setRequestHeader('Authorization', `Bearer ${token}`);
       request.setRequestHeader('x-upsert', 'true');
-      request.setRequestHeader('cache-control', '3600');
+      request.setRequestHeader('cache-control', cacheControl || '3600');
       request.setRequestHeader('Content-Type', contentType || file.type || 'application/octet-stream');
 
       request.upload.onprogress = event => {
@@ -204,9 +215,9 @@ function startUpload(storageRef: StorageRef, file: File, contentType?: string): 
 export async function uploadBytes(
   storageRef: StorageRef,
   file: File,
-  metadata?: { contentType?: string },
+  metadata?: UploadMetadata,
 ): Promise<{ ref: StorageRef; metadata: { contentType: string; size: number } }> {
-  const task = startUpload(storageRef, file, metadata?.contentType);
+  const task = startUpload(storageRef, file, metadata?.contentType, metadata?.cacheControl);
   await task.done;
   return {
     ref: storageRef,
@@ -218,9 +229,9 @@ export async function uploadBytes(
 export function uploadBytesResumable(
   storageRef: StorageRef,
   file: File,
-  metadata?: { contentType?: string },
+  metadata?: UploadMetadata,
 ): UploadTask {
-  return startUpload(storageRef, file, metadata?.contentType);
+  return startUpload(storageRef, file, metadata?.contentType, metadata?.cacheControl);
 }
 
 /**

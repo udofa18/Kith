@@ -31,6 +31,8 @@ import { trackEngagement } from '../features/feed/signals/tracker';
 import { queryKeys } from '../lib/queryClient';
 import { postCharLimit } from '../lib/postLimits';
 import { renderRichText } from '../lib/richText';
+import { feedMediaFromRecord, retryFeedMedia } from '../lib/media/client';
+import type { FeedPostImage, FeedPostMedia } from '../lib/media/types';
 import RichComposer from './ui/RichComposer';
 
 /** Swap a dead avatar URL (expired provider photos are common) for a generated one, once. */
@@ -53,7 +55,7 @@ export interface PostFeedActions {
   onMute: () => void;
 }
 
-export default function PostCard({ post, onPostDeleted, isDetailView = false, compact = false, feedActions, onOpenPost }: { post: any, onPostDeleted?: () => void, isDetailView?: boolean, compact?: boolean, feedActions?: PostFeedActions, onOpenPost?: (post: any) => void }) {
+export default function PostCard({ post, onPostDeleted, isDetailView = false, compact = false, feedActions, onOpenPost, priority = false }: { post: any, onPostDeleted?: () => void, isDetailView?: boolean, compact?: boolean, feedActions?: PostFeedActions, onOpenPost?: (post: any) => void, /** Load the first images eagerly when they are above the fold. */ priority?: boolean }) {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [liked, setLiked] = useState(false);
@@ -135,7 +137,31 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
     return () => unsub();
   }, [post.communityId]);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [mediaOverride, setMediaOverride] = useState<FeedPostMedia[] | null>(null);
   const impressionTracked = useRef(false);
+  const displayMedia = (mediaOverride ?? livePost.media ?? post.media ?? []) as FeedPostMedia[];
+  const isPostAuthor = !!auth.currentUser && auth.currentUser.uid === (livePost.authorUid || post.authorUid);
+
+  /** Regenerates variants for one failed image, then updates the post's existing media array. */
+  const handleRetryMedia = async (image: FeedPostImage) => {
+    if (!image.mediaId) return;
+    const toastId = toast.loading('Retrying image optimization…');
+    try {
+      const record = await retryFeedMedia(image.mediaId);
+      const replacement = feedMediaFromRecord(record);
+      const next = displayMedia.map((item) =>
+        item.type === 'image' && item.mediaId === image.mediaId
+          ? { ...item, ...replacement }
+          : item,
+      );
+      setMediaOverride(next);
+      setLivePost((prev: any) => ({ ...prev, media: next }));
+      await updateDoc(doc(db, collectionName, post.id), { media: next });
+      toast.success('Image optimized', { id: toastId });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Image optimization failed', { id: toastId });
+    }
+  };
 
   const collectionName = useMemo(() => {
     const typeMapping: Record<string, string> = {
@@ -952,8 +978,15 @@ export default function PostCard({ post, onPostDeleted, isDetailView = false, co
             </div>
           )}
           
-          {post.media?.length > 0 ? (
-            <PostMedia media={post.media} active={inView} onOpenImage={setSelectedImage} />
+          {displayMedia.length > 0 ? (
+            <PostMedia
+              media={displayMedia}
+              active={inView}
+              onOpenImage={setSelectedImage}
+              priority={priority}
+              canRetry={isPostAuthor}
+              onRetryImage={handleRetryMedia}
+            />
           ) : previewUrl ? (
             <LinkPreview url={previewUrl} enabled={seen} compact={compact} />
           ) : null}

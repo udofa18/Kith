@@ -38,6 +38,13 @@ import {
 } from './communityBilling.js';
 import { ensureFirebaseRoleClaim } from './authClaims.js';
 import { firebaseApp } from './firebaseApp.js';
+import {
+  handleAttachFeedMedia,
+  handleCleanupFeedMedia,
+  handleFeedMediaStatus,
+  handleProcessFeedMedia,
+  handleRetryFeedMedia,
+} from './media/handlers.js';
 import sitemapHandler from './handlers/sitemap.js';
 import rssHandler from './handlers/rss.js';
 import componentHandler from './handlers/component.js';
@@ -177,6 +184,37 @@ export function createApiApp() {
   // Supabase third-party auth needs the Firebase role claim on new accounts.
   app.post('/api/auth/role-claim', async (req, res) => {
     const { status, body } = await ensureFirebaseRoleClaim(req.headers.authorization);
+    res.status(status).json(body);
+  });
+
+  // Feed image validation, variant generation and retry.
+  app.post('/api/media/feed/process', async (req, res) => {
+    const { status, body } = await handleProcessFeedMedia(req.body ?? {}, req.headers.authorization);
+    res.status(status).json(body);
+  });
+  app.post('/api/media/feed/retry', async (req, res) => {
+    const { status, body } = await handleRetryFeedMedia(req.body ?? {}, req.headers.authorization);
+    res.status(status).json(body);
+  });
+  app.get('/api/media/feed/status', async (req, res) => {
+    const id = typeof req.query.id === 'string' ? req.query.id : undefined;
+    const { status, body } = await handleFeedMediaStatus(id, req.headers.authorization);
+    res.status(status).json(body);
+  });
+  app.post('/api/media/feed/attach', async (req, res) => {
+    const { status, body } = await handleAttachFeedMedia(req.body ?? {}, req.headers.authorization);
+    res.status(status).json(body);
+  });
+  app.get('/api/media/feed/cleanup', async (req, res) => {
+    const denied = cronDenied(req);
+    if (denied) return sendDenied(res, denied);
+    const { status, body } = await handleCleanupFeedMedia();
+    res.status(status).json(body);
+  });
+  app.post('/api/media/feed/cleanup', async (req, res) => {
+    const denied = cronDenied(req);
+    if (denied) return sendDenied(res, denied);
+    const { status, body } = await handleCleanupFeedMedia();
     res.status(status).json(body);
   });
 

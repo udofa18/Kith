@@ -72,7 +72,7 @@ export default function PostDetails() {
               <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" />
             </div>
           ) : post ? (
-            <PostCard post={post} isDetailView={true} />
+            <PostCard post={post} isDetailView={true} priority />
           ) : (
             <div className="py-20 text-center">
               <p className="font-semibold mb-1">This post isn't available</p>

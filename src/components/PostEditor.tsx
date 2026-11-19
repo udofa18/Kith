@@ -21,8 +21,21 @@ import { postCharLimit } from '../lib/postLimits';
 import Avatar from './ui/Avatar';
 import VerifiedBadge from './VerifiedBadge';
 import RichComposer, { type RichComposerHandle } from './ui/RichComposer';
+import { uploadFeedImage, attachFeedMediaToPost, readImageDimensions } from '../lib/media/client';
+import { validateFeedImageBatch, validateFeedImageDimensions } from '../lib/media/validate';
 
 export type PostKind = 'post' | 'shiplog' | 'feedback';
+
+type LocalMediaStatus = 'idle' | 'uploading' | 'processing' | 'ready' | 'failed';
+
+interface LocalMedia {
+  file: File;
+  preview: string;
+  type: 'image' | 'video';
+  status?: LocalMediaStatus;
+  progress?: number;
+  error?: string;
+}
 
 const KINDS: { id: PostKind; label: string; icon: typeof PenLine; placeholder: string }[] = [
   { id: 'post', label: 'Post', icon: PenLine, placeholder: "What's on your mind?" },
@@ -101,8 +114,18 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
 
   
   // Media states
-  const [mediaFiles, setMediaFiles] = useState<{ file: File, preview: string, type: 'image' | 'video' }[]>([]);
+  const [mediaFiles, setMediaFiles] = useState<LocalMedia[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const mediaPreviewsRef = useRef<string[]>([]);
+
+  useEffect(() => {
+    mediaPreviewsRef.current = mediaFiles.map((media) => media.preview);
+  }, [mediaFiles]);
+
+  // Object URLs are only needed while the composer is mounted.
+  useEffect(() => () => {
+    mediaPreviewsRef.current.forEach((preview) => URL.revokeObjectURL(preview));
+  }, []);
   
   // Poll states
   const [showPoll, setShowPoll] = useState(false);
@@ -153,18 +176,73 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
     setSuggesting(false);
   };
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
-    const newMedia = files.map(file => ({
+    // Allow selecting the same file again after removing it.
+    e.target.value = '';
+    if (files.length === 0) return;
+
+    const videos = files.filter((file) => file.type.startsWith('video/'));
+    const images = files.filter((file) => file.type.startsWith('image/'));
+    const unsupported = files.filter(
+      (file) => !file.type.startsWith('video/') && !file.type.startsWith('image/'),
+    );
+    if (unsupported.length > 0) {
+      toast.error('Only images and videos can be attached.');
+    }
+
+    const existingImages = mediaFiles.filter((media) => media.type === 'image');
+    const batch = validateFeedImageBatch(
+      images,
+      existingImages.length,
+      existingImages.reduce((total, media) => total + media.file.size, 0),
+    );
+    if (batch.errors.length > 0) {
+      batch.errors.forEach((message) => toast.error(message));
+    }
+
+    const acceptedImages = new Set(batch.accepted);
+    const acceptedFiles = files.filter(
+      (file) => videos.includes(file) || acceptedImages.has(file),
+    );
+    const newMedia: LocalMedia[] = acceptedFiles.map((file) => ({
       file,
       preview: URL.createObjectURL(file),
-      type: file.type.startsWith('video/') ? 'video' as const : 'image' as const
+      type: file.type.startsWith('video/') ? 'video' as const : 'image' as const,
+      status: 'idle' as const,
     }));
-    setMediaFiles(prev => [...prev, ...newMedia]);
+    setMediaFiles((prev) => [...prev, ...newMedia]);
+
+    // Dimensions are checked after the preview appears; the server validates the bytes too.
+    for (const media of newMedia.filter((item) => item.type === 'image')) {
+      try {
+        const { width, height } = await readImageDimensions(media.file);
+        const dimensionError = validateFeedImageDimensions(width, height);
+        if (dimensionError) {
+          toast.error(dimensionError);
+          setMediaFiles((prev) => prev.filter((item) => item.preview !== media.preview));
+          URL.revokeObjectURL(media.preview);
+        }
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'That image could not be read.');
+        setMediaFiles((prev) => prev.filter((item) => item.preview !== media.preview));
+        URL.revokeObjectURL(media.preview);
+      }
+    }
+  };
+
+  const updateMedia = (preview: string, patch: Partial<LocalMedia>) => {
+    setMediaFiles((prev) =>
+      prev.map((media) => (media.preview === preview ? { ...media, ...patch } : media)),
+    );
   };
 
   const removeMedia = (index: number) => {
-    setMediaFiles(prev => prev.filter((_, i) => i !== index));
+    setMediaFiles((prev) => {
+      const removed = prev[index];
+      if (removed) URL.revokeObjectURL(removed.preview);
+      return prev.filter((_, i) => i !== index);
+    });
   };
 
   const addPollOption = () => {
@@ -200,13 +278,48 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
       const username = userData?.username || auth.currentUser.email?.split('@')[0] || 'user';
       const displayName = userData?.displayName || auth.currentUser.displayName || 'Anonymous';
 
-      // Upload media
-      const uploadedMedia = [];
-      for (const media of mediaFiles) {
-        const storageRef = ref(null, `posts/${auth.currentUser.uid}/${Date.now()}_${media.file.name}`);
-        const uploadTask = await uploadBytesResumable(storageRef, media.file);
-        const url = await getDownloadURL(uploadTask.ref);
-        uploadedMedia.push({ type: media.type, url });
+      // Upload media. Images go through validation + variant generation; videos keep the
+      // existing upload path. A failed original upload aborts publishing and keeps the draft.
+      const uploadedMedia: any[] = [];
+      const processedMediaIds: string[] = [];
+      let currentPreview: string | null = null;
+      try {
+        for (const media of mediaFiles) {
+          currentPreview = media.preview;
+          if (media.type === 'video') {
+            const storageRef = ref(null, `posts/${auth.currentUser.uid}/${Date.now()}_${media.file.name}`);
+            const uploadTask = await uploadBytesResumable(storageRef, media.file);
+            const url = await getDownloadURL(uploadTask.ref);
+            uploadedMedia.push({ type: 'video', url });
+            continue;
+          }
+
+          updateMedia(media.preview, { status: 'uploading', progress: 0, error: undefined });
+          const result = await uploadFeedImage(media.file, {
+            onProgress: (progress) => updateMedia(media.preview, { progress }),
+            onStage: (stage) =>
+              updateMedia(media.preview, {
+                status: stage === 'uploading' ? 'uploading' : 'processing',
+              }),
+          });
+          uploadedMedia.push(result.postMedia);
+          if (result.media?.id) processedMediaIds.push(result.media.id);
+          updateMedia(media.preview, {
+            status: result.processed ? 'ready' : 'failed',
+            progress: 100,
+            error: result.postMedia.error || undefined,
+          });
+          if (!result.processed) {
+            toast.error('Photo added, but optimization failed. You can retry it from the post.');
+          }
+        }
+      } catch (uploadError) {
+        const message =
+          uploadError instanceof Error ? uploadError.message : 'Media upload failed. Try again.';
+        if (currentPreview) updateMedia(currentPreview, { status: 'failed', error: message });
+        toast.error(message);
+        setLoading(false);
+        return;
       }
 
       // Tags typed in the text count too, not just the suggested ones.
@@ -260,6 +373,14 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
 
       try {
         const postRef = await addDoc(collection(db, 'posts'), postData);
+
+        // Link the processing rows to the post. Firestore's media array is still the
+        // attachment relationship used by the feed; this is best-effort metadata.
+        if (processedMediaIds.length > 0) {
+          attachFeedMediaToPost(postRef.id, processedMediaIds).catch((error) => {
+            console.warn('[media] could not attach media rows to post:', error);
+          });
+        }
         
         // Notify subscribers
         if (auth.currentUser) {
@@ -402,6 +523,7 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
       setCode('');
       setHashtags([]);
       setShowCode(false);
+      mediaFiles.forEach((media) => URL.revokeObjectURL(media.preview));
       setMediaFiles([]);
       setShowPoll(false);
       setPollQuestion('');
@@ -667,9 +789,23 @@ export default function PostEditor({ onPostCreated, communityId, channelId, quot
                   ) : (
                     <video src={media.preview} className="w-full h-full object-cover" />
                   )}
+                  {(media.status === 'uploading' || media.status === 'processing') && (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-black/60 text-white">
+                      <Loader2 size={16} className="animate-spin" />
+                      <span className="text-[10px] font-medium">
+                        {media.status === 'uploading' ? `Uploading ${media.progress ?? 0}%` : 'Optimizing…'}
+                      </span>
+                    </div>
+                  )}
+                  {media.status === 'failed' && (
+                    <span className="absolute bottom-1 left-1 rounded bg-red-500/90 px-1.5 py-0.5 text-[9px] font-semibold text-white">
+                      Couldn't optimize
+                    </span>
+                  )}
                   <button 
                     onClick={() => removeMedia(i)}
-                    className="absolute top-2 right-2 p-1 bg-black/60 rounded-lg border border-white/20 text-white hover:bg-black"
+                    disabled={loading}
+                    className="absolute top-2 right-2 p-1 bg-black/60 rounded-lg border border-white/20 text-white hover:bg-black disabled:opacity-40"
                   >
                     <X size={14} />
                   </button>

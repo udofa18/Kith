@@ -80,6 +80,42 @@ export interface Database {
         };
         Update: Partial<Database['public']['Tables']['posts']['Row']>;
       };
+      feed_media: {
+        Row: {
+          id: string;
+          user_id: string;
+          post_id: string | null;
+          bucket: string;
+          original_path: string;
+          mime_type: string;
+          original_bytes: number;
+          width: number;
+          height: number;
+          aspect_ratio: number;
+          format: string;
+          has_alpha: boolean;
+          is_animated: boolean;
+          status: 'pending' | 'processing' | 'ready' | 'failed';
+          variants: Json;
+          placeholder: string | null;
+          error_message: string | null;
+          attempt_count: number;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: Partial<Database['public']['Tables']['feed_media']['Row']> & {
+          id: string;
+          user_id: string;
+          original_path: string;
+          mime_type: string;
+          original_bytes: number;
+          width: number;
+          height: number;
+          aspect_ratio: number;
+          format: string;
+        };
+        Update: Partial<Database['public']['Tables']['feed_media']['Row']>;
+      };
       notifications: {
         Row: {
           id: string;
