@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { doc, getDoc, onSnapshot, setDoc, updateDoc, deleteDoc, collection, query, where, getDocs, addDoc, serverTimestamp, writeBatch, increment } from 'firebase/firestore';
 import { db, auth, handleFirestoreError, OperationType } from '../firebase';
@@ -37,10 +38,6 @@ import {
   Hand,
   Smile,
   X,
-  ThumbsUp,
-  Heart,
-  Zap,
-  PartyPopper,
   Mic,
   MicOff,
   Video,
@@ -83,6 +80,8 @@ import { sendDirectMessage } from '../features/messages/api';
 import { DEFAULT_LIVE_SETTINGS, normalizeLiveSettings, type LiveSessionSettings } from '../lib/liveSessionSettings';
 import { isInstantLiveSession, liveExitHref } from '../lib/eventLinks';
 import { LIVE_HEARTBEAT_STALE_MS } from '../lib/livePresence';
+import { QUIET_REACTIONS, SOUND_REACTIONS } from '../lib/liveReactions';
+import { playReactionSound, type ReactionSound } from '../lib/reactionSounds';
 
 export default function LiveSession() {
   const { eventId } = useParams();
@@ -634,6 +633,12 @@ export default function LiveSession() {
                 spotlightIdentity={spotlightIdentity}
                 manualPinnedTrack={manualPinnedTrack}
                 onPin={(identity, source) => setManualPinnedTrack({ identity, source })}
+              />
+              {/* Floating reactions rise over the video from random points near the
+                  floor. The layer sits below the controls so bubbles pass behind them. */}
+              <div
+                id="live-reaction-layer"
+                className="pointer-events-none absolute inset-0 z-[45] overflow-hidden"
               />
             </div>
 
@@ -1485,6 +1490,9 @@ function CustomParticipantTile({
         <VideoTrack 
           trackRef={trackRef as any} 
           className={`w-full h-full ${isScreenShare ? 'object-contain bg-black' : 'object-cover'}`} 
+          // Mirror the local camera so the preview matches a mirror, the way
+          // every self-view does. Screen shares and remote feeds stay untouched.
+          style={isLocal && !isScreenShare ? { transform: 'scaleX(-1)' } : undefined}
           disablePictureInPicture
           playsInline
         />
@@ -1573,6 +1581,85 @@ function CustomParticipantTile({
   );
 }
 
+interface FloatingReaction {
+  id: number;
+  emoji: string;
+  name: string;
+  photo: string;
+  startX: number;
+  drift: number;
+  duration: number;
+  delay: number;
+}
+
+/**
+ * Avatar + emoji bubble rising over the video. One bubble per tap, launched
+ * from a random point along the floor and wobbling on the way to the top.
+ */
+function LiveReactionLayer({ reactions }: { reactions: FloatingReaction[] }) {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const [height, setHeight] = useState(640);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    const measure = () => setHeight(host.clientHeight || 640);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(host);
+    return () => observer.disconnect();
+  }, []);
+
+  return (
+    <div ref={hostRef} className="pointer-events-none absolute inset-0 overflow-hidden">
+      <AnimatePresence>
+        {reactions.map(reaction => (
+          <motion.div
+            key={reaction.id}
+            initial={{ opacity: 0, y: 0, scale: 0.5 }}
+            animate={{
+              // Travel the full height of the video area and keep going a little
+              // past the top so the fade-out happens off stage.
+              y: -(height + 120),
+              x: [
+                0,
+                reaction.drift,
+                -reaction.drift * 0.7,
+                reaction.drift * 0.45,
+                -reaction.drift * 0.2,
+              ],
+              opacity: [0, 1, 1, 1, 0],
+              scale: [0.5, 1, 1, 0.95],
+            }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: reaction.duration, ease: 'easeOut', delay: reaction.delay }}
+            className="absolute select-none"
+            style={{ left: `${reaction.startX}%`, bottom: 4 }}
+          >
+            <div className="flex items-center gap-1 rounded-full bg-[#141416]/95 p-1 shadow-[0_16px_40px_-12px_rgba(0,0,0,0.85)] ring-1 ring-white/10 backdrop-blur-md">
+              <span className="grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded-full bg-white/10 text-[11px] font-bold uppercase text-white/70">
+                {reaction.photo ? (
+                  <img
+                    src={reaction.photo}
+                    alt=""
+                    className="h-full w-full object-cover"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  (reaction.name || 'S').slice(0, 1)
+                )}
+              </span>
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#2a2a2e] text-[20px] leading-none">
+                {reaction.emoji}
+              </span>
+            </div>
+          </motion.div>
+        ))}
+      </AnimatePresence>
+    </div>
+  );
+}
+
 function CustomControlBar({ allowReactions = true, allowHands = true, onLeave }: { allowReactions?: boolean; allowHands?: boolean; onLeave: () => void }) {
   const room = useRoomContext();
   const { localParticipant } = useLocalParticipant();
@@ -1604,41 +1691,84 @@ function CustomControlBar({ allowReactions = true, allowHands = true, onLeave }:
 
   const [isHandRaised, setIsHandRaised] = useState(false);
   const [showReactions, setShowReactions] = useState(false);
-  const [activeReactions, setActiveReactions] = useState<{ id: number; emoji: string; x: number; size: number; delay: number; duration: number }[]>([]);
+  const [activeReactions, setActiveReactions] = useState<FloatingReaction[]>([]);
+  const [reactionLayer, setReactionLayer] = useState<HTMLElement | null>(null);
+  const reactionSeq = useRef(0);
+  const [me, setMe] = useState(() => ({
+    name: auth.currentUser?.displayName || 'Someone',
+    photo: auth.currentUser?.photoURL || '',
+  }));
+  const meRef = useRef(me);
 
-  const reactions = [
-    { icon: ThumbsUp, emoji: '👍', label: 'Like' },
-    { icon: Heart, emoji: '❤️', label: 'Love' },
-    { icon: Smile, emoji: '😊', label: 'Smile' },
-    { icon: Zap, emoji: '⚡', label: 'Zap' },
-    { icon: PartyPopper, emoji: '🎉', label: 'Party' },
-  ];
+  useEffect(() => {
+    meRef.current = me;
+  }, [me]);
 
-  const triggerReaction = (emoji: string) => {
-    const count = 5 + Math.floor(Math.random() * 5);
-    const newReactions = Array.from({ length: count }).map((_, i) => ({
-      id: Date.now() + i,
-      emoji,
-      x: (Math.random() - 0.5) * 300,
-      size: 20 + Math.random() * 30,
-      delay: Math.random() * 0.5,
-      duration: 2 + Math.random() * 2
-    }));
+  // The bubbles live in a layer over the video (rendered by the page) while the
+  // picker stays in the control bar, so reactions are portalled into that layer.
+  useEffect(() => {
+    setReactionLayer(document.getElementById('live-reaction-layer'));
+  }, []);
 
-    setActiveReactions(prev => [...prev, ...newReactions]);
-    setTimeout(() => {
-      setActiveReactions(prev => prev.filter(r => !newReactions.find(nr => nr.id === r.id)));
-    }, 4000);
-  };
+  useEffect(() => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
+    let cancelled = false;
+    getDoc(doc(db, 'users', uid))
+      .then(snapshot => {
+        if (cancelled || !snapshot.exists()) return;
+        const data = snapshot.data();
+        setMe({
+          name: data.displayName || data.username || auth.currentUser?.displayName || 'Someone',
+          photo: data.profileImage || data.photoURL || auth.currentUser?.photoURL || '',
+        });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
-  const sendReaction = async (emoji: string) => {
-    triggerReaction(emoji);
-    setShowReactions(false);
+  /** One click, one bubble. Rapid taps stack up instead of being throttled. */
+  const spawnReaction = useCallback(
+    (emoji: string, sender?: { name?: string; photo?: string }) => {
+      const id = (reactionSeq.current += 1);
+      const person = sender ?? meRef.current;
+      const reaction: FloatingReaction = {
+        id,
+        emoji,
+        name: person.name || 'Someone',
+        photo: person.photo || '',
+        startX: 4 + Math.random() * 72,
+        drift: 12 + Math.random() * 26,
+        duration: 3.6 + Math.random() * 1.8,
+        delay: 0,
+      };
+      // Keep a hard cap so a mashing crowd cannot flood the DOM.
+      setActiveReactions(prev => [...prev.slice(-29), reaction]);
+      window.setTimeout(() => {
+        setActiveReactions(prev => prev.filter(item => item.id !== id));
+      }, (reaction.duration + 0.5) * 1000);
+    },
+    [],
+  );
 
-    // Broadcast to others
+  const sendReaction = async (emoji: string, sound?: ReactionSound) => {
+    if (sound) playReactionSound(sound);
+    spawnReaction(emoji, meRef.current);
+
+    // Broadcast to the rest of the room with the sender's identity so their
+    // avatar travels with the emoji on every screen.
     try {
       const encoder = new TextEncoder();
-      const data = encoder.encode(JSON.stringify({ type: 'reaction', emoji }));
+      const data = encoder.encode(
+        JSON.stringify({
+          type: 'reaction',
+          emoji,
+          name: meRef.current.name,
+          photo: meRef.current.photo,
+        }),
+      );
       await localParticipant.publishData(data, { reliable: false });
     } catch (e) {
       console.error('Failed to broadcast reaction', e);
@@ -1646,14 +1776,13 @@ function CustomControlBar({ allowReactions = true, allowHands = true, onLeave }:
   };
 
   useEffect(() => {
-    const handleData = (payload: Uint8Array, participant?: Participant) => {
+    const handleData = (payload: Uint8Array) => {
       try {
-        const decoder = new TextDecoder();
-        const data = JSON.parse(decoder.decode(payload));
-        if (data.type === 'reaction') {
-          triggerReaction(data.emoji);
+        const data = JSON.parse(new TextDecoder().decode(payload));
+        if (data.type === 'reaction' && typeof data.emoji === 'string') {
+          spawnReaction(data.emoji, { name: data.name, photo: data.photo });
         }
-      } catch (e) {
+      } catch {
         // Ignore parsing errors
       }
     };
@@ -1662,7 +1791,7 @@ function CustomControlBar({ allowReactions = true, allowHands = true, onLeave }:
     return () => {
       room.off('dataReceived', handleData);
     };
-  }, [room]);
+  }, [room, spawnReaction]);
 
   const toggleHand = async () => {
     if (!allowHands) {
@@ -1695,36 +1824,8 @@ function CustomControlBar({ allowReactions = true, allowHands = true, onLeave }:
 
   return (
     <div className="flex flex-col items-center gap-4 pb-4">
-      {/* Floating Reactions */}
-      <div className="relative h-0 w-full flex justify-center">
-        <AnimatePresence>
-          {activeReactions.map(reaction => (
-            <motion.div
-              key={reaction.id}
-              initial={{ y: 0, opacity: 0, scale: 0.5, x: 0 }}
-              animate={{ 
-                y: -400, 
-                opacity: [0, 1, 1, 0], 
-                scale: [0.5, 1.2, 1, 0.8],
-                x: reaction.x + Math.sin(Date.now() / 1000) * 20
-              }}
-              transition={{ 
-                duration: reaction.duration, 
-                delay: reaction.delay,
-                ease: "easeOut"
-              }}
-              exit={{ opacity: 0 }}
-              className="absolute pointer-events-none select-none"
-              style={{ 
-                fontSize: `${reaction.size}px`,
-                left: '50%'
-              }}
-            >
-              {reaction.emoji}
-            </motion.div>
-          ))}
-        </AnimatePresence>
-      </div>
+      {reactionLayer &&
+        createPortal(<LiveReactionLayer reactions={activeReactions} />, reactionLayer)}
 
       <div className="flex max-w-full items-center gap-1.5 rounded-3xl border border-white/10 bg-black/60 px-2.5 py-2.5 shadow-[0_0_50px_rgba(0,0,0,0.5)] backdrop-blur-3xl sm:gap-2 sm:px-6 sm:py-3">
         <div className="flex items-center gap-0.5 sm:gap-1">
@@ -1780,21 +1881,51 @@ function CustomControlBar({ allowReactions = true, allowHands = true, onLeave }:
             <AnimatePresence>
               {showReactions && allowReactions && (
                 <motion.div
-                  initial={{ opacity: 0, y: 10, scale: 0.9 }}
-                  animate={{ opacity: 1, y: -70, scale: 1 }}
-                  exit={{ opacity: 0, y: 10, scale: 0.9 }}
-                  className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 p-2 bg-black/80 backdrop-blur-2xl border border-white/10 rounded-2xl flex gap-2 shadow-2xl"
+                  initial={{ opacity: 0, y: 12, scale: 0.97 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 12, scale: 0.97 }}
+                  className="fixed left-1/2 bottom-[88px] z-[70] w-max max-w-[calc(100vw-16px)] -translate-x-1/2 rounded-2xl border border-white/10 bg-black/85 px-2 py-2 shadow-2xl backdrop-blur-2xl sm:bottom-[100px] sm:px-3"
                 >
-                  {reactions.map((r, i) => (
-                    <button
-                      key={i}
-                      onClick={() => sendReaction(r.emoji)}
-                      className="p-3 hover:bg-white/10 rounded-xl transition-all hover:scale-125"
-                      title={r.label}
-                    >
-                      <r.icon size={20} className="text-white" />
-                    </button>
-                  ))}
+                  <div className="flex flex-col items-center gap-1.5 sm:flex-row sm:justify-center sm:gap-2">
+                    <div className="flex items-center justify-center gap-1 sm:gap-2">
+                      {SOUND_REACTIONS.map(item => (
+                        <button
+                          key={item.sound}
+                          type="button"
+                          onClick={() => sendReaction(item.emoji, item.sound)}
+                          title={`${item.label} (with sound)`}
+                          className="flex w-[52px] shrink-0 flex-col items-center gap-1 rounded-xl bg-white/[0.05] px-1 py-1.5 transition-colors hover:bg-white/10 active:scale-95 sm:w-[58px]"
+                        >
+                          <span className="text-base leading-none sm:text-lg">{item.emoji}</span>
+                          <span className="flex h-2 items-end gap-[2px] text-white/35" aria-hidden>
+                            {[4, 7, 5, 6, 3].map((bar, index) => (
+                              <span
+                                key={index}
+                                className="w-[2px] rounded-full bg-current"
+                                style={{ height: `${bar}px` }}
+                              />
+                            ))}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+
+                    <span className="hidden h-8 w-px shrink-0 bg-white/10 sm:block" aria-hidden />
+
+                    <div className="flex w-full items-center justify-center gap-0.5 sm:w-auto sm:gap-1">
+                      {QUIET_REACTIONS.map(emoji => (
+                        <button
+                          key={emoji}
+                          type="button"
+                          onClick={() => sendReaction(emoji)}
+                          title={`React with ${emoji}`}
+                          className="grid h-7 min-w-0 flex-1 place-items-center rounded-lg text-[15px] transition-transform hover:scale-110 hover:bg-white/10 active:scale-95 sm:h-10 sm:w-10 sm:flex-none sm:text-lg"
+                        >
+                          {emoji}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </motion.div>
               )}
             </AnimatePresence>

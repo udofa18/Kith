@@ -202,7 +202,14 @@ function MiniPlayerContent({
     <div className="relative w-full h-full select-none bg-black">
       {activeTrack ? (
         <TrackRefContext.Provider value={activeTrack}>
-           <VideoTrack trackRef={activeTrack} className="w-full h-full object-cover" disablePictureInPicture playsInline />
+           <VideoTrack 
+             trackRef={activeTrack} 
+             className="w-full h-full object-cover" 
+             // Mirror the local self-view, never someone else's feed or a screen share.
+             style={activeTrack.participant.isLocal && activeTrack.source !== Track.Source.ScreenShare ? { transform: 'scaleX(-1)' } : undefined}
+             disablePictureInPicture 
+             playsInline 
+           />
         </TrackRefContext.Provider>
       ) : (
         <div className="w-full h-full flex flex-col items-center justify-center bg-zinc-900">
