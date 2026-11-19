@@ -334,7 +334,7 @@ Executed on the final working tree:
 
 | Command | Result |
 | --- | --- |
-| `npx vitest run` | **22 test files, 157 tests passed** |
+| `npx vitest run` | **24 test files, 168 tests passed** |
 | `npx tsc --noEmit` | Passed, no diagnostics |
 | `npm run build` | Succeeded (existing Firebase dynamic-import and chunk-size warnings only) |
 

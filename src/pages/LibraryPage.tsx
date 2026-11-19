@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { BookOpen, CheckCircle2, Download, Loader2, XCircle } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { supabase } from '../supabase';
-import { downloadProduct, getOrderStatus, isOrderId, OrderStatus, formatPrice } from '../lib/payments';
+import { downloadProduct, getOrderStatus, isOrderId, OrderStatus, formatPrice, PAYMENT_CURRENCY } from '../lib/payments';
 
 interface PurchaseRow {
   id: string;
@@ -137,7 +137,7 @@ export default function LibraryPage() {
                   </p>
                   {p.price_cents !== null && (
                     <p className="text-xs text-[var(--ds-faint)]">
-                      Paid {formatPrice(p.price_cents, p.products?.currency ?? 'USD')}
+                      Paid {formatPrice(p.price_cents, p.products?.currency ?? PAYMENT_CURRENCY)}
                     </p>
                   )}
                 </Link>

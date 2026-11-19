@@ -152,6 +152,29 @@ refused so nobody is left paying for access they no longer have. The endpoint al
 member document when called directly, so it cannot be used to keep paid access while stopping
 billing.
 
+## Creator dashboard and buyer billing
+
+Naira is the headline currency because Paystack is the active provider:
+
+- `GET /api/payments/balance` returns every currency in `balances` and picks the headline
+  `currency` as NGN when it exists, then USD, then the first currency with a balance. The old
+  hard-coded USD headline is gone.
+- `src/pages/Dashboard.tsx` totals one currency at a time from `creator_ledger` sale credits, so the
+  revenue stat and chart include **products, community memberships, event tickets and boosts**.
+  Orders without `order_items` (memberships, tickets) used to be invisible to the product-only
+  query. It uses NGN when the creator has any NGN sales and falls back to USD otherwise; naira and
+  dollars are never silently added together. The revenue stat, chart subtitle, tooltip and axis all
+  use the selected currency.
+- `src/pages/PayoutSettingsPage.tsx` is always naira-first. The available, on-hold and lifetime
+  cards read the NGN ledger row even when older USD earnings exist; any dollar balance stays under
+  “Other balances” and is never added to the naira totals.
+- The dashboard **Billing** tab calls `GET /api/payments/community/billing` and lists each
+  community membership (state, price, last payment, period end/next charge) plus every
+  `community_membership` payment with a link to its receipt. `/billing` remains the full page for
+  cancellation and printable receipts, and the settings billing section links to it.
+- New listings default to NGN in both the upload flow and the product editor. Sellers can still
+  switch a listing to USD explicitly; changing currency never converts the entered number.
+
 ## Payouts (paused)
 
 Stripe Connect is still the only payout adapter, and its setup/withdrawal UI is marked coming soon.

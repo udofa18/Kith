@@ -42,7 +42,14 @@ import {
   type PaymentProviderId,
 } from './paymentProviders.js';
 import { isSuccess, isTerminalFailure, validatePaymentResult } from './paymentValidation.js';
-import { computeFee, MoneyError, normalizeCurrency, payoutAvailableAt, toMinorUnits } from './money.js';
+import {
+  computeFee,
+  MoneyError,
+  normalizeCurrency,
+  payoutAvailableAt,
+  pickHeadlineCurrency,
+  toMinorUnits,
+} from './money.js';
 import { addDaysIso, membershipExpiryFields, membershipGraceDays } from './communityBilling.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -2069,7 +2076,11 @@ export async function getCreatorBalance(authorization?: string): Promise<Payment
       lifetimeCents: Number(r.lifetime_cents ?? 0),
       withdrawable: false,
     }));
-    const row = balances.find((b: { currency: string }) => b.currency === STRIPE_CURRENCY);
+    // Naira led every Paystack sale, so it headlines the balance. USD covers older Stripe sales.
+    const headlineCurrency = pickHeadlineCurrency(
+      balances.map((b: { currency: string }) => b.currency),
+    );
+    const row = balances.find((b: { currency: string }) => b.currency === headlineCurrency);
 
     // "Recent sales" used to be an amount and the word "Sale". Join the ledger rows with the order,
     // the buyer and what was bought so a creator can tell a product sale from a membership renewal.
@@ -2168,8 +2179,8 @@ export async function getCreatorBalance(authorization?: string): Promise<Payment
     return {
       status: 200,
       body: {
-        // USD remains the headline balance so existing dashboards keep working.
-        currency: STRIPE_CURRENCY,
+        // NGN when the creator has naira earnings, otherwise USD or the first available currency.
+        currency: headlineCurrency,
         availableCents: row?.availableCents ?? 0,
         pendingCents: row?.pendingCents ?? 0,
         lifetimeCents: row?.lifetimeCents ?? 0,

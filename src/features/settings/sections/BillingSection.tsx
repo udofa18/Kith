@@ -27,10 +27,18 @@ export default function BillingSection(_props: SectionProps) {
           </Button>
         </SettingRow>
         <SettingRow
+          title="Community memberships & receipts"
+          description="See every paid community subscription, the period each payment covered, and printable receipts."
+        >
+          <Button variant="ghost" size="sm" rightIcon={<ExternalLink size={12} />} onClick={() => navigate('/billing')}>
+            Billing &amp; receipts
+          </Button>
+        </SettingRow>
+        <SettingRow
           title="Receipts"
           description="Every successful payment is emailed to your account address. You can also download invoices from the library."
         >
-          <Button variant="ghost" size="sm" onClick={() => navigate('/library')}>
+          <Button variant="ghost" size="sm" onClick={() => navigate('/billing')}>
             View receipts
           </Button>
         </SettingRow>

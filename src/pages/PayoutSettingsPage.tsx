@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AlertCircle, ArrowLeft, Clock, Loader2, Wallet } from 'lucide-react';
 import { BalanceResponse, formatPrice, getCreatorBalance } from '../lib/payments';
+import { nairaBalance } from '../features/payouts/balance';
 
 export default function PayoutSettingsPage() {
   const navigate = useNavigate();
@@ -38,11 +39,16 @@ export default function PayoutSettingsPage() {
     );
   }
 
-  const currency = balance?.currency ?? 'USD';
-  const available = balance?.availableCents ?? 0;
-  const pending = balance?.pendingCents ?? 0;
+  // Paystack settles in naira, so the payout page is always naira-first. Any USD earnings from the
+  // paused Stripe integration stay visible as a separate balance and are never added to these totals.
+  const currency = 'NGN';
+  const naira = nairaBalance(balance);
+  const available = naira.availableCents;
+  const pending = naira.pendingCents;
   const otherBalances = (balance?.balances ?? []).filter(
-    b => b.currency !== currency && (b.availableCents > 0 || b.pendingCents > 0),
+    b =>
+      b.currency?.toUpperCase() !== currency &&
+      (b.availableCents > 0 || b.pendingCents > 0),
   );
 
   const errorBox = error ? (
@@ -64,8 +70,8 @@ export default function PayoutSettingsPage() {
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Earnings &amp; payouts</h1>
         <p className="mt-2 text-[var(--ds-muted-foreground)]">
-          Sales are collected with Paystack and saved in your Kith balance. Withdrawals are coming
-          soon.
+          Paystack collects naira and every sale is saved in your Kith naira balance. Withdrawals are
+          coming soon, and older dollar earnings remain listed separately.
         </p>
       </div>
 
@@ -97,14 +103,14 @@ export default function PayoutSettingsPage() {
         </div>
         <div className="rounded-[var(--ds-radius-lg)] border border-[var(--ds-border)] bg-[var(--ds-surface)] p-5 shadow-[var(--ds-shadow-soft)]">
           <p className="text-xs font-semibold uppercase tracking-widest text-[var(--ds-muted-foreground)]">Lifetime earned</p>
-          <p className="mt-2 font-display text-2xl font-extrabold">{formatPrice(balance?.lifetimeCents ?? 0, currency)}</p>
+          <p className="mt-2 font-display text-2xl font-extrabold">{formatPrice(naira.lifetimeCents, currency)}</p>
           <p className="mt-1 text-xs text-[var(--ds-faint)]">After platform fees</p>
         </div>
       </section>
 
       {otherBalances.length > 0 && (
         <div className="rounded-[var(--ds-radius-lg)] border border-[var(--ds-border)] bg-[var(--ds-surface)] p-5">
-          <p className="text-sm font-semibold">Other balances</p>
+          <p className="text-sm font-semibold">Other currency balances</p>
           {otherBalances.map(b => (
             <p key={b.currency} className="mt-1 text-sm text-[var(--ds-muted-foreground)]">
               {formatPrice(b.availableCents, b.currency)} {b.currency} available

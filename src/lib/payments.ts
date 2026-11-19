@@ -227,7 +227,7 @@ export interface CurrencyBalance {
 }
 
 export interface BalanceResponse {
-  /** Headline currency (USD). */
+  /** Headline currency: NGN when the creator has naira earnings, otherwise USD. */
   currency: string;
   /** Withdrawable now. */
   availableCents: number;

@@ -7,10 +7,21 @@ import { auth } from '../firebase';
 import { supabase } from '../supabase';
 import { Badge, Button, Card, EmptyState, Skeleton } from '../components/ui';
 import { typeLabel } from '../components/marketplace/MarketCard';
-import { BalanceResponse, beginCheckout, downloadProduct, formatPrice, getCreatorBalance } from '../lib/payments';
+import {
+  BalanceResponse,
+  beginCheckout,
+  downloadProduct,
+  formatPrice,
+  getCreatorBalance,
+  getMyMemberships,
+  PAYMENT_CURRENCY,
+  type MyMembershipsResponse,
+} from '../lib/payments';
+import DashboardBilling from '../features/dashboard/DashboardBilling';
+import { summarizeRevenue, type RevenueSale } from '../features/dashboard/revenue';
 import { cn } from '../lib/cn';
 
-type Tab = 'products' | 'sales' | 'purchases';
+type Tab = 'products' | 'sales' | 'purchases' | 'billing';
 
 interface ProductRow {
   id: string;
@@ -42,6 +53,18 @@ interface SaleRow {
   orders: { status: string; paid_at: string | null } | null;
 }
 
+/**
+ * One sale credit from `creator_ledger`: the creator's share of a product, membership, ticket or
+ * boost. The ledger is the only client-readable source that covers every order kind.
+ */
+interface EarningRow {
+  id: string;
+  amount_cents: number;
+  currency: string;
+  created_at: string | null;
+  order_id: string | null;
+}
+
 interface PurchaseRow {
   id: string;
   product_id: string;
@@ -68,9 +91,13 @@ export default function Dashboard() {
   const [tab, setTab] = useState<Tab>('products');
   const [products, setProducts] = useState<ProductRow[]>([]);
   const [sales, setSales] = useState<SaleRow[]>([]);
+  const [earnings, setEarnings] = useState<EarningRow[]>([]);
   const [purchases, setPurchases] = useState<PurchaseRow[]>([]);
 
   const [balance, setBalance] = useState<BalanceResponse | null>(null);
+  const [billing, setBilling] = useState<MyMembershipsResponse | null>(null);
+  const [billingLoading, setBillingLoading] = useState(true);
+  const [billingError, setBillingError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState<string | null>(null);
@@ -82,7 +109,7 @@ export default function Dashboard() {
     }
     let cancelled = false;
     (async () => {
-      const [productRes, saleRes, purchaseRes, balanceRes] = await Promise.all([
+      const [productRes, saleRes, earningRes, purchaseRes, balanceRes] = await Promise.all([
         supabase!
           .from('products')
           .select('id, title, product_type, cover_url, price_cents, currency, sales_count, rating_avg, rating_count, status, promoted_until')
@@ -95,6 +122,15 @@ export default function Dashboard() {
           .eq('orders.status', 'paid')
           .order('created_at', { ascending: false })
           .limit(500),
+        // Every credited sale, not just products. Community memberships, event tickets and boosts
+        // have no order_items rows, so the ledger is what makes revenue complete.
+        supabase!
+          .from('creator_ledger')
+          .select('id, amount_cents, currency, created_at, order_id')
+          .eq('creator_id', uid)
+          .eq('kind', 'sale')
+          .order('created_at', { ascending: false })
+          .limit(1000),
         supabase!
           .from('purchases')
           .select('id, product_id, price_cents, created_at, products(title, product_type, cover_url, currency)')
@@ -104,10 +140,11 @@ export default function Dashboard() {
       ]);
       if (cancelled) return;
 
-      const firstError = productRes.error ?? saleRes.error ?? purchaseRes.error;
+      const firstError = productRes.error ?? saleRes.error ?? earningRes.error ?? purchaseRes.error;
       if (firstError) setError(firstError.message);
       setProducts((productRes.data ?? []) as ProductRow[]);
       setSales((saleRes.data ?? []) as unknown as SaleRow[]);
+      setEarnings((earningRes.data ?? []) as EarningRow[]);
       setPurchases((purchaseRes.data ?? []) as unknown as PurchaseRow[]);
       setBalance(balanceRes);
       setLoading(false);
@@ -117,34 +154,66 @@ export default function Dashboard() {
     };
   }, [uid]);
 
+  // Memberships and their receipts live behind the payment API, so load them separately. A missing
+  // billing migration should not stop products, sales and balance from rendering.
+  useEffect(() => {
+    if (!uid) {
+      setBillingLoading(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await getMyMemberships();
+        if (!cancelled) {
+          setBilling(result);
+          setBillingError(null);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setBillingError(e instanceof Error ? e.message : 'Could not load your community billing');
+        }
+      } finally {
+        if (!cancelled) setBillingLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [uid]);
+
+  const revenueSales = useMemo<RevenueSale[]>(() => {
+    if (earnings.length > 0) {
+      return earnings.map(earning => ({
+        currency: earning.currency,
+        amountCents: Number(earning.amount_cents || 0),
+        paidAt: earning.created_at ?? null,
+      }));
+    }
+    // Keep the previous product-only view working if the ledger is empty or not migrated yet.
+    return sales.map(sale => ({
+      currency: sale.currency,
+      amountCents: Number(sale.creator_amount_cents || 0),
+      paidAt: sale.orders?.paid_at ?? null,
+    }));
+  }, [earnings, sales]);
+
+  /** Naira first because Paystack is the active provider; USD is the fallback. */
+  const revenue = useMemo(() => summarizeRevenue(revenueSales, lastMonths(MONTHS)), [revenueSales]);
+
   const stats = useMemo(() => {
-    const usdSales = sales.filter(s => s.currency === 'USD');
-    const revenueCents = usdSales.reduce((acc, s) => acc + Number(s.creator_amount_cents || 0), 0);
     const published = products.filter(p => p.status === 'published').length;
     const rated = products.filter(p => p.rating_count > 0);
     const reviews = rated.reduce((acc, p) => acc + p.rating_count, 0);
     const weighted = rated.reduce((acc, p) => acc + Number(p.rating_avg || 0) * p.rating_count, 0);
     return {
-      revenueCents,
-      salesCount: sales.length,
       published,
       rating: reviews > 0 ? weighted / reviews : null,
       reviews,
     };
-  }, [products, sales]);
+  }, [products]);
 
-  const monthly = useMemo(() => {
-    const buckets = lastMonths(MONTHS);
-    const totals = new Map(buckets.map(b => [b.key, 0]));
-    for (const s of sales) {
-      if (s.currency !== 'USD' || !s.orders?.paid_at) continue;
-      const d = new Date(s.orders.paid_at);
-      const key = `${d.getFullYear()}-${d.getMonth()}`;
-      if (totals.has(key)) totals.set(key, (totals.get(key) ?? 0) + Number(s.creator_amount_cents || 0) / 100);
-    }
-    return buckets.map(b => ({ month: b.label, amount: Number((totals.get(b.key) ?? 0).toFixed(2)) }));
-  }, [sales]);
-
+  const monthly = revenue.monthly;
   const hasRevenue = monthly.some(m => m.amount > 0);
 
   const handleDownload = async (productId: string) => {
@@ -215,7 +284,7 @@ export default function Dashboard() {
                   </p>
                 )}
                 {(balance.balances ?? [])
-                  .filter(b => b.currency !== 'USD' && (b.availableCents > 0 || b.pendingCents > 0))
+                  .filter(b => b.currency !== balance.currency && (b.availableCents > 0 || b.pendingCents > 0))
                   .map(b => (
                     <p key={b.currency} className="text-xs text-muted-foreground">
                       {formatPrice(b.availableCents, b.currency)} {b.currency} balance
@@ -242,8 +311,18 @@ export default function Dashboard() {
             Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-32" />)
           ) : (
             <>
-              <StatCard icon={<TrendingUp size={18} />} label="USD revenue" value={formatPrice(stats.revenueCents, 'USD')} hint="Your share after fees" />
-              <StatCard icon={<ShoppingBag size={18} />} label="Sales" value={String(stats.salesCount)} hint="Paid orders" />
+              <StatCard
+                icon={<TrendingUp size={18} />}
+                label={`${revenue.currency} revenue`}
+                value={formatPrice(revenue.totalCents, revenue.currency)}
+                hint="Products, memberships, tickets and boosts"
+              />
+              <StatCard
+                icon={<ShoppingBag size={18} />}
+                label="Product sales"
+                value={String(sales.length)}
+                hint="Paid product orders"
+              />
               <StatCard icon={<Package size={18} />} label="Published" value={String(stats.published)} hint={`${products.length} total incl. drafts`} />
               <StatCard
                 icon={<Star size={18} />}
@@ -259,7 +338,7 @@ export default function Dashboard() {
           <div className="flex items-baseline justify-between">
             <div>
               <p className="font-semibold">Revenue</p>
-              <p className="text-sm text-muted-foreground">Last six months, in USD</p>
+              <p className="text-sm text-muted-foreground">Last six months, in {revenue.currency}</p>
             </div>
           </div>
           {loading ? (
@@ -278,7 +357,7 @@ export default function Dashboard() {
                   <XAxis dataKey="month" tickLine={false} axisLine={false} tick={{ fill: 'var(--ds-muted-foreground)', fontSize: 12 }} />
                   <YAxis tickLine={false} axisLine={false} width={48} tick={{ fill: 'var(--ds-muted-foreground)', fontSize: 12 }} />
                   <Tooltip
-                    formatter={(value) => formatPrice(Math.round(Number(value) * 100), 'USD')}
+                    formatter={(value) => formatPrice(Math.round(Number(value) * 100), revenue.currency)}
                     contentStyle={{ background: 'var(--ds-surface-raised)', border: '1px solid var(--ds-border)', borderRadius: 12, color: 'var(--ds-foreground)' }}
                   />
                   <Area type="monotone" dataKey="amount" stroke="#ff6b4a" strokeWidth={2} fill="url(#revenueFill)" />
@@ -290,12 +369,13 @@ export default function Dashboard() {
           )}
         </Card>
 
-        <div role="tablist" aria-label="Dashboard sections" className="flex gap-2 border-b border-border">
+        <div role="tablist" aria-label="Dashboard sections" className="flex gap-2 overflow-x-auto border-b border-border">
           {(
             [
               { id: 'products', label: 'Products', icon: <Package size={16} /> },
-              { id: 'sales', label: 'Sales', icon: <ShoppingBag size={16} /> },
+              { id: 'sales', label: 'Product sales', icon: <ShoppingBag size={16} /> },
               { id: 'purchases', label: 'Purchases', icon: <Download size={16} /> },
+              { id: 'billing', label: 'Billing', icon: <CreditCard size={16} /> },
             ] as const
           ).map(t => {
             const active = tab === t.id;
@@ -307,7 +387,7 @@ export default function Dashboard() {
                 aria-selected={active}
                 onClick={() => setTab(t.id)}
                 className={cn(
-                  '-mb-px inline-flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-semibold transition-colors',
+                  '-mb-px inline-flex shrink-0 items-center gap-2 border-b-2 px-4 py-3 text-sm font-semibold transition-colors',
                   active ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground',
                 )}
               >
@@ -395,6 +475,8 @@ export default function Dashboard() {
               </table>
             </div>
           )
+        ) : tab === 'billing' ? (
+          <DashboardBilling data={billing} loading={billingLoading} error={billingError} />
         ) : purchases.length === 0 ? (
           <EmptyState
             icon={<Download size={20} />}
@@ -413,7 +495,7 @@ export default function Dashboard() {
                   <p className="truncate font-semibold">{p.products?.title ?? 'Product'}</p>
                   <p className="text-xs text-muted-foreground">
                     {new Date(p.created_at).toLocaleDateString()}
-                    {p.price_cents !== null && ` · ${formatPrice(p.price_cents, p.products?.currency ?? 'USD')}`}
+                    {p.price_cents !== null && ` · ${formatPrice(p.price_cents, p.products?.currency ?? PAYMENT_CURRENCY)}`}
                   </p>
                 </div>
                 <Button size="sm" variant="outline" loading={downloading === p.product_id} onClick={() => handleDownload(p.product_id)} leftIcon={<Download size={14} />}>

@@ -6,7 +6,7 @@ import { collection, addDoc, doc, getDoc, updateDoc } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL } from '../lib/storage';
 import { generateProductDescription } from "../services/geminiService";
 import { syncProductToStore } from "../lib/productSync";
-import { formatPrice } from "../lib/payments";
+import { formatPrice, PAYMENT_CURRENCY } from "../lib/payments";
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   AlertCircle, 
@@ -62,7 +62,7 @@ export default function UploadComponent() {
     productType: 'asset',
     tags: [],
     price: 0,
-    currency: 'USD',
+    currency: PAYMENT_CURRENCY,
     description: '',
     previewImage: '',
     previewImages: [],
@@ -577,19 +577,15 @@ export default function UploadComponent() {
                           <div className="flex-1 space-y-4 relative z-10">
                              <div className="flex items-center justify-between gap-4">
                                <label className="text-[10px] font-black uppercase tracking-widest text-teal-600 dark:text-teal-400">Price</label>
-                               {formData.currency === 'NGN' ? (
-                                 <select
-                                   aria-label="Price currency"
-                                   value="NGN"
-                                   onChange={() => setFormData({ ...formData, currency: 'USD', price: 0 })}
-                                   className="rounded-full border border-black/10 dark:border-white/10 bg-transparent px-3 py-1.5 text-xs font-bold"
-                                 >
-                                   <option value="NGN">NGN (switch to USD)</option>
-                                   <option value="USD">USD</option>
-                                 </select>
-                               ) : (
-                                 <span className="text-xs font-bold text-black/50 dark:text-white/50">USD</span>
-                               )}
+                               <select
+                                 aria-label="Price currency"
+                                 value={formData.currency === 'USD' ? 'USD' : 'NGN'}
+                                 onChange={(e) => setFormData({ ...formData, currency: e.target.value })}
+                                 className="rounded-full border border-black/10 dark:border-white/10 bg-transparent px-3 py-1.5 text-xs font-bold"
+                               >
+                                 <option value="NGN" className="bg-white dark:bg-black">NGN (₦)</option>
+                                 <option value="USD" className="bg-white dark:bg-black">USD ($)</option>
+                               </select>
                              </div>
                              <div className="relative">
                                 <DollarSign className="absolute left-6 top-1/2 -translate-y-1/2 text-black/20 dark:text-white/20" size={32} />
@@ -606,11 +602,11 @@ export default function UploadComponent() {
                        <div className="grid grid-cols-2 gap-6 text-center">
                           <div className="p-8 bg-black/5 dark:bg-[#121212] rounded-[32px] border border-black/5 dark:border-white/5 group hover:border-black/20 dark:hover:border-white/20 transition-all">
                              <p className="text-[10px] font-black uppercase tracking-widest text-black/20 dark:text-white/20 mb-4">Platform Fee (10%)</p>
-                             <p className="text-3xl font-black text-red-600 dark:text-red-500/80">-{formatPrice(Math.round(Number(formData.price) * 10), formData.currency || 'USD')}</p>
+                             <p className="text-3xl font-black text-red-600 dark:text-red-500/80">-{formatPrice(Math.round(Number(formData.price) * 10), formData.currency || PAYMENT_CURRENCY)}</p>
                           </div>
                           <div className="p-8 bg-teal-500/10 rounded-[32px] border border-teal-500/20 group hover:bg-teal-500/20 transition-all">
                              <p className="text-[10px] font-black uppercase tracking-widest text-teal-600 dark:text-teal-400 mb-4">Your Earnings</p>
-                             <p className="text-4xl font-black text-teal-700 dark:text-white">{formatPrice(Math.round(Number(formData.price) * 90), formData.currency || 'USD')}</p>
+                             <p className="text-4xl font-black text-teal-700 dark:text-white">{formatPrice(Math.round(Number(formData.price) * 90), formData.currency || PAYMENT_CURRENCY)}</p>
                           </div>
                        </div>
                     </div>

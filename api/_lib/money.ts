@@ -67,6 +67,21 @@ export function computeFee(amountMinor: number, basisPoints: number): number {
   return result;
 }
 
+/**
+ * Currency order for a creator balance headline. Paystack is the active provider and settles in
+ * naira, so NGN leads; USD covers Stripe-era earnings and is the fallback.
+ */
+export const BALANCE_HEADLINE_CURRENCIES = ['NGN', 'USD'] as const;
+
+/** Picks the headline balance currency: NGN, then USD, then the first currency with a balance. */
+export function pickHeadlineCurrency(currencies: Iterable<string>): string {
+  const present: string[] = [];
+  for (const code of currencies) {
+    if (typeof code === 'string' && code.trim()) present.push(code.trim().toUpperCase());
+  }
+  return BALANCE_HEADLINE_CURRENCIES.find(code => present.includes(code)) ?? present[0] ?? 'NGN';
+}
+
 /** When a sale becomes withdrawable. Kept pure so the hold rule is testable. */
 export function payoutAvailableAt(holdDays: number, now: number = Date.now()): string {
   const days = Number.isFinite(holdDays) ? Math.max(0, holdDays) : 0;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeFee, normalizeCurrency, toMinorUnits } from '../api/_lib/money.js';
+import { computeFee, normalizeCurrency, pickHeadlineCurrency, toMinorUnits } from '../api/_lib/money.js';
 
 describe('money', () => {
   it('converts major units to integer minor units without floating point', () => {
@@ -20,6 +20,14 @@ describe('money', () => {
     expect(normalizeCurrency('ngn')).toBe('NGN');
     expect(normalizeCurrency(' usd ')).toBe('USD');
     expect(() => normalizeCurrency('EUR')).toThrow();
+  });
+
+  it('headlines the naira balance before dollars and falls back to the first currency', () => {
+    expect(pickHeadlineCurrency(['USD', 'NGN'])).toBe('NGN');
+    expect(pickHeadlineCurrency(['usd'])).toBe('USD');
+    expect(pickHeadlineCurrency(['EUR', 'USD'])).toBe('USD');
+    expect(pickHeadlineCurrency(['GBP'])).toBe('GBP');
+    expect(pickHeadlineCurrency([])).toBe('NGN');
   });
 
   it('computes fees with integer basis points', () => {
