@@ -15,8 +15,10 @@ import { canSeeChallenges } from '../lib/features';
 /** Activity rail: your streak, what's coming up, open challenges, recent articles. */
 export default function SocialRightSidebar() {
   const user = useCurrentUser();
+  // Only shown once the three-column budget (320 + 640 + 320 + gaps) fits, so the
+  // post column keeps its full 640px instead of shrinking to ~496px.
   return (
-    <aside className="app-secondary-rail hidden xl:flex flex-col gap-4 w-80 shrink-0 order-3 sticky top-0 self-start max-h-screen overflow-y-auto no-scrollbar py-4">
+    <aside className="app-secondary-rail hidden 2xl:flex flex-col gap-4 w-80 shrink-0 order-3 sticky top-0 self-start max-h-screen overflow-y-auto no-scrollbar py-4">
       {user && <StreakCard streak={user.streak} />}
       <UpcomingEvents />
       {canSeeChallenges(user) && <Challenges />}

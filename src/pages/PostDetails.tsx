@@ -58,8 +58,10 @@ export default function PostDetails() {
     return <Navigate to={`/feed?${params.toString()}`} replace />;
   }
 
+  // 1360px leaves room for a 320px rail, the 640px post column and the gaps, so the
+  // card is the same width here as in the feed and on a creator profile.
   return (
-    <div className="max-w-[1200px] mx-auto px-2 sm:px-4 pb-8 text-black dark:text-white relative">
+    <div className="max-w-[1360px] mx-auto px-2 sm:px-4 pb-8 text-black dark:text-white relative">
       <div className="flex flex-col lg:flex-row gap-4 items-start justify-center">
         <SocialLeftSidebar />
 

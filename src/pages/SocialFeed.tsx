@@ -115,8 +115,9 @@ export default function SocialFeed() {
   const fullBleed = view === 'messages' || (view === 'community' && !!communityId);
   const showSidebars = !fullBleed && view !== 'notifications';
 
+  // 1360px keeps the 640px post column intact next to the rails (see PostDetails).
   return (
-    <div className={`w-full mx-auto text-black dark:text-white relative ${fullBleed ? 'max-w-full h-full overflow-hidden' : 'max-w-[1200px] px-2 pb-8 sm:px-4'}`}>
+    <div className={`w-full mx-auto text-black dark:text-white relative ${fullBleed ? 'max-w-full h-full overflow-hidden' : 'max-w-[1360px] px-2 pb-8 sm:px-4'}`}>
       <div className={`flex flex-col lg:flex-row justify-center ${fullBleed ? 'h-full items-stretch overflow-hidden' : 'gap-4 items-start'}`}>
         {showSidebars && <SocialLeftSidebar />}
 
