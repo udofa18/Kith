@@ -32,6 +32,8 @@ import {
   BarChart2, 
   HelpCircle, 
   Users, 
+  UserPlus,
+  UserMinus,
   Settings, 
   LogOut,
   Shield,
@@ -63,12 +65,15 @@ import {
   Lock,
   Unlock,
   Sparkles,
+  Gift,
   ChevronRight
 } from 'lucide-react';
 import LiveChat from '../components/live/LiveChat';
 import LivePolls from '../components/live/LivePolls';
 import LiveQA from '../components/live/LiveQA';
 import LiveLobby from '../components/live/LiveLobby';
+import LiveGiftSheet from '../components/live/LiveGiftSheet';
+import type { LiveGiftAnnouncement } from '../lib/liveGifts';
 import Avatar from '../components/ui/Avatar';
 import axios from 'axios';
 import { createNotification } from '../lib/notifications';
@@ -110,7 +115,7 @@ export default function LiveSession() {
   const [showEndSessionConfirm, setShowEndSessionConfirm] = useState(false);
   const [ending, setEnding] = useState(false);
   const [manualPinnedTrack, setManualPinnedTrack] = useState<{ identity: string; source: Track.Source } | null>(null);
-  const [notifications, setNotifications] = useState<{ id: number; message: string; type: 'info' | 'hand' }[]>([]);
+  const [notifications, setNotifications] = useState<{ id: number; message: string; type: 'info' | 'hand' | 'join' | 'leave' | 'gift' }[]>([]);
   const [timeRemaining, setTimeRemaining] = useState<number | null>(null);
   const [showShareModal, setShowShareModal] = useState(false);
   const [liveEvent, setLiveEvent] = useState<any>(null);
@@ -271,7 +276,7 @@ export default function LiveSession() {
     }
   }, [event]);
 
-  const addNotification = (message: string, type: 'info' | 'hand' = 'info', isLocal: boolean = false) => {
+  const addNotification = (message: string, type: 'info' | 'hand' | 'join' | 'leave' | 'gift' = 'info', isLocal: boolean = false) => {
     const id = Date.now();
     setNotifications(prev => [...prev, { id, message, type }]);
     
@@ -645,22 +650,40 @@ export default function LiveSession() {
             {/* Notifications Overlay */}
             <div className="pointer-events-none absolute left-1/2 top-4 z-[60] flex -translate-x-1/2 flex-col gap-2">
               <AnimatePresence>
-                {notifications.map(n => (
-                  <motion.div
-                    key={n.id}
-                    initial={{ y: -20, opacity: 0, scale: 0.9 }}
-                    animate={{ y: 0, opacity: 1, scale: 1 }}
-                    exit={{ y: -20, opacity: 0, scale: 0.9 }}
-                    className={`flex items-center gap-3 rounded-2xl border px-5 py-3 shadow-2xl backdrop-blur-xl ${
-                      n.type === 'hand'
-                        ? 'border-amber-400/30 bg-amber-400/20 text-amber-300'
-                        : 'border-white/10 bg-white/10 text-white'
-                    }`}
-                  >
-                    {n.type === 'hand' ? <Hand size={18} fill="currentColor" /> : <Sparkles size={17} />}
-                    <span className="text-sm font-bold">{n.message}</span>
-                  </motion.div>
-                ))}
+                {notifications.map(n => {
+                  const tone =
+                    n.type === 'hand'
+                      ? 'border-amber-400/30 bg-amber-400/20 text-amber-300'
+                      : n.type === 'join'
+                        ? 'border-emerald-400/25 bg-emerald-400/15 text-emerald-200'
+                        : n.type === 'leave'
+                          ? 'border-rose-400/25 bg-rose-400/15 text-rose-200'
+                          : n.type === 'gift'
+                            ? 'border-amber-300/40 bg-amber-400/15 text-amber-100'
+                            : 'border-white/10 bg-white/10 text-white';
+                  return (
+                    <motion.div
+                      key={n.id}
+                      initial={{ y: -20, opacity: 0, scale: 0.9 }}
+                      animate={{ y: 0, opacity: 1, scale: 1 }}
+                      exit={{ y: -20, opacity: 0, scale: 0.9 }}
+                      className={`flex items-center gap-3 rounded-2xl border px-5 py-3 shadow-2xl backdrop-blur-xl ${tone}`}
+                    >
+                      {n.type === 'hand' ? (
+                        <Hand size={18} fill="currentColor" />
+                      ) : n.type === 'join' ? (
+                        <UserPlus size={17} />
+                      ) : n.type === 'leave' ? (
+                        <UserMinus size={17} />
+                      ) : n.type === 'gift' ? (
+                        <Gift size={17} />
+                      ) : (
+                        <Sparkles size={17} />
+                      )}
+                      <span className="text-sm font-bold">{n.message}</span>
+                    </motion.div>
+                  );
+                })}
               </AnimatePresence>
             </div>
 
@@ -669,6 +692,14 @@ export default function LiveSession() {
                 const isLocal = identity === auth.currentUser?.uid;
                 addNotification(`${isLocal ? 'You' : name} raised ${isLocal ? 'your' : 'their'} hand!`, 'hand', isLocal);
               }}
+              onJoin={name => addNotification(`${name} joined the room`, 'join')}
+              onLeave={name => addNotification(`${name} left the room`, 'leave')}
+              onGift={gift =>
+                addNotification(
+                  `${gift.senderName} sent ${gift.emoji} ${gift.giftName} to ${gift.recipientName} · +${gift.amount} XP`,
+                  'gift',
+                )
+              }
             />
 
             <ModerationBridge
@@ -685,6 +716,14 @@ export default function LiveSession() {
                   allowReactions={settings.reactions}
                   allowHands={settings.handRaise}
                   onLeave={handleLeave}
+                  hostId={event?.hostId}
+                  eventId={eventId}
+                  onGiftSent={gift =>
+                    addNotification(
+                      `${gift.senderName} sent ${gift.emoji} ${gift.giftName} to ${gift.recipientName} · +${gift.amount} XP`,
+                      'gift',
+                    )
+                  }
                 />
               </div>
             </div>
@@ -865,33 +904,96 @@ function AudioActivationGate({
   );
 }
 
-function ParticipantListener({ onHandRaise }: { onHandRaise: (name: string, identity: string) => void }) {
+function ParticipantListener({
+  onHandRaise,
+  onJoin,
+  onLeave,
+  onGift,
+}: {
+  onHandRaise: (name: string, identity: string) => void;
+  onJoin: (name: string, identity: string) => void;
+  onLeave: (name: string, identity: string) => void;
+  onGift: (announcement: LiveGiftAnnouncement) => void;
+}) {
   const room = useRoomContext();
   const lastHandRaiseRef = useRef<Record<string, boolean>>({});
+  const presentRef = useRef<Set<string>>(new Set());
+  const handlersRef = useRef({ onHandRaise, onJoin, onLeave, onGift });
+
+  // The page passes inline callbacks, so keep them in a ref rather than
+  // resubscribing — and re-seeding presence — on every render.
+  useEffect(() => {
+    handlersRef.current = { onHandRaise, onJoin, onLeave, onGift };
+  });
 
   useEffect(() => {
-    const handleMetadataChanged = (metadata: string | undefined, participant: Participant) => {
-      try {
-        if (metadata) {
-          const data = JSON.parse(metadata);
-          const wasRaised = lastHandRaiseRef.current[participant.identity];
-          const isRaised = data.handRaised;
+    // People already in the room when we arrive are not new joins. Their
+    // connection events arrive just after mount, so seed the set and ignore
+    // the first couple of seconds.
+    presentRef.current = new Set(room.remoteParticipants.keys());
+    const settleUntil = Date.now() + 2500;
 
-          if (isRaised && !wasRaised) {
-            onHandRaise(participant.name || participant.identity, participant.identity);
-          }
-          lastHandRaiseRef.current[participant.identity] = !!isRaised;
+    const handleConnected = (participant: Participant) => {
+      if (presentRef.current.has(participant.identity)) return;
+      presentRef.current.add(participant.identity);
+      if (Date.now() < settleUntil) return;
+      handlersRef.current.onJoin(participant.name || 'Someone', participant.identity);
+    };
+
+    const handleDisconnected = (participant: Participant) => {
+      if (!presentRef.current.has(participant.identity)) return;
+      presentRef.current.delete(participant.identity);
+      handlersRef.current.onLeave(participant.name || 'Someone', participant.identity);
+    };
+
+    // LiveKit passes the PREVIOUS metadata as the first argument; the
+    // participant object already carries the new metadata. Reading the
+    // argument meant the toast fired on the way down, not on the way up.
+    const handleMetadataChanged = (_previous: string | undefined, participant: Participant) => {
+      try {
+        const metadata = participant.metadata;
+        if (!metadata) {
+          lastHandRaiseRef.current[participant.identity] = false;
+          return;
         }
+        const data = JSON.parse(metadata);
+        const wasRaised = lastHandRaiseRef.current[participant.identity];
+        const isRaised = !!data.handRaised;
+
+        if (isRaised && !wasRaised) {
+          handlersRef.current.onHandRaise(participant.name || participant.identity, participant.identity);
+        }
+        lastHandRaiseRef.current[participant.identity] = isRaised;
       } catch (e) {
         // Ignore parsing errors
       }
     };
 
     room.on('participantMetadataChanged', handleMetadataChanged);
+    room.on('participantConnected', handleConnected);
+    room.on('participantDisconnected', handleDisconnected);
+
+    // Gifts arrive on the same data channel as reactions, but everyone should
+    // see who sent what to whom, not just a floating emoji.
+    const handleData = (payload: Uint8Array) => {
+      try {
+        const data = JSON.parse(new TextDecoder().decode(payload));
+        if (data?.type === 'gift' && typeof data.emoji === 'string' && typeof data.senderName === 'string') {
+          handlersRef.current.onGift(data as LiveGiftAnnouncement);
+        }
+      } catch {
+        // Ignore parsing errors
+      }
+    };
+    room.on('dataReceived', handleData);
+
     return () => {
       room.off('participantMetadataChanged', handleMetadataChanged);
+      room.off('participantConnected', handleConnected);
+      room.off('participantDisconnected', handleDisconnected);
+      room.off('dataReceived', handleData);
     };
-  }, [room, onHandRaise]);
+  }, [room]);
 
   return null;
 }
@@ -1590,6 +1692,9 @@ interface FloatingReaction {
   drift: number;
   duration: number;
   delay: number;
+  /** Gifts get a richer bubble and a slightly slower rise. */
+  kind?: 'reaction' | 'gift';
+  amount?: number;
 }
 
 /**
@@ -1617,26 +1722,42 @@ function LiveReactionLayer({ reactions }: { reactions: FloatingReaction[] }) {
           <motion.div
             key={reaction.id}
             initial={{ opacity: 0, y: 0, scale: 0.5 }}
-            animate={{
-              // Travel the full height of the video area and keep going a little
-              // past the top so the fade-out happens off stage.
-              y: -(height + 120),
-              x: [
-                0,
-                reaction.drift,
-                -reaction.drift * 0.7,
-                reaction.drift * 0.45,
-                -reaction.drift * 0.2,
-              ],
-              opacity: [0, 1, 1, 1, 0],
-              scale: [0.5, 1, 1, 0.95],
-            }}
+            animate={
+              reaction.kind === 'gift'
+                ? {
+                    y: -(height + 140),
+                    x: [0, reaction.drift, -reaction.drift * 0.7, reaction.drift * 0.45, -reaction.drift * 0.2],
+                    opacity: [0, 1, 1, 1, 0],
+                    scale: [0.45, 1.2, 1.05, 1, 0.95],
+                    rotate: [0, -4, 5, -2, 0],
+                  }
+                : {
+                    // Travel the full height of the video area and keep going a little
+                    // past the top so the fade-out happens off stage.
+                    y: -(height + 120),
+                    x: [
+                      0,
+                      reaction.drift,
+                      -reaction.drift * 0.7,
+                      reaction.drift * 0.45,
+                      -reaction.drift * 0.2,
+                    ],
+                    opacity: [0, 1, 1, 1, 0],
+                    scale: [0.5, 1, 1, 0.95],
+                  }
+            }
             exit={{ opacity: 0 }}
             transition={{ duration: reaction.duration, ease: 'easeOut', delay: reaction.delay }}
             className="absolute select-none"
             style={{ left: `${reaction.startX}%`, bottom: 4 }}
           >
-            <div className="flex items-center gap-1 rounded-full bg-[#141416]/95 p-1 shadow-[0_16px_40px_-12px_rgba(0,0,0,0.85)] ring-1 ring-white/10 backdrop-blur-md">
+            <div
+              className={`flex items-center gap-1 rounded-full p-1 shadow-[0_16px_40px_-12px_rgba(0,0,0,0.85)] ring-1 backdrop-blur-md ${
+                reaction.kind === 'gift'
+                  ? 'bg-[#1a1308]/95 ring-amber-300/55'
+                  : 'bg-[#141416]/95 ring-white/10'
+              }`}
+            >
               <span className="grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded-full bg-white/10 text-[11px] font-bold uppercase text-white/70">
                 {reaction.photo ? (
                   <img
@@ -1649,9 +1770,18 @@ function LiveReactionLayer({ reactions }: { reactions: FloatingReaction[] }) {
                   (reaction.name || 'S').slice(0, 1)
                 )}
               </span>
-              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#2a2a2e] text-[20px] leading-none">
+              <span
+                className={`grid shrink-0 place-items-center rounded-full bg-[#2a2a2e] leading-none ${
+                  reaction.kind === 'gift' ? 'h-10 w-10 text-[26px]' : 'h-9 w-9 text-[20px]'
+                }`}
+              >
                 {reaction.emoji}
               </span>
+              {reaction.kind === 'gift' && reaction.amount ? (
+                <span className="mr-1 rounded-full bg-amber-400 px-1.5 py-0.5 text-[10px] font-black leading-none text-black">
+                  +{reaction.amount}
+                </span>
+              ) : null}
             </div>
           </motion.div>
         ))}
@@ -1660,7 +1790,21 @@ function LiveReactionLayer({ reactions }: { reactions: FloatingReaction[] }) {
   );
 }
 
-function CustomControlBar({ allowReactions = true, allowHands = true, onLeave }: { allowReactions?: boolean; allowHands?: boolean; onLeave: () => void }) {
+function CustomControlBar({
+  allowReactions = true,
+  allowHands = true,
+  onLeave,
+  hostId,
+  eventId,
+  onGiftSent,
+}: {
+  allowReactions?: boolean;
+  allowHands?: boolean;
+  onLeave: () => void;
+  hostId?: string;
+  eventId?: string;
+  onGiftSent?: (gift: LiveGiftAnnouncement) => void;
+}) {
   const room = useRoomContext();
   const { localParticipant } = useLocalParticipant();
   const { toggle: toggleScreenShare, enabled: isScreenShareEnabled } = useTrackToggle({
@@ -1691,6 +1835,7 @@ function CustomControlBar({ allowReactions = true, allowHands = true, onLeave }:
 
   const [isHandRaised, setIsHandRaised] = useState(false);
   const [showReactions, setShowReactions] = useState(false);
+  const [showGifts, setShowGifts] = useState(false);
   const [activeReactions, setActiveReactions] = useState<FloatingReaction[]>([]);
   const [reactionLayer, setReactionLayer] = useState<HTMLElement | null>(null);
   const reactionSeq = useRef(0);
@@ -1753,6 +1898,40 @@ function CustomControlBar({ allowReactions = true, allowHands = true, onLeave }:
     [],
   );
 
+  const spawnGift = useCallback((gift: LiveGiftAnnouncement) => {
+    const id = (reactionSeq.current += 1);
+    const reaction: FloatingReaction = {
+      id,
+      emoji: gift.emoji,
+      name: gift.senderName,
+      photo: gift.senderPhoto,
+      kind: 'gift',
+      amount: gift.amount,
+      startX: 6 + Math.random() * 68,
+      drift: 10 + Math.random() * 22,
+      duration: 4.2 + Math.random() * 1.4,
+      delay: 0,
+    };
+    setActiveReactions(prev => [...prev.slice(-29), reaction]);
+    window.setTimeout(() => {
+      setActiveReactions(prev => prev.filter(item => item.id !== id));
+    }, (reaction.duration + 0.5) * 1000);
+  }, []);
+
+  const announceGift = async (gift: LiveGiftAnnouncement) => {
+    // The server has already moved the XP, so animate locally first and let the
+    // network side fail quietly rather than making the sender think it failed.
+    spawnGift(gift);
+    onGiftSent?.(gift);
+
+    try {
+      const data = new TextEncoder().encode(JSON.stringify({ type: 'gift', ...gift }));
+      await localParticipant.publishData(data, { reliable: true });
+    } catch (e) {
+      console.error('Failed to broadcast gift', e);
+    }
+  };
+
   const sendReaction = async (emoji: string, sound?: ReactionSound) => {
     if (sound) playReactionSound(sound);
     spawnReaction(emoji, meRef.current);
@@ -1781,6 +1960,9 @@ function CustomControlBar({ allowReactions = true, allowHands = true, onLeave }:
         const data = JSON.parse(new TextDecoder().decode(payload));
         if (data.type === 'reaction' && typeof data.emoji === 'string') {
           spawnReaction(data.emoji, { name: data.name, photo: data.photo });
+        }
+        if (data.type === 'gift' && typeof data.emoji === 'string' && typeof data.senderName === 'string') {
+          spawnGift(data as LiveGiftAnnouncement);
         }
       } catch {
         // Ignore parsing errors
@@ -1930,17 +2112,39 @@ function CustomControlBar({ allowReactions = true, allowHands = true, onLeave }:
               )}
             </AnimatePresence>
           </div>
+
+          {auth.currentUser && (
+            <button
+              onClick={() => setShowGifts(true)}
+              className={`p-3 rounded-2xl transition-all ${
+                showGifts
+                  ? 'bg-gradient-to-r from-amber-400 to-orange-500 text-black shadow-[0_0_20px_rgba(251,191,36,0.35)]'
+                  : 'bg-amber-400/10 text-amber-300 hover:bg-amber-400/20'
+              }`}
+              title="Send an XP gift"
+            >
+              <Gift size={20} />
+            </button>
+          )}
         </div>
 
         <div className="w-px h-8 bg-white/10 mx-2" />
 
         <button
           onClick={onLeave}
-          className="rounded-2xl border border-red-500/30 bg-red-500/20 px-6 py-3 font-bold text-red-500 transition-all hover:bg-red-500 hover:text-white"
+          className="rounded-2xl border border-red-500/30 bg-red-500/20 px-4 py-3 font-bold text-red-500 transition-all hover:bg-red-500 hover:text-white sm:px-6"
         >
           Leave
         </button>
       </div>
+
+      <LiveGiftSheet
+        isOpen={showGifts}
+        onClose={() => setShowGifts(false)}
+        hostId={hostId}
+        eventId={eventId}
+        onSent={announceGift}
+      />
     </div>
   );
 }

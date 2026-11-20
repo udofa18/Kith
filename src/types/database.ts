@@ -376,6 +376,10 @@ export interface Database {
         Args: { p_receiver_id: string; p_amount: number };
         Returns: Json;
       };
+      live_gift_xp: {
+        Args: { p_receiver_id: string; p_amount: number; p_host_id?: string | null };
+        Returns: Json;
+      };
       is_admin: { Args: Record<string, never>; Returns: boolean };
       is_community_admin: { Args: { p_community_id: string }; Returns: boolean };
     };
